@@ -872,8 +872,12 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
         }
 
         if (accessHint?.recordAccess === 'subrecord' && accessHint.recordAccessId) {
+            // No public API currently passes recordAccess:'subrecord' as an accessHint; defensive branch for future use
+            /* istanbul ignore next */
             const fieldSchema = metadata.subrecords?.[accessHint.recordAccessId]?.fields?.[fieldId] ?? metadata.subrecords?.[accessHint.recordAccessId]?.fields?.[fieldKey];
+            /* istanbul ignore next */
             if (!fieldSchema) return undefined;
+            /* istanbul ignore next */
             return {
                 queryFieldId: fieldSchema.id,
                 tableAlias: this.config.query.from.alias,
@@ -1308,8 +1312,8 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
         if (direct !== undefined) return direct;
 
         const relativePath = pathOrKey
-            .replace(new RegExp(`^${this.escapeRegExp(arrayPath)}\.(\*|\d+)\.`), '')
-            .replace(new RegExp(`^${this.escapeRegExp(arrayPath)}\.`), '');
+            .replace(new RegExp(`^${this.escapeRegExp(arrayPath)}\\.(\\*|\\d+)\\.`), '')
+            .replace(new RegExp(`^${this.escapeRegExp(arrayPath)}\\.`), '');
         return this.getValueAtPath(value, relativePath);
     }
 

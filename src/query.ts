@@ -257,7 +257,8 @@ export class QueryBuilder<TResult> {
             ? this.mapGroupedRows(rows, fieldMap, arrayPaths, primaryField.key.toLowerCase())
             : rows.map((row) => this.mapSingleRow(row, fieldMap, arrayPaths));
 
-        return this.config.postProcess ? results.map((row) => this.config.postProcess?.(row) ?? row) : results;
+        const { postProcess } = this.config;
+        return postProcess ? results.map((row) => postProcess(row) ?? row) : results;
     }
 
     private addWhere(linkType: 'AND' | 'OR', field: keyof TResult | string, operator: QueryOperator, value?: QueryParamValue | QueryParamValue[], useText = false): this {
