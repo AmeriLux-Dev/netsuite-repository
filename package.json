@@ -1,0 +1,44 @@
+{
+  "name": "@amerilux/netsuite-repository",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Typed query configuration and record update helpers for NetSuite SuiteScript.",
+  "license": "UNLICENSED",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./query": {
+      "types": "./dist/query.d.ts",
+      "default": "./dist/query.js"
+    },
+    "./record-updater": {
+      "types": "./dist/record-updater.d.ts",
+      "default": "./dist/record-updater.js"
+    },
+    "./context": {
+      "types": "./dist/context.d.ts",
+      "default": "./dist/context.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pack:dry-run": "npm pack --dry-run"
+  },
+  "devDependencies": {
+    "@hitc/netsuite-types": "2025.1.11",
+    "typescript": "5.8.3"
+  },
+  "publishConfig": {
+    "tag": "latest"
+  }
+}
