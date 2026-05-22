@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "description": "Typed query configuration and record update helpers for NetSuite SuiteScript.",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
