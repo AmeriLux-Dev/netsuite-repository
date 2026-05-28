@@ -31,7 +31,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pack": "npm pack",
     "pack:dry-run": "npm pack --dry-run",
+    "publish:npm": "npm publish",
+    "packAndPublish": "npm run build && npm run test && npm publish",
     "test": "jest",
     "test:coverage": "jest --coverage"
   },
@@ -45,6 +48,7 @@
     "typescript": "5.8.3"
   },
   "publishConfig": {
-    "tag": "latest"
+    "tag": "latest",
+    "access": "public"
   }
 }
