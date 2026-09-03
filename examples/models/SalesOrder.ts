@@ -1,56 +1,45 @@
-import { Column, Entity, Join, Key, OwnsMany, OwnsOne, ReadOnly, RecordField, Related, SetFirst, Transform } from '@amerilux/netsuite-repository';
+import { Field, ReadOnly, RecordType, SetFirst, Sublist, Transform } from '@amerilux/netsuite-repository';
+import type { Customer } from './Customer';
 
 /** linesequencenumber is one-based in SuiteQL; sublist line indexes are zero-based. */
 export const toZeroBasedLine = (value: unknown): unknown => (typeof value === 'number' ? value - 1 : value);
 
-export class ShippingAddress {
-    @RecordField('addr1') addr1!: string | null;
-    @RecordField('addr2') addr2!: string | null;
-    @RecordField('city') city!: string | null;
-    @RecordField('state') state!: string | null;
-    @RecordField('zip') zip!: string | null;
+/** Shared by the shipping and billing addresses; the subrecord field id comes from the property that uses it. */
+export class TransactionAddress {
+    addr1!: string | null;
+    addr2!: string | null;
+    city!: string | null;
+    @SetFirst() state!: string | null;
+    zip!: string | null;
 }
 
+/** Common transaction fields. No @RecordType, so it has no record set of its own; sales orders inherit it. */
+export abstract class Transaction {
+    id!: number;
+    @Field('tranid') tranId!: string;
+    @Field('trandate') tranDate!: Date;
+    @Field({ column: 'status', text: true }) statusText!: string;
+    status!: string;
+    memo?: string | null;
+    @Field('entity') @SetFirst() customerId!: number;
+    customer?: Pick<Customer, 'id' | 'companyName' | 'email'>;
+    shippingAddress!: TransactionAddress;
+}
+
+@Sublist('item')
 export class SalesOrderLine {
-    @Column('linesequencenumber') @Transform(toZeroBasedLine) @ReadOnly() line!: number;
-    @Column('item', { type: 'key' }) @RecordField('item') itemId!: number;
-    @RecordField() quantity!: number;
-    @RecordField() rate!: number;
+    id!: number;
+    @Field('linesequencenumber') @Transform(toZeroBasedLine) @ReadOnly() line!: number;
+    @Field('item') itemId!: number;
+    quantity!: number;
+    rate!: number;
     @ReadOnly() amount!: number;
 }
 
-export class CustomerLookup {
-    @Column('companyname') companyName!: string;
-    @Column('email') email!: string | null;
-}
-
-@Entity({ recordType: 'salesorder', table: 'transaction', alias: 'txn' })
-@Join('cust', { table: 'customer', on: { sourceForeignKey: 'entity', targetPrimaryKey: 'id' } })
-export class SalesOrder {
-    @Key() id!: number;
-    @Column('tranid') tranId!: string;
-    @Column('trandate') tranDate!: Date;
-    @Column('status') status!: string;
-    @Column('foreigntotal') total!: number;
-    @RecordField('memo') memo?: string | null;
-    @Column('custbody_auto_approved') @RecordField() autoApproved!: boolean;
-    @Column('entity') @RecordField('entity') @SetFirst() customerId!: number;
-
-    @OwnsOne(() => ShippingAddress, {
-        subrecord: 'shippingaddress',
-        clearListField: 'shipaddresslist',
-        join: { alias: 'shipaddr', table: 'transactionshippingaddress', on: 'shipaddr.nkey = txn.shippingaddress' },
-    })
-    shippingAddress!: ShippingAddress;
-
-    @OwnsMany(() => SalesOrderLine, {
-        sublist: 'item',
-        matchBy: 'itemId',
-        lineNumberProperty: 'line',
-        join: { alias: 'tl', table: 'transactionline', on: "tl.transaction = txn.id AND tl.mainline = 'F'" },
-    })
+@RecordType('salesorder')
+export class SalesOrder extends Transaction {
+    @Field('foreigntotal') @ReadOnly() total!: number;
+    @Field('custbody_auto_approved') autoApproved!: boolean;
+    @Field('shipmethod', { table: 'salesorder' }) shipMethodId!: number | null;
     lines!: SalesOrderLine[];
-
-    @Related(() => CustomerLookup, { from: 'cust' })
-    customer!: CustomerLookup;
 }

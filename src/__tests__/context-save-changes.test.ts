@@ -5,7 +5,7 @@ import * as NsRecord from 'N/record';
 import { createMockRecord } from '../__mocks__/netsuite/record';
 import { customerConfig } from './fixtures';
 import type { Customer } from './fixtures';
-import { DecoratedSalesOrder } from './model-fixtures';
+import { salesOrderModelConfig } from './model-fixtures';
 import type { SalesOrderModel } from './model-fixtures';
 
 const mockRunSuiteQL = NsQuery.runSuiteQL as unknown as jest.Mock;
@@ -20,7 +20,7 @@ const orderRows = [
 ];
 
 function createContext(tracking = true) {
-    return createNetSuiteContext({ salesOrders: DecoratedSalesOrder, customers: customerConfig }, { tracking });
+    return createNetSuiteContext({ salesOrders: salesOrderModelConfig, customers: customerConfig }, { tracking });
 }
 
 beforeEach(() => {
@@ -184,7 +184,7 @@ describe('NetSuiteContext.planChanges() and tracking options', () => {
 
     it('gives a standalone EntitySet its own tracker', () => {
         const { EntitySet } = jest.requireActual<typeof import('../context')>('../context');
-        const salesOrders = new EntitySet(DecoratedSalesOrder);
+        const salesOrders = new EntitySet(salesOrderModelConfig);
         const order = salesOrders.find(1) as SalesOrderModel;
         expect(salesOrders.name).toBe('salesorder');
         expect(salesOrders.entry(order)?.state).toBe(EntityState.Unchanged);

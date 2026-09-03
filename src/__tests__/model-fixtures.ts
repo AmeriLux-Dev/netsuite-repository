@@ -1,27 +1,6 @@
-import {
-    Coerce,
-    Column,
-    Entity,
-    ExcludeFromDefaultSelect,
-    Join,
-    Key,
-    NotMapped,
-    OwnsMany,
-    OwnsOne,
-    ReadOnly,
-    RecordField,
-    Related,
-    SetFirst,
-    Transform,
-    UpdaterOptions,
-    createEntityModelMetadata,
-    getOrCreateNavigationMetadata,
-    getOrCreatePropertyMetadata,
-} from '../model';
-import type { EntityModelMetadata } from '../model';
+import type { QueryConfig } from '../types';
 
-// ── Shared model shape ────────────────────────────────────────────────────────
-
+/** Shape of the sales order model the build step would generate for the fixture below. */
 export interface SalesOrderModel {
     id: number;
     tranId: string;
@@ -32,102 +11,51 @@ export interface SalesOrderModel {
     customer: { companyName: string };
 }
 
-/** Hand-built metadata for the sales order used across the model tests. */
-export function buildSalesOrderMetadata(): EntityModelMetadata {
-    const metadata = createEntityModelMetadata('salesOrders');
-    metadata.setName = 'salesOrders';
-    metadata.recordType = 'salesorder';
-    metadata.table = { name: 'transaction', alias: 'txn' };
-    metadata.keyProperty = 'id';
-    metadata.joins.push({ alias: 'cust', table: 'customer', on: { sourceForeignKey: 'entity', targetPrimaryKey: 'id' } });
+/**
+ * The config the build step emits for a sales order with a shipping address subrecord, an item sublist,
+ * and a projected customer reference. Hand-written here so the runtime tests do not depend on the generator.
+ */
+export const salesOrderModelConfig: QueryConfig<SalesOrderModel> = {
+    recordType: 'salesorder',
+    query: {
+        from: { name: 'transaction', alias: 'txn' },
+        joins: [
+            { toTable: { name: 'customer', alias: 'cust' }, fromTable: 'txn', type: 'leftOuter', constraints: [{ joinKeys: { sourceForeignKey: 'entity', targetPrimaryKey: 'id' } }] },
+            { toTable: { name: 'transactionshippingaddress', alias: 'shipaddr' }, fromTable: 'txn', type: 'leftOuter', on: 'shipaddr.nkey = txn.shippingaddress' },
+            { toTable: { name: 'transactionline', alias: 'tl' }, fromTable: 'txn', type: 'inner', on: 'tl.transaction = txn.id AND tl.mainline = ?', params: ['F'] },
+        ],
+    },
+    fields: {
+        id: { queryFieldId: 'id', tableAlias: 'txn', type: 'integer', isPrimary: true, readonly: true },
+        tranId: { queryFieldId: 'tranid', tableAlias: 'txn', type: 'string', readonly: true },
+        memo: { queryFieldId: 'memo', tableAlias: 'txn', type: 'string', recordFieldId: 'memo' },
+        customerName: { queryFieldId: 'companyname', tableAlias: 'cust', type: 'string', readonly: true },
+        shippingAddress_addr1: { queryFieldId: 'addr1', tableAlias: 'shipaddr', type: 'string', recordFieldId: 'addr1', nestPath: 'shippingAddress.addr1', recordAccess: 'subrecord', recordAccessId: 'shippingaddress', subrecordNeedsReload: true, subrecordListFieldToClear: 'shipaddresslist' },
+        shippingAddress_city: { queryFieldId: 'city', tableAlias: 'shipaddr', type: 'string', recordFieldId: 'city', nestPath: 'shippingAddress.city', recordAccess: 'subrecord', recordAccessId: 'shippingaddress', subrecordNeedsReload: true, subrecordListFieldToClear: 'shipaddresslist' },
+        lines_line: { queryFieldId: 'linesequencenumber', tableAlias: 'tl', type: 'integer', readonly: true, nestPath: 'lines.line', cardinality: 'many', recordAccess: 'sublist', recordAccessId: 'item' },
+        lines_itemId: { queryFieldId: 'item', tableAlias: 'tl', type: 'key', recordFieldId: 'item', nestPath: 'lines.itemId', cardinality: 'many', recordAccess: 'sublist', recordAccessId: 'item', updateMapping: { kind: 'sublist', sublistId: 'item', fieldId: 'item', matchBy: 'item' } },
+        lines_quantity: { queryFieldId: 'quantity', tableAlias: 'tl', type: 'float', recordFieldId: 'quantity', nestPath: 'lines.quantity', cardinality: 'many', recordAccess: 'sublist', recordAccessId: 'item', updateMapping: { kind: 'sublist', sublistId: 'item', fieldId: 'quantity', matchBy: 'item' } },
+        customer_companyName: { queryFieldId: 'companyname', tableAlias: 'cust', type: 'string', readonly: true, nestPath: 'customer.companyName' },
+    },
+    relationships: {
+        shippingAddress: { kind: 'subrecord', recordAccessId: 'shippingaddress', fields: { addr1: 'shippingAddress_addr1', city: 'shippingAddress_city' }, reload: { listFieldToClear: 'shipaddresslist' }, joinAliases: ['shipaddr'] },
+        lines: { kind: 'sublist', recordAccessId: 'item', fields: { line: 'lines_line', itemId: 'lines_itemId', quantity: 'lines_quantity' }, matchField: 'itemId', lineField: 'line', joinAliases: ['tl'] },
+        customer: { kind: 'reference', fields: { companyName: 'customer_companyName' }, joinAliases: ['cust'] },
+    },
+    coerce: true,
+};
 
-    Object.assign(getOrCreatePropertyMetadata(metadata.properties, 'id'), { readOnly: true });
-    Object.assign(getOrCreatePropertyMetadata(metadata.properties, 'tranId'), { column: 'tranid' });
-    Object.assign(getOrCreatePropertyMetadata(metadata.properties, 'memo'), { recordFieldId: 'memo' });
-    Object.assign(getOrCreatePropertyMetadata(metadata.properties, 'customerName'), { column: 'companyname', tableAlias: 'cust' });
-
-    const shippingAddress = getOrCreateNavigationMetadata(metadata, 'shippingAddress', 'owned');
-    shippingAddress.subrecordFieldId = 'shippingaddress';
-    shippingAddress.clearListFieldId = 'shipaddresslist';
-    shippingAddress.join = { alias: 'shipaddr', table: 'transactionshippingaddress', on: 'shipaddr.nkey = txn.shippingaddress' };
-    Object.assign(getOrCreatePropertyMetadata(shippingAddress.properties, 'addr1'), { recordFieldId: 'addr1' });
-    Object.assign(getOrCreatePropertyMetadata(shippingAddress.properties, 'city'), { recordFieldId: 'city' });
-
-    const lines = getOrCreateNavigationMetadata(metadata, 'lines', 'collection');
-    lines.sublistId = 'item';
-    lines.matchByProperty = 'itemId';
-    lines.lineNumberProperty = 'line';
-    lines.join = { alias: 'tl', table: 'transactionline', type: 'inner', on: "tl.transaction = txn.id AND tl.mainline = ?", params: ['F'] };
-    Object.assign(getOrCreatePropertyMetadata(lines.properties, 'line'), { column: 'linesequencenumber', type: 'integer', readOnly: true });
-    Object.assign(getOrCreatePropertyMetadata(lines.properties, 'itemId'), { column: 'item', type: 'key', recordFieldId: 'item' });
-    Object.assign(getOrCreatePropertyMetadata(lines.properties, 'quantity'), { type: 'float', recordFieldId: 'quantity' });
-
-    const customer = getOrCreateNavigationMetadata(metadata, 'customer', 'related');
-    customer.sourceAlias = 'cust';
-    Object.assign(getOrCreatePropertyMetadata(customer.properties, 'companyName'), { column: 'companyname' });
-
-    return metadata;
+export interface VendorModel {
+    id: number;
+    companyName: string;
 }
 
-// ── Decorated equivalent ──────────────────────────────────────────────────────
-
-export class DecoratedShippingAddress {
-    @RecordField('addr1') addr1!: string | null;
-    @RecordField('city') city!: string | null;
-}
-
-export class DecoratedSalesOrderLine {
-    @Column('linesequencenumber', { type: 'integer' }) @ReadOnly() line!: number;
-    @Column('item', { type: 'key' }) @RecordField('item') itemId!: number;
-    @Column(undefined, { type: 'float' }) @RecordField() quantity!: number;
-}
-
-export class DecoratedCustomerLookup {
-    @Column('companyname') companyName!: string;
-}
-
-@Entity({ recordType: 'salesorder', table: 'transaction', alias: 'txn', setName: 'salesOrders' })
-@Join('cust', { table: 'customer', on: { sourceForeignKey: 'entity', targetPrimaryKey: 'id' } })
-export class DecoratedSalesOrder {
-    @Key() @ReadOnly() id!: number;
-    @Column('tranid') tranId!: string;
-    @RecordField('memo') memo!: string | null;
-    @Column('companyname', { from: 'cust' }) customerName!: string;
-
-    @OwnsOne(() => DecoratedShippingAddress, {
-        subrecord: 'shippingaddress',
-        clearListField: 'shipaddresslist',
-        join: { alias: 'shipaddr', table: 'transactionshippingaddress', on: 'shipaddr.nkey = txn.shippingaddress' },
-    })
-    shippingAddress!: DecoratedShippingAddress;
-
-    @OwnsMany(() => DecoratedSalesOrderLine, {
-        sublist: 'item',
-        matchBy: 'itemId',
-        lineNumberProperty: 'line',
-        join: { alias: 'tl', table: 'transactionline', type: 'inner', on: "tl.transaction = txn.id AND tl.mainline = ?", params: ['F'] },
-    })
-    lines!: DecoratedSalesOrderLine[];
-
-    @Related(() => DecoratedCustomerLookup, { from: 'cust' })
-    customer!: DecoratedCustomerLookup;
-}
-
-// ── Decorated customer exercising the remaining decorators and inheritance ────
-
-export const uppercaseTransform = (value: unknown) => String(value).toUpperCase();
-
-@UpdaterOptions({ requireFastPath: true })
-@Coerce(false)
-export class DecoratedEntityBase {
-    @Key({ type: 'integer' }) id!: number;
-    @Column('lastmodifieddate', { type: 'datetime' }) lastModified!: Date;
-    @NotMapped() cachedLabel?: string;
-}
-
-@Entity({ recordType: 'customer', table: 'customer' })
-export class DecoratedCustomer extends DecoratedEntityBase {
-    @Column('companyname', { alias: 'name' }) @RecordField() @SetFirst() companyName!: string;
-    @Column('entitystatus', { useText: true }) @Transform(uppercaseTransform) @ExcludeFromDefaultSelect() status!: string;
-    @Column('lastmodifieddate', { type: 'date' }) lastModified!: Date;
-}
+export const vendorModelConfig: QueryConfig<VendorModel> = {
+    recordType: 'vendor',
+    query: { from: { name: 'vendor', alias: 'v' } },
+    fields: {
+        id: { queryFieldId: 'id', tableAlias: 'v', type: 'integer', isPrimary: true, readonly: true },
+        companyName: { queryFieldId: 'companyname', tableAlias: 'v', type: 'string', recordFieldId: 'companyname' },
+    },
+    coerce: true,
+};

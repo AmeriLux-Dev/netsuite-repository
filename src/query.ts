@@ -75,6 +75,8 @@ export class QueryBuilder<TResult> {
     private readonly conditions: ConditionDef[] = [];
     private readonly sorts: SortDef[] = [];
     private readonly dynamicJoins: JoinDef[] = [];
+    private readonly includedRelationships = new Set<string>();
+    private readonly excludedRelationships = new Set<string>();
     private limitValue: number | undefined;
     private offsetValue: number | undefined;
     private distinctFlag = false;
@@ -92,6 +94,26 @@ export class QueryBuilder<TResult> {
         return new QueryBuilder(resolveQueryConfig(config), [], options);
     }
 
+    /** Loads a reference, subrecord, or sublist that is not selected by default (EF Include). */
+    include(...relationships: string[]): this {
+        for (const name of relationships) {
+            this.assertRelationship(name);
+            this.includedRelationships.add(name);
+            this.excludedRelationships.delete(name);
+        }
+        return this;
+    }
+
+    /** Leaves a reference, subrecord, or sublist and its joins out of this query. */
+    exclude(...relationships: string[]): this {
+        for (const name of relationships) {
+            this.assertRelationship(name);
+            this.excludedRelationships.add(name);
+            this.includedRelationships.delete(name);
+        }
+        return this;
+    }
+
     /** Results of this query are not registered with the owning context (EF AsNoTracking). */
     asNoTracking(): this {
         this.trackingDisabled = true;
@@ -104,7 +126,7 @@ export class QueryBuilder<TResult> {
         }
 
         for (const key of keys) {
-            this.selectedKeys.add(String(key));
+            this.selectedKeys.add(this.normalizeFieldKey(String(key)));
         }
 
         return this;
@@ -494,10 +516,17 @@ export class QueryBuilder<TResult> {
             if (field.isPrimary) {
                 return true;
             }
-            if (field.select === false) {
+            const relationship = this.relationshipOf(key, field);
+            if (relationship !== undefined && !this.isRelationshipActive(relationship)) {
                 return false;
             }
-            return !this.selectedKeys || this.selectedKeys.has(key);
+            if (this.selectedKeys) {
+                return this.selectedKeys.has(key);
+            }
+            if (field.select === false) {
+                return relationship !== undefined && this.includedRelationships.has(relationship);
+            }
+            return true;
         });
         return [...configuredFields, ...Array.from(this.rawSelections.entries())];
     }
@@ -528,7 +557,19 @@ export class QueryBuilder<TResult> {
     }
 
     private getAllJoins(): JoinDef[] {
-        return [...(this.config.query.joins ?? []), ...this.dynamicJoins];
+        const inactiveAliases = new Set<string>();
+        for (const [name, relationship] of Object.entries(this.config.relationships ?? {})) {
+            if (!this.isRelationshipActive(name)) {
+                (relationship.joinAliases ?? []).forEach((alias) => inactiveAliases.add(alias));
+            }
+        }
+        const referencedSql = [
+            ...this.conditions.map((condition) => condition.expression),
+            ...this.sorts.map((sort) => sort.expression),
+            ...Array.from(this.rawSelections.values()).map((selection) => selection.expression ?? ''),
+        ].join('\n');
+        const configuredJoins = (this.config.query.joins ?? []).filter((join) => !inactiveAliases.has(join.toTable.alias) || referencedSql.includes(`${join.toTable.alias}.`));
+        return [...configuredJoins, ...this.dynamicJoins];
     }
 
     private buildFromClause(): string {
@@ -555,14 +596,49 @@ export class QueryBuilder<TResult> {
     }
 
     private buildWhereClause(): string {
-        return this.conditions.map((condition, index) => index === 0 ? condition.expression : `${condition.linkType} ${condition.expression}`).join(' ');
+        const userClause = this.conditions.map((condition, index) => index === 0 ? condition.expression : `${condition.linkType} ${condition.expression}`).join(' ');
+        const { discriminator } = this.config;
+        if (!discriminator) {
+            return userClause;
+        }
+        const discriminatorClause = `${this.config.query.from.alias}.${discriminator.column} = ?`;
+        return userClause ? `${discriminatorClause} AND (${userClause})` : discriminatorClause;
     }
 
     private buildOrderByClause(): string {
         return this.sorts.map((sort) => `${sort.expression} ${sort.direction}`).join(', ');
     }
 
-    private resolveFieldExpression(fieldKey: string): string {
+    /** Accepts dotted paths (`customer.companyName`) for the flattened config keys (`customer_companyName`). */
+    private normalizeFieldKey(fieldKey: string): string {
+        if (this.config.fields[fieldKey] || !fieldKey.includes('.')) {
+            return fieldKey;
+        }
+        const flattened = fieldKey.replace(/\./g, '_');
+        return this.config.fields[flattened] ? flattened : fieldKey;
+    }
+
+    private assertRelationship(name: string): void {
+        if (!this.config.relationships?.[name]) {
+            throw new Error(`Relationship '${name}' is not defined in query config for '${this.config.recordType}'.`);
+        }
+    }
+
+    /** True when the relationship's fields and joins take part in this query. */
+    private isRelationshipActive(name: string): boolean {
+        if (this.excludedRelationships.has(name)) {
+            return false;
+        }
+        return this.includedRelationships.has(name) || this.config.relationships?.[name]?.selectByDefault !== false;
+    }
+
+    private relationshipOf(key: string, field: QueryField): string | undefined {
+        const root = (field.nestPath ?? key).split('.')[0];
+        return this.config.relationships?.[root] ? root : undefined;
+    }
+
+    private resolveFieldExpression(rawFieldKey: string): string {
+        const fieldKey = this.normalizeFieldKey(rawFieldKey);
         const field = this.config.fields[fieldKey];
         if (field) {
             return field.expression ?? `${field.tableAlias}.${field.queryFieldId}`;
@@ -583,7 +659,8 @@ export class QueryBuilder<TResult> {
 
     private getParams(): QueryParamValue[] {
         const joinParams = this.getAllJoins().flatMap((join) => join.params ?? []);
-        return [...joinParams, ...this.conditions.flatMap((condition) => condition.params)];
+        const discriminatorParams = this.config.discriminator ? [this.config.discriminator.value] : [];
+        return [...joinParams, ...discriminatorParams, ...this.conditions.flatMap((condition) => condition.params)];
     }
 
     private getArrayPaths(): string[] {

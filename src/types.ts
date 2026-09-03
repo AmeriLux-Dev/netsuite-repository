@@ -242,31 +242,55 @@ export interface RestRecordMetadata {
 
 export type RelationshipFieldMap = Record<string, string>;
 
-export interface OwnedSubrecordRelationship {
-    kind: 'owned';
-    recordAccessId: string;
+/** Shared by every relationship kind. */
+export interface RelationshipBase {
+    /** Config field keys by nested property name. */
     fields?: RelationshipFieldMap;
+    /** Aliases of the joins that exist only to read this relationship, so a query can drop them when the relationship is excluded. */
+    joinAliases?: string[];
+    /** False when the relationship is joined and selected only after include(). */
+    selectByDefault?: boolean;
+}
+
+/** A subrecord edited through the parent record (a shipping address, for example). */
+export interface SubrecordRelationship extends RelationshipBase {
+    kind: 'subrecord';
+    recordAccessId: string;
     reload?: {
         listFieldToClear: string;
     };
 }
 
-export interface SublistRelationship {
-    kind: 'collection';
+/** Sublist lines edited through the parent record. */
+export interface SublistRelationship extends RelationshipBase {
+    kind: 'sublist';
     recordAccessId: string;
-    fields?: RelationshipFieldMap;
+    /** Nested property whose value identifies a line (matched with findSublistLineWithValue). */
     matchField?: string;
     /** Property holding the NetSuite line index, used by change tracking to identify lines. */
     lineField?: string;
 }
 
-export type EntityRelationship = OwnedSubrecordRelationship | SublistRelationship;
+/** A referenced record joined for reading only; its fields are never written through the parent. */
+export interface ReferenceRelationship extends RelationshipBase {
+    kind: 'reference';
+}
+
+export type EntityRelationship = SubrecordRelationship | SublistRelationship | ReferenceRelationship;
+
+/** Table-per-hierarchy filter: the column and value that select this record type's rows out of a shared table. */
+export interface Discriminator {
+    column: string;
+    value: string;
+}
 
 export interface QueryConfig<TResult, TFieldMeta = unknown> {
     recordType: string;
     query: QueryShape;
     fields: Record<string, QueryField<TFieldMeta>>;
     relationships?: Record<string, EntityRelationship>;
+    /** Added to every query as `<root alias>.<column> = <value>` when the record type shares its table with others. */
+    discriminator?: Discriminator;
     restRecordMetadata?: RestRecordMetadata;
     composite?: CompositeModelMapping;
     postProcess?: (result: TResult) => TResult;

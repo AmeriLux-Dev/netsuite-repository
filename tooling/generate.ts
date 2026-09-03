@@ -1,18 +1,19 @@
 import * as nodePath from 'path';
 import type * as ts from 'typescript';
 import * as runtime from '../src';
-import { compileEntityModel } from '../src/model';
-import type { EntityModelMetadata, PropertyMetadata } from '../src/model';
-import type { FieldType } from '../src/types';
 import { evaluateModelFiles } from './collect/model-file-evaluator';
-import type { CollectedModel, ModelFileDiagnostic } from './collect/model-file-evaluator';
-import { createModelTypeProgram, readCompilerOptionsFromTsconfig, readModelTypes } from './collect/property-type-reader';
-import type { ModelTypeInfo, ModelTypeShape } from './collect/property-type-reader';
+import type { ModelFileDiagnostic } from './collect/model-file-evaluator';
+import { resolveModels } from './collect/model-resolver';
+import type { ResolvedClass, ResolvedRelation } from './collect/model-resolver';
+import { classKeyOf, createModelTypeProgram, readCompilerOptionsFromTsconfig, readDeclaredClass } from './collect/property-type-reader';
+import type { DeclaredClass } from './collect/property-type-reader';
+import { compileModel } from './compile/compile-model';
 import type { BuildConfig } from './config';
 import { emitConfigFile } from './emit/config-file-emitter';
 import type { FunctionImport } from './emit/config-file-emitter';
 import { emitContextFile } from './emit/context-file-emitter';
 import { emitTypeFile } from './emit/type-file-emitter';
+import type { TypeFileMember } from './emit/type-file-emitter';
 import { resolveGlobs, toPosixPath } from './file-system';
 import type { FileSystemAdapter } from './file-system';
 
@@ -34,11 +35,11 @@ export interface GeneratedModelSummary {
     modelName: string;
     setName: string;
     filePath: string;
-    source: 'class' | 'definition';
 }
 
 export interface GenerationPlan {
     files: PlannedFile[];
+    /** Record types, which own a config and a record set. Sublist, subrecord, and base classes only get a type file. */
     models: GeneratedModelSummary[];
     diagnostics: ModelFileDiagnostic[];
 }
@@ -65,14 +66,6 @@ function toImportPath(fromDirectory: string, toFile: string): string {
     return relative.startsWith('.') ? relative : `./${relative}`;
 }
 
-function inferFieldTypeFromShape(shape: ModelTypeShape | undefined, property: PropertyMetadata, isKey: boolean): FieldType | undefined {
-    const typeInfo = shape?.properties.find((candidate) => candidate.name === property.name);
-    if (!typeInfo?.fieldType) {
-        return undefined;
-    }
-    return isKey && typeInfo.fieldType === 'float' ? 'integer' : typeInfo.fieldType;
-}
-
 /** Gives every exported function a unique identifier for generated imports; same-named exports from different files are aliased. */
 function buildFunctionImports(functionReferences: Map<Function, { exportName: string; filePath: string }>, outDir: string): FunctionImport[] {
     const usedIdentifiers = new Set<string>();
@@ -89,45 +82,37 @@ function buildFunctionImports(functionReferences: Map<Function, { exportName: st
     return imports;
 }
 
-/** Fills missing field types on the metadata from the declared TypeScript types; reports properties that cannot be mapped. */
-function applyDeclaredTypes(model: CollectedModel, types: ModelTypeInfo | undefined, diagnostics: ModelFileDiagnostic[]): EntityModelMetadata {
-    const metadata = model.metadata;
-    const keyProperty = metadata.keyProperty ?? 'id';
-    const shapesByName = new Map(types?.nested.map((shape) => [shape.name, shape]) ?? []);
-
-    const fill = (property: PropertyMetadata, shape: ModelTypeShape | undefined, owner: string, isKey: boolean) => {
-        if (property.type !== undefined) {
-            return;
-        }
-        const inferred = inferFieldTypeFromShape(shape, property, isKey);
-        if (inferred) {
-            property.type = inferred;
-        } else if (!isKey) {
-            const typeText = shape?.properties.find((candidate) => candidate.name === property.name)?.typeText ?? 'unknown';
-            diagnostics.push({ filePath: model.filePath, exportName: model.exportName, message: `Property '${owner}.${property.name}' has type '${typeText}', which does not map to a NetSuite field type. Declare it with @Column({ type }) or hasType().` });
-        }
-    };
-
-    for (const property of metadata.properties.values()) {
-        if (!metadata.ignoredProperties.has(property.name)) {
-            fill(property, types?.root, model.modelName, property.name === keyProperty);
-        }
-    }
-
-    for (const navigation of metadata.navigations.values()) {
-        const rootProperty = types?.root.properties.find((candidate) => candidate.name === navigation.name);
-        const nestedShape = rootProperty?.nestedShapeName ? shapesByName.get(rootProperty.nestedShapeName) : undefined;
-        for (const property of navigation.properties.values()) {
-            fill(property, nestedShape, `${model.modelName}.${navigation.name}`, false);
-        }
-    }
-
-    return metadata;
-}
-
 function resolveCompilerOptions(options: GenerateOptions): ts.CompilerOptions {
     const fromTsconfig = options.config.tsconfig ? readCompilerOptionsFromTsconfig(nodePath.resolve(options.cwd, options.config.tsconfig)) : {};
     return { ...fromTsconfig, ...(options.compilerOptions ?? {}) };
+}
+
+/** The TypeScript text of a reference, subrecord, or sublist member: the target interface, projected with Pick when the declaration projected it. */
+function relationTypeText(relation: ResolvedRelation, target: ResolvedClass | undefined): string {
+    const mappedNames = target ? [...target.fields.map((field) => field.name), ...target.relations.map((nested) => nested.name)] : [];
+    const projected = relation.projection === 'all' ? undefined : relation.projection.filter((name) => mappedNames.includes(name));
+    const base = projected && projected.length > 0 && projected.length < mappedNames.length
+        ? `Pick<${relation.targetClassName}, ${projected.map((name) => `'${name}'`).join(' | ')}>`
+        : relation.targetClassName;
+    return relation.kind === 'sublist' ? `${base}[]` : base;
+}
+
+function buildTypeFileMembers(model: ResolvedClass, classesByName: Map<string, ResolvedClass>): { members: TypeFileMember[]; imports: string[] } {
+    const members: TypeFileMember[] = [];
+    const imports: string[] = model.base ? [model.base.className] : [];
+    const ownFields = model.fields.filter((field) => !field.inherited || !model.base);
+    const ownRelations = model.relations.filter((relation) => !relation.inherited || !model.base);
+    for (const field of ownFields) {
+        members.push({ name: field.name, optional: field.optional, typeText: field.typeText });
+    }
+    for (const property of model.unmapped.filter((candidate) => !candidate.inherited || !model.base)) {
+        members.push({ name: property.name, optional: property.optional, typeText: property.typeText });
+    }
+    for (const relation of ownRelations) {
+        imports.push(relation.targetClassName);
+        members.push({ name: relation.name, optional: relation.optional, typeText: relationTypeText(relation, classesByName.get(relation.targetClassName)) });
+    }
+    return { members, imports };
 }
 
 /** Computes every generated file without touching disk. */
@@ -149,40 +134,58 @@ export function planGeneration(options: GenerateOptions): GenerationPlan {
     const functionImports = buildFunctionImports(evaluation.functionReferences, outDir);
     const files: PlannedFile[] = [];
     const models: GeneratedModelSummary[] = [];
-    const program = evaluation.models.length > 0 ? createModelTypeProgram(modelFiles, resolveCompilerOptions(options)) : undefined;
-    const seenModelNames = new Map<string, string>();
+    const program = evaluation.classes.length > 0 ? createModelTypeProgram(modelFiles, resolveCompilerOptions(options)) : undefined;
 
-    for (const model of evaluation.models) {
-        const previousFile = seenModelNames.get(model.modelName);
-        if (previousFile) {
-            diagnostics.push({ filePath: model.filePath, exportName: model.exportName, message: `Model name '${model.modelName}' is already used in '${previousFile}'.` });
+    const declared = new Map<string, DeclaredClass>();
+    for (const collected of evaluation.classes) {
+        const shape = program ? readDeclaredClass(program, collected.filePath, collected.className) : undefined;
+        if (!shape) {
+            diagnostics.push({ filePath: collected.filePath, exportName: collected.exportName, message: `Could not read the TypeScript declaration of '${collected.exportName}'.` });
             continue;
         }
-        seenModelNames.set(model.modelName, model.filePath);
+        declared.set(classKeyOf(collected), shape);
+    }
 
-        const types = program ? readModelTypes(program, model.filePath, model.exportName, model.modelName) : undefined;
-        if (!types) {
-            diagnostics.push({ filePath: model.filePath, exportName: model.exportName, message: `Could not read the TypeScript declaration of '${model.exportName}'.` });
+    const resolution = resolveModels({ classes: evaluation.classes, declared });
+    diagnostics.push(...resolution.diagnostics);
+    const classesWithProblems = new Set(resolution.diagnostics.map((diagnostic) => `${diagnostic.filePath}#${diagnostic.exportName}`));
+
+    const classesByName = new Map<string, ResolvedClass>();
+    for (const model of resolution.classes) {
+        const previous = classesByName.get(model.className);
+        if (previous) {
+            diagnostics.push({ filePath: model.filePath, exportName: model.exportName, message: `Model name '${model.className}' is already used in '${previous.filePath}'.` });
+            continue;
+        }
+        classesByName.set(model.className, model);
+    }
+
+    for (const model of classesByName.values()) {
+        const typesFilePath = nodePath.join(outDir, `${model.className}.types.gen.ts`);
+        const { members, imports } = buildTypeFileMembers(model, classesByName);
+        files.push({
+            path: typesFilePath,
+            content: emitTypeFile({
+                className: model.className,
+                baseClassName: model.base?.className,
+                members,
+                imports,
+                isRecordType: model.kind === 'recordType',
+                libraryModule: config.libraryModule,
+                version: options.version,
+            }),
+        });
+
+        if (model.kind !== 'recordType' || classesWithProblems.has(`${model.filePath}#${model.exportName}`)) {
             continue;
         }
 
-        const metadata = applyDeclaredTypes(model, types, diagnostics);
-        let compiledConfig;
         try {
-            compiledConfig = compileEntityModel(metadata);
-        } catch (error) {
-            diagnostics.push({ filePath: model.filePath, exportName: model.exportName, message: error instanceof Error ? error.message : String(error) });
-            continue;
-        }
-
-        const typesFilePath = nodePath.join(outDir, `${model.modelName}.types.gen.ts`);
-        const configFilePath = nodePath.join(outDir, `${model.modelName}.config.gen.ts`);
-        try {
-            files.push({ path: typesFilePath, content: emitTypeFile({ modelName: model.modelName, types, libraryModule: config.libraryModule, version: options.version }) });
+            const compiledConfig = compileModel(model);
             files.push({
-                path: configFilePath,
+                path: nodePath.join(outDir, `${model.className}.config.gen.ts`),
                 content: emitConfigFile({
-                    modelName: model.modelName,
+                    modelName: model.className,
                     config: compiledConfig,
                     libraryModule: config.libraryModule,
                     typesImportPath: toImportPath(outDir, typesFilePath),
@@ -195,7 +198,7 @@ export function planGeneration(options: GenerateOptions): GenerationPlan {
             continue;
         }
 
-        models.push({ modelName: model.modelName, setName: metadata.setName ?? toEntitySetName(model.modelName), filePath: model.filePath, source: model.source });
+        models.push({ modelName: model.className, setName: model.setName ?? toEntitySetName(model.className), filePath: model.filePath });
     }
 
     if (models.length > 0) {

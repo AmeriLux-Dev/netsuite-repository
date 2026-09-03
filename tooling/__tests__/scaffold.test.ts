@@ -243,40 +243,39 @@ describe('REST metadata provider', () => {
 describe('scaffoldRecordModel()', () => {
     const provider = createSnapshotMetadataProvider(snapshot);
 
-    it('emits a decorated stub with nested classes, joins, and TODO markers', async () => {
+    it('emits a convention-mapped stub with decorators only where the metadata disagrees with the conventions', async () => {
         const scaffolded = await scaffoldRecordModel(provider, { recordType: 'SalesOrder', libraryModule: '@acme/orm', version: '1.0.0' });
 
         expect(scaffolded.modelName).toBe('SalesOrder');
-        expect(scaffolded.content).toContain("import { Column, Entity, Key, OwnsMany, OwnsOne, ReadOnly, RecordField } from '@acme/orm';");
-        expect(scaffolded.content).toContain("@Entity({ recordType: 'salesorder', table: 'transaction', alias: 'txn' })");
-        expect(scaffolded.content).toContain('    @Key() id!: number;');
-        expect(scaffolded.content).toContain("    @Column('custbody_approved', { type: 'boolean' }) @RecordField() custbodyApproved!: boolean;");
-        expect(scaffolded.content).toContain("    @Column('entity', { type: 'key' }) @RecordField() entity!: number | null;");
-        expect(scaffolded.content).toContain("    @Column('foreigntotal', { type: 'currency' }) @ReadOnly() foreigntotal!: number | null;");
-        expect(scaffolded.content).toContain('    @Column() @RecordField() memo!: string | null;');
-        expect(scaffolded.content).toContain("    @Column('trandate', { type: 'date' }) @RecordField() trandate!: Date | null;");
-        expect(scaffolded.content).toContain("    // TODO(scaffold): 'shipmethod' is writable but has no SuiteQL column on 'transaction'");
-        expect(scaffolded.content).toContain('export class SalesOrderShippingaddress {\n    @Column() @RecordField() addr1!: string | null;\n    @Column() @RecordField() city!: string | null;\n}');
-        expect(scaffolded.content).toContain("    @OwnsOne(() => SalesOrderShippingaddress, {\n        subrecord: 'shippingaddress',\n        clearListField: 'shipaddresslist',\n        join: { alias: 'shipaddr', table: 'transactionshippingaddress', on: 'shipaddr.nkey = txn.shippingaddress' },\n    })\n    shippingaddress!: SalesOrderShippingaddress;");
-        expect(scaffolded.content).toContain("    // TODO(scaffold): subrecord 'custombox' has no known SuiteQL table.");
-        expect(scaffolded.content).toContain("export class SalesOrderItemLine {\n    @Column('linesequencenumber', { type: 'integer' }) @ReadOnly() line!: number;\n    @Column('item', { type: 'key' }) @RecordField() item!: number | null;\n    @Column() @RecordField() quantity!: number | null;\n    @Column('amount', { type: 'currency' }) @ReadOnly() amount!: number | null;\n}");
-        expect(scaffolded.content).toContain("        join: { alias: 'tl', table: 'transactionline', on: 'tl.transaction = txn.id AND tl.mainline = \\'F\\'' },");
-        expect(scaffolded.content).toContain("    // TODO(scaffold): sublist 'links' has no known SuiteQL line table.");
+        expect(scaffolded.content).toContain("import { Field, ReadOnly, RecordType, Sublist } from '@acme/orm';");
+        expect(scaffolded.content).toContain("@RecordType('salesorder')\nexport class SalesOrder {\n    id!: number;");
+        expect(scaffolded.content).toContain("    @Field('custbody_approved') custbodyApproved!: boolean;");
+        expect(scaffolded.content).toContain("    @Field({ type: 'key' }) entity!: number | null;");
+        expect(scaffolded.content).toContain("    @Field({ type: 'currency' }) @ReadOnly() foreigntotal!: number | null;");
+        expect(scaffolded.content).toContain('    memo!: string | null;\n    trandate!: Date | null;\n    @ReadOnly() tranid!: string | null;');
+        expect(scaffolded.content).toContain("    // TODO(scaffold): 'shipmethod' is writable but has no SuiteQL column on 'transaction'; declare it with @Field('shipmethod', { column: '<column>' })");
+        expect(scaffolded.content).toContain('export class SalesOrderShippingaddress {\n    addr1!: string | null;\n    city!: string | null;\n}');
+        expect(scaffolded.content).toContain('\n    shippingaddress!: SalesOrderShippingaddress;\n');
+        expect(scaffolded.content).toContain("    // TODO(scaffold): subrecord 'custombox' has no known SuiteQL table. Fill in the table and its key column, then uncomment.\n    // @Subrecord('custombox', { table: '<table>', key: '<key>', clearListField: 'boxlist' })\n    // custombox!: SalesOrderCustombox;");
+        expect(scaffolded.content).toContain("@Sublist('item')\nexport class SalesOrderItemLine {\n    id!: number;\n    @Field({ type: 'key' }) item!: number | null;\n    quantity!: number | null;\n    @Field({ type: 'currency' }) @ReadOnly() amount!: number | null;\n}");
+        expect(scaffolded.content).toContain('    item!: SalesOrderItemLine[];');
+        expect(scaffolded.content).toContain("// TODO(scaffold): sublist 'links' has no known SuiteQL line table. Fill in the line table and the column holding the parent id.\n@Sublist('links', { table: '<table>', parentColumn: '<column>' })\nexport class SalesOrderLinksLine {\n    id!: number;\n    @ReadOnly() linkurl!: string | null;\n}");
+        expect(scaffolded.content).toContain("    // TODO(scaffold): uncomment once 'SalesOrderLinksLine' names its line table.\n    // links!: SalesOrderLinksLine[];");
         expect(scaffolded.todos).toEqual([
             "writable field 'shipmethod' has no SuiteQL column",
-            "subrecord 'custombox' has no known SuiteQL table; add a join to query it",
-            "sublist 'item' needs a line identity (matchBy or lineNumberProperty)",
-            "sublist 'links' has no known SuiteQL line table; add a join to query it",
+            "subrecord 'custombox' has no known SuiteQL table; declare it to query it",
+            "sublist 'links' has no known SuiteQL line table; declare it to query it",
         ]);
     });
 
     it('honors include, exclude, model name, and table overrides', async () => {
-        const scaffolded = await scaffoldRecordModel(provider, { recordType: 'salesorder', modelName: 'Order', table: 'transaction', alias: 'tx', include: ['id', 'memo', 'shipmethod'], exclude: ['shipmethod'], libraryModule: '@acme/orm' });
-        expect(scaffolded.content).toContain("@Entity({ recordType: 'salesorder', table: 'transaction', alias: 'tx' })");
-        expect(scaffolded.content).toContain('export class Order {');
-        expect(scaffolded.content).toContain('    @Key() id!: number;\n    @Column() @RecordField() memo!: string | null;');
+        const scaffolded = await scaffoldRecordModel(provider, { recordType: 'salesorder', modelName: 'Order', table: 'transaction', include: ['id', 'memo', 'shipmethod'], exclude: ['shipmethod'], libraryModule: '@acme/orm' });
+        expect(scaffolded.content).toContain("@RecordType('salesorder')\nexport class Order {\n    id!: number;\n    memo!: string | null;\n");
         expect(scaffolded.content).not.toContain('trandate');
         expect(scaffolded.content).not.toContain("'shipmethod' is writable");
+
+        const elsewhere = await scaffoldRecordModel(provider, { recordType: 'salesorder', table: 'salesorder', include: ['id'], libraryModule: '@acme/orm' });
+        expect(elsewhere.content).toContain("@RecordType('salesorder', { table: 'salesorder' })");
     });
 
     it('falls back to record field ids when the table is unknown or has no column metadata', async () => {
@@ -285,12 +284,11 @@ describe('scaffoldRecordModel()', () => {
         const sparseProvider = createSnapshotMetadataProvider({ records: { customrecord_widget: customRecord, mystery: unknownRecord }, tables: {} });
 
         const custom = await scaffoldRecordModel(sparseProvider, { recordType: 'customrecord_widget', libraryModule: '@acme/orm' });
-        expect(custom.content).toContain("@Entity({ recordType: 'customrecord_widget', table: 'customrecord_widget', alias: 'rec' })");
-        expect(custom.content).toContain("    @Column('custrecord_size') @RecordField() custrecordSize!: number | null;");
+        expect(custom.content).toContain("@RecordType('customrecord_widget')\nexport class CustomrecordWidget {\n    id!: number;\n    @Field('custrecord_size') custrecordSize!: number | null;\n    name!: string | null;\n}");
         expect(custom.todos).toEqual(["no SuiteQL column metadata for table 'customrecord_widget'; column names were taken from record field ids and need review"]);
 
         const mystery = await scaffoldRecordModel(sparseProvider, { recordType: 'mystery', libraryModule: '@acme/orm' });
-        expect(mystery.content).toContain("// TODO(scaffold): set the SuiteQL table for 'mystery'.\n@Entity({ recordType: 'mystery', table: '<table>', alias: 'root' })");
+        expect(mystery.content).toContain("// TODO(scaffold): confirm the SuiteQL table for 'mystery' (the conventions assume 'mystery').\n@RecordType('mystery')");
         expect(mystery.todos[0]).toContain("the SuiteQL table for record type 'mystery' is not known");
 
         await expect(scaffoldRecordModel(sparseProvider, { recordType: 'ghost', libraryModule: '@acme/orm' })).rejects.toThrow("No record metadata is available for 'ghost'.");
@@ -310,12 +308,11 @@ describe('scaffoldRecordModel()', () => {
         const taskProvider = createSnapshotMetadataProvider({ records: { task: taskRecord }, tables: {} });
 
         const scaffolded = await scaffoldRecordModel(taskProvider, { recordType: 'task', libraryModule: '@acme/orm' });
-        expect(scaffolded.content).toContain('    @Key() id!: number;');
-        expect(scaffolded.content).toContain("    @Column('startdate', { type: 'date' }) @RecordField() startDate!: Date | null;");
-        expect(scaffolded.content).toContain('    @Column() @RecordField() title!: string | null;');
-        expect(scaffolded.content).toContain("export class TaskTimeItemLine {\n    @Column('trandate', { type: 'date' }) @RecordField() tranDate!: Date | null;\n}");
+        expect(scaffolded.content).toContain("@RecordType('task')\nexport class Task {\n    id!: number;\n    startDate!: Date | null;\n    title!: string | null;");
+        expect(scaffolded.content).toContain("@Sublist('timeitem', { table: '<table>', parentColumn: '<column>' })\nexport class TaskTimeItemLine {\n    id!: number;\n    tranDate!: Date | null;\n}");
         expect(scaffolded.content).toContain('    // timeItem!: TaskTimeItemLine[];');
-        expect(scaffolded.content).toContain('export class TaskCustevent15 {');
+        expect(scaffolded.content).toContain("export class TaskCustevent15 {\n    size!: string | null;\n}");
+        expect(scaffolded.content).toContain("    // @Subrecord('custevent15', { table: '<table>', key: '<key>' })\n    // custevent15!: TaskCustevent15;");
     });
 });
 

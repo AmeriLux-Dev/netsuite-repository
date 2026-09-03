@@ -450,7 +450,7 @@ describe('RecordUpdater.patch()', () => {
     it('throws when collection relationship value is not an object', () => {
         expect(() =>
             updater(salesOrderConfig).id(1).patch({ lines: 'invalid' } as any)
-        ).toThrow("expects a collection patch object");
+        ).toThrow("expects a sublist patch object");
     });
 
     it('handles collection patch with line number', () => {
@@ -615,7 +615,7 @@ describe('RecordUpdater – relationship field resolution', () => {
                 physAddr1:  { queryFieldId: 'addr1', tableAlias: 't', recordAccess: 'subrecord', recordAccessId: 'physaddr', recordFieldId: 'addr1' },
             },
             relationships: {
-                physicalAddress: { kind: 'owned', recordAccessId: 'physaddr', fields: { addr1: 'physAddr1' } },
+                physicalAddress: { kind: 'subrecord', recordAccessId: 'physaddr', fields: { addr1: 'physAddr1' } },
             },
         });
         const plan = updater(cfg).id(1).owned('physicalAddress').set('addr1', 'x').end().plan();
@@ -640,7 +640,7 @@ describe('RecordUpdater – relationship field resolution', () => {
                 city: { queryFieldId: 'city', tableAlias: 't', recordAccess: 'subrecord', recordAccessId: 'billingaddress', nestPath: 'billingAddress.city', recordFieldId: 'city' },
             },
             relationships: {
-                billingAddress: { kind: 'owned', recordAccessId: 'billingaddress' },
+                billingAddress: { kind: 'subrecord', recordAccessId: 'billingaddress' },
             },
         });
         const plan = updater(cfg).id(1).owned('billingAddress').set('city', 'Austin').end().plan();
@@ -666,7 +666,7 @@ describe('RecordUpdater – registerSubrecordReload', () => {
                 city: { queryFieldId: 'city', tableAlias: 't', recordAccess: 'subrecord', recordAccessId: 'ba', nestPath: 'billing.city', recordFieldId: 'city' },
             },
             relationships: {
-                billing: { kind: 'owned', recordAccessId: 'ba', reload: { listFieldToClear: 'balist' } },
+                billing: { kind: 'subrecord', recordAccessId: 'ba', reload: { listFieldToClear: 'balist' } },
             },
         });
         const plan = updater(cfg).id(1).owned('billing').set('city', 'NYC').end().plan();
@@ -1519,7 +1519,7 @@ describe('RecordUpdater – flattenRelationshipUpdates nested object', () => {
                 myrel_x_y: { queryFieldId: 'xy',  tableAlias: 't', recordAccess: 'subrecord', recordAccessId: 'myrel', recordFieldId: 'xy' },
             },
             relationships: {
-                myrel: { kind: 'owned', recordAccessId: 'myrel' },
+                myrel: { kind: 'subrecord', recordAccessId: 'myrel' },
             },
         });
         const plan = updater(cfg).id(1)

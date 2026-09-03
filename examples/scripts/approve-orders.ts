@@ -47,7 +47,7 @@ export function map(context: { value: string; write(key: string, value: string):
 export function summarize(summary: { output: { iterator(): { each(callback: (key: string, value: string) => boolean): void } } }): void {
     const db = createErpContext({ tracking: false });
     const report = db.salesOrders.asNoTracking()
-        .leftJoin('transactionline', 'l', 'l.transaction = txn.id AND l.mainline = ?', { params: ['F'] })
+        .leftJoin('transactionline', 'l', 'l.transaction = transaction.id AND l.mainline = ?', { params: ['F'] })
         .selectRaw('COUNT(l.id)', 'lineCount', { type: 'integer' })
         .where('autoApproved', '=', 'T')
         .orderByDesc('tranDate')

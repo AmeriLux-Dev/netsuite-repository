@@ -6,7 +6,7 @@ import { defaultBuildConfig } from '../config';
 import type { BuildConfig } from '../config';
 import { createNodeFileSystemAdapter, toPosixPath } from '../file-system';
 import { checkGenerated, planGeneration, runGenerate, toEntitySetName } from '../generate';
-import { createModelTypeProgram, readCompilerOptionsFromTsconfig, readModelTypes } from '../collect/property-type-reader';
+import { createModelTypeProgram, readCompilerOptionsFromTsconfig, readDeclaredClass } from '../collect/property-type-reader';
 
 const repositoryRoot = nodePath.resolve(__dirname, '..', '..');
 const fixturesRoot = nodePath.join(__dirname, 'fixtures');
@@ -42,7 +42,7 @@ describe('toEntitySetName()', () => {
     });
 });
 
-describe('planGeneration() – decorated and fluent fixtures', () => {
+describe('planGeneration() – convention-mapped fixtures', () => {
     const outDir = createTemporaryOutDir();
     temporaryDirectories.push(outDir);
     const plan = planGeneration({
@@ -53,61 +53,115 @@ describe('planGeneration() – decorated and fluent fixtures', () => {
         version: '0.0.0-test',
     });
     const fileByName = new Map(plan.files.map((file) => [nodePath.basename(file.path), file.content]));
+    const salesOrderConfig = fileByName.get('SalesOrder.config.gen.ts') as string;
 
-    it('reports no diagnostics and both models', () => {
+    it('reports no diagnostics, one record set per @RecordType class, and a type file for every class', () => {
         expect(plan.diagnostics).toEqual([]);
         expect(plan.models).toEqual([
-            expect.objectContaining({ modelName: 'Customer', setName: 'customers', source: 'definition' }),
-            expect.objectContaining({ modelName: 'SalesOrder', setName: 'salesOrders', source: 'class' }),
+            expect.objectContaining({ modelName: 'Customer', setName: 'customers' }),
+            expect.objectContaining({ modelName: 'InventoryItem', setName: 'inventoryItems' }),
+            expect.objectContaining({ modelName: 'SalesOrder', setName: 'salesOrders' }),
         ]);
-        expect(Array.from(fileByName.keys()).sort()).toEqual(['Customer.config.gen.ts', 'Customer.types.gen.ts', 'SalesOrder.config.gen.ts', 'SalesOrder.types.gen.ts', 'context.gen.ts']);
+        expect(Array.from(fileByName.keys()).sort()).toEqual([
+            'Customer.config.gen.ts', 'Customer.types.gen.ts',
+            'InventoryItem.config.gen.ts', 'InventoryItem.types.gen.ts',
+            'SalesOrder.config.gen.ts', 'SalesOrder.types.gen.ts',
+            'SalesOrderLine.types.gen.ts', 'Transaction.types.gen.ts', 'TransactionAddress.types.gen.ts',
+            'context.gen.ts',
+        ]);
     });
 
-    it('infers field types from the class declaration and keeps explicit types', () => {
-        const config = fileByName.get('SalesOrder.config.gen.ts') as string;
-        expect(config).toContain("        id: {\n            queryFieldId: 'id',\n            tableAlias: 'txn',\n            type: 'integer',");
-        expect(config).toMatch(/tranDate: \{[^}]*type: 'date'/);
-        expect(config).toMatch(/approved: \{[^}]*type: 'boolean'/);
-        expect(config).toMatch(/customerId: \{[^}]*type: 'float'[^}]*setFirst: true/);
-        expect(config).toMatch(/lines_itemId: \{[^}]*type: 'key'/);
-        expect(config).toMatch(/lines_quantity: \{[^}]*type: 'float'/);
-        expect(config).toMatch(/lines_line: \{[^}]*type: 'float'[^}]*readonly: true/);
-        expect(config).toMatch(/shippingAddress_city: \{[^}]*type: 'string'/);
-        expect(config).toContain("on: 'tl.transaction = txn.id AND tl.mainline = \\'F\\''");
-        expect(config).toContain('coerce: true,');
+    it('maps every property by convention: lowercased column, field id equal to the column, type from the declaration', () => {
+        expect(salesOrderConfig).toContain("from: {\n            name: 'transaction',\n            alias: 'transaction',\n        },");
+        expect(salesOrderConfig).toMatch(/id: \{\n\s+queryFieldId: 'id',\n\s+tableAlias: 'transaction',\n\s+type: 'integer',\n\s+isPrimary: true,\n\s+readonly: true,/);
+        expect(salesOrderConfig).toMatch(/tranDate: \{[^}]*queryFieldId: 'trandate'[^}]*type: 'date'[^}]*recordFieldId: 'trandate'/);
+        expect(salesOrderConfig).toMatch(/memo: \{[^}]*queryFieldId: 'memo'[^}]*recordFieldId: 'memo'/);
+        expect(salesOrderConfig).toMatch(/approved: \{[^}]*queryFieldId: 'custbody_approved'[^}]*type: 'boolean'[^}]*recordFieldId: 'custbody_approved'/);
+        expect(salesOrderConfig).toMatch(/customerId: \{[^}]*queryFieldId: 'entity'[^}]*type: 'integer'[^}]*recordFieldId: 'entity'/);
+        expect(salesOrderConfig).toMatch(/tranId: \{[^}]*transform: uppercaseText,\n\s+recordFieldId: 'tranid'/);
+        expect(salesOrderConfig).toMatch(/import \{ trimText, uppercaseText \} from '.*fixtures\/models\/shared';/);
+        expect(salesOrderConfig).not.toContain('cachedLabel');
+        expect(fileByName.get('SalesOrder.types.gen.ts')).toContain('    cachedLabel?: string;');
     });
 
-    it('imports transforms by name from the module that exports them', () => {
-        const salesOrderConfig = fileByName.get('SalesOrder.config.gen.ts') as string;
-        const customerConfig = fileByName.get('Customer.config.gen.ts') as string;
-        expect(salesOrderConfig).toMatch(/import \{ uppercaseText \} from '.*fixtures\/models\/SalesOrder';/);
-        expect(salesOrderConfig).toContain('transform: uppercaseText,');
-        expect(customerConfig).toMatch(/import \{ trimText \} from '.*fixtures\/models\/shared';/);
-        expect(customerConfig).toContain('transform: trimText,');
+    it('applies the opt-outs: @ReadOnly, text fields, and the internal id are read-only', () => {
+        expect(salesOrderConfig).toMatch(/total: \{[^}]*queryFieldId: 'foreigntotal'[^}]*readonly: true/);
+        expect(salesOrderConfig).not.toMatch(/total: \{[^}]*recordFieldId/);
+        expect(salesOrderConfig).toMatch(/statusText: \{[^}]*queryFieldId: 'status'[^}]*useText: true[^}]*readonly: true/);
     });
 
-    it('emits plain interfaces for the class model, including nested classes and optional members', () => {
-        const types = fileByName.get('SalesOrder.types.gen.ts') as string;
-        expect(types).toContain('export interface ShippingAddress {\n    addr1: string | null;\n    city: string | null;\n}');
-        expect(types).toContain('export interface SalesOrderLine {\n    line: number;\n    itemId: number;\n    quantity: number;\n    amount: number;\n}');
-        expect(types).toContain('export interface CustomerLookup {\n    companyName: string;\n}');
-        expect(types).toContain('export interface SalesOrder {\n    id: number;\n    tranId: string;\n    tranDate: Date;\n    memo?: string | null;\n    approved: boolean;\n    customerId: number;\n    customerName: string;\n    shippingAddress: ShippingAddress;\n    lines: SalesOrderLine[];\n    customer: CustomerLookup;\n}');
-        expect(types).toContain('export type SalesOrderPatch = RecordGraphPatch<SalesOrder>;');
+    it('adds the table-per-hierarchy discriminator and joins the type table only for the field that reads from it', () => {
+        expect(salesOrderConfig).toContain("discriminator: {\n        column: 'type',\n        value: 'SalesOrd',\n    },");
+        expect(salesOrderConfig).toContain("toTable: {\n                    name: 'salesorder',\n                    alias: 'salesorder',\n                },\n                fromTable: 'transaction',\n                type: 'inner',\n                constraints: [\n                    {\n                        joinKeys: {\n                            sourceForeignKey: 'id',\n                            targetPrimaryKey: 'id',\n                        },\n                    },\n                ],");
+        expect(salesOrderConfig).toMatch(/shipMethodId: \{[^}]*queryFieldId: 'shipmethod',\n\s+tableAlias: 'salesorder'/);
+        expect(fileByName.get('InventoryItem.config.gen.ts')).toContain("discriminator: {\n        column: 'itemtype',\n        value: 'InvtPart',\n    },");
+        expect(fileByName.get('Customer.config.gen.ts')).not.toContain('discriminator');
     });
 
-    it('emits the interface behind a fluent definition with inline object types verbatim', () => {
-        const types = fileByName.get('Customer.types.gen.ts') as string;
-        const config = fileByName.get('Customer.config.gen.ts') as string;
-        expect(types).toContain('export interface Customer {\n    id: number;\n    companyName: string;\n    email: string | null;\n    isInactive: boolean;\n    categoryIds: number[];\n    billingAddress: { addr1: string | null; city: string | null; };\n}');
-        expect(types).not.toContain('CustomerBillingAddress');
-        expect(config).toMatch(/categoryIds: \{[^}]*type: 'multiselect'/);
-        expect(config).toMatch(/isInactive: \{[^}]*type: 'boolean'/);
-        expect(config).toMatch(/billingAddress_city: \{[^}]*type: 'string'[^}]*recordAccessId: 'billingaddress'/);
+    it('joins a projected reference through its select field and selects only the projected read-only fields', () => {
+        expect(salesOrderConfig).toContain("toTable: {\n                    name: 'customer',\n                    alias: 'customer',\n                },\n                fromTable: 'transaction',\n                type: 'leftOuter',\n                on: 'customer.id = transaction.entity',");
+        expect(salesOrderConfig).toMatch(/customer_companyName: \{[^}]*tableAlias: 'customer'[^}]*nestPath: 'customer.companyName'[^}]*transform: trimText[^}]*readonly: true/);
+        expect(salesOrderConfig).not.toContain('customer_email');
+        expect(salesOrderConfig).toContain("customer: {\n            kind: 'reference',\n            fields: {\n                id: 'customer_id',\n                companyName: 'customer_companyName',\n            },\n            joinAliases: [\n                'customer',\n            ],\n        },");
     });
 
-    it('emits the context wiring both models', () => {
+    it('maps both subrecords from one class, with the field id from the property and the table and list field from the conventions', () => {
+        expect(salesOrderConfig).toContain("on: 'shippingAddress.nkey = transaction.shippingaddress',");
+        expect(salesOrderConfig).toContain("on: 'billingAddress.nkey = transaction.billingaddress',");
+        expect(salesOrderConfig).toMatch(/shippingAddress_state: \{[^}]*setFirst: true,\n\s+recordFieldId: 'state',\n\s+recordAccess: 'subrecord',\n\s+recordAccessId: 'shippingaddress',\n\s+subrecordNeedsReload: true,\n\s+subrecordListFieldToClear: 'shipaddresslist'/);
+        expect(salesOrderConfig).toMatch(/billingAddress_city: \{[^}]*recordAccessId: 'billingaddress'[^}]*subrecordListFieldToClear: 'billaddresslist'/);
+        expect(salesOrderConfig).toContain("shippingAddress: {\n            kind: 'subrecord',\n            recordAccessId: 'shippingaddress',");
+        expect(salesOrderConfig).toContain("reload: {\n                listFieldToClear: 'billaddresslist',\n            },");
+    });
+
+    it('maps the sublist with the conventional line table, line key, and a nested reference under it', () => {
+        expect(salesOrderConfig).toContain("on: 'lines.transaction = transaction.id AND lines.mainline = \\'F\\'',");
+        expect(salesOrderConfig).toMatch(/lines_id: \{[^}]*cardinality: 'many',\n\s+recordFieldId: 'line',\n\s+recordAccess: 'sublist',\n\s+recordAccessId: 'item',\n\s+updateMapping: \{\n\s+kind: 'sublist',\n\s+sublistId: 'item',\n\s+fieldId: 'line',\n\s+matchBy: 'line',/);
+        expect(salesOrderConfig).toMatch(/lines_quantity: \{[^}]*recordFieldId: 'quantity'[^}]*updateMapping: \{[^}]*fieldId: 'quantity',\n\s+matchBy: 'line'/);
+        expect(salesOrderConfig).toMatch(/lines_amount: \{[^}]*readonly: true,\n\s+recordAccess: 'sublist'/);
+        expect(salesOrderConfig).toMatch(/lines_notes: \{[^}]*select: false/);
+        expect(salesOrderConfig).toContain("on: 'lines_item.id = lines.item AND lines_item.itemtype = ?',\n                params: [\n                    'InvtPart',\n                ],");
+        expect(salesOrderConfig).toMatch(/lines_item_displayName: \{[^}]*tableAlias: 'lines_item'[^}]*nestPath: 'lines.item.displayName',\n\s+cardinality: 'many',\n\s+readonly: true/);
+        expect(salesOrderConfig).toContain("lines: {\n            kind: 'sublist',\n            recordAccessId: 'item',\n            fields: {\n                id: 'lines_id',\n                itemId: 'lines_itemId',\n                quantity: 'lines_quantity',\n                amount: 'lines_amount',\n                notes: 'lines_notes',\n                'item.itemId': 'lines_item_itemId',\n                'item.displayName': 'lines_item_displayName',\n            },\n            joinAliases: [\n                'lines',\n                'lines_item',\n            ],\n            matchField: 'id',\n        },");
+    });
+
+    it('emits one interface per class, extending the base and importing referenced types', () => {
+        expect(fileByName.get('SalesOrder.types.gen.ts')).toBe([
+            '// <auto-generated>',
+            '//   Plain type for the SalesOrder model.',
+            '//   Generated by @amerilux/netsuite-repository 0.0.0-test. Do not edit; rerun the build step instead.',
+            '// </auto-generated>',
+            '',
+            "import type { RecordGraphPatch } from '@amerilux/netsuite-repository';",
+            "import type { Customer } from './Customer.types.gen';",
+            "import type { SalesOrderLine } from './SalesOrderLine.types.gen';",
+            "import type { Transaction } from './Transaction.types.gen';",
+            '',
+            'export interface SalesOrder extends Transaction {',
+            '    poNumber: string | null;',
+            '    approved: boolean;',
+            '    shipMethodId: number | null;',
+            '    total: number;',
+            '    cachedLabel?: string;',
+            "    customer?: Pick<Customer, 'id' | 'companyName'>;",
+            '    lines: SalesOrderLine[];',
+            '}',
+            '',
+            'export type SalesOrderPatch = RecordGraphPatch<SalesOrder>;',
+            'export type SalesOrderCreate = Partial<SalesOrder>;',
+            '',
+        ].join('\n'));
+        expect(fileByName.get('Transaction.types.gen.ts')).toContain("import type { TransactionAddress } from './TransactionAddress.types.gen';\n\nexport interface Transaction {\n    id: number;\n    tranId: string;\n    tranDate: Date;\n    memo?: string | null;\n    customerId: number;\n    statusText: string;\n    shippingAddress: TransactionAddress;\n    billingAddress?: TransactionAddress;\n}\n");
+        expect(fileByName.get('Transaction.types.gen.ts')).not.toContain('RecordGraphPatch');
+        expect(fileByName.get('TransactionAddress.types.gen.ts')).toContain('export interface TransactionAddress {\n    addr1: string | null;\n    city: string | null;\n    state: string | null;\n}');
+        expect(fileByName.get('SalesOrderLine.types.gen.ts')).toContain("export interface SalesOrderLine {\n    id: number;\n    itemId: number;\n    quantity: number;\n    amount: number;\n    notes: string | null;\n    item?: Pick<InventoryItem, 'itemId' | 'displayName'>;\n}");
+        expect(fileByName.get('Customer.types.gen.ts')).toContain('export interface Customer {\n    id: number;\n    companyName: string;\n    email: string | null;\n    isInactive: boolean;\n    categoryIds: number[];\n}');
+        expect(fileByName.get('Customer.config.gen.ts')).toMatch(/categoryIds: \{[^}]*type: 'multiselect'/);
+    });
+
+    it('emits the context wiring every record type', () => {
         const context = fileByName.get('context.gen.ts') as string;
-        expect(context).toContain('export const AppSchema = {\n    customers: CustomerConfig,\n    salesOrders: SalesOrderConfig,\n};');
+        expect(context).toContain('export const AppSchema = {\n    customers: CustomerConfig,\n    inventoryItems: InventoryItemConfig,\n    salesOrders: SalesOrderConfig,\n};');
         expect(context).toContain('export function createAppContext(');
     });
 });
@@ -119,13 +173,13 @@ describe('runGenerate() and checkGenerated()', () => {
 
     it('writes every file once and reports them unchanged on the second run', () => {
         const first = runGenerate(options);
-        expect(first.writtenFiles).toHaveLength(5);
+        expect(first.writtenFiles).toHaveLength(10);
         expect(first.unchangedFiles).toEqual([]);
         expect(nodeFileSystem.existsSync(nodePath.join(outDir, 'SalesOrder.config.gen.ts'))).toBe(true);
 
         const second = runGenerate(options);
         expect(second.writtenFiles).toEqual([]);
-        expect(second.unchangedFiles).toHaveLength(5);
+        expect(second.unchangedFiles).toHaveLength(10);
     });
 
     it('detects drift and missing files without writing', () => {
@@ -179,12 +233,12 @@ describe('planGeneration() – diagnostics', () => {
         expect(plan.files).toEqual([]);
     });
 
-    it('reports properties whose TypeScript type has no NetSuite field type', () => {
+    it('reports properties whose TypeScript type is neither a field type nor a model class, and still emits the rest', () => {
         const plan = planFor(['tooling/__tests__/fixtures/broken/Unmappable.ts']);
         expect(plan.diagnostics).toEqual([
-            expect.objectContaining({ exportName: 'Unmappable', message: "Property 'Unmappable.extra' has type 'Map<string, string>', which does not map to a NetSuite field type. Declare it with @Column({ type }) or hasType()." }),
+            expect.objectContaining({ exportName: 'Unmappable', message: "Property 'Unmappable.extra' has type 'Map<string, string>', which does not map to a NetSuite field type. Declare it with @Field({ type }), type it as a model class, or mark it @NotMapped()." }),
         ]);
-        expect(plan.files.map((file) => nodePath.basename(file.path))).toEqual(['Unmappable.types.gen.ts', 'Unmappable.config.gen.ts', 'context.gen.ts']);
+        expect(plan.files.map((file) => nodePath.basename(file.path))).toEqual(['Unmappable.types.gen.ts']);
     });
 
     it('reports transforms that are not exported', () => {
@@ -194,10 +248,32 @@ describe('planGeneration() – diagnostics', () => {
         ]);
     });
 
-    it('reports model validation errors from the compiler', () => {
+    it('reports a record type without an internal id', () => {
         const plan = planFor(['tooling/__tests__/fixtures/broken/InvalidModel.ts']);
         expect(plan.diagnostics).toEqual([
-            expect.objectContaining({ exportName: 'InvalidModel', message: expect.stringContaining("Model 'InvalidModel' is invalid") }),
+            expect.objectContaining({ exportName: 'InvalidModel', message: "Record type 'InvalidModel' has no internal id property; declare 'id' or mark one with @InternalId()." }),
+        ]);
+        expect(plan.models).toEqual([]);
+    });
+
+    it('reports every way a reference, subrecord, or sublist can be declared wrong', () => {
+        const plan = planFor(['tooling/__tests__/fixtures/broken/BadRelations.ts']);
+        expect(plan.diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
+            "Property 'BadRelations.notes' is an array of 'Note', which is not a sublist class. Decorate 'Note' with @Sublist('<sublist id>').",
+            "Sublist 'BadRelations.children' ('recmachcustrecord_child') has no known line table; declare it with @Sublist('recmachcustrecord_child', { table, parentColumn }) on 'ChildLine'.",
+            "Reference 'BadRelations.owner' needs a select field: declare 'ownerId' or name one with @Reference('<property>').",
+            "Subrecord 'BadRelations.detail' ('detail') has no known table; declare it with @Subrecord('detail', { table, key }).",
+            "Property 'BadRelations.line' is typed as sublist class 'ChildLine' but is not an array.",
+            "Property 'BadRelationsOwner.parents' is an array of 'BadRelations', which is not a sublist class. Decorate 'BadRelations' with @Sublist('<sublist id>').",
+            "Reference 'BadRelationsOwner.parent' needs a select field: declare 'parentId' or name one with @Reference('<property>').",
+            "Reference 'BadTargetKey.owner' joins on 'BadRelationsOwner.ghost', which is not a mapped field.",
+        ]);
+    });
+
+    it('reports a reference that loads its own class without a projection', () => {
+        const plan = planFor(['tooling/__tests__/fixtures/broken/Cycle.ts']);
+        expect(plan.diagnostics).toEqual([
+            expect.objectContaining({ exportName: 'CycleCustomer', message: "Property 'CycleCustomer.parent' brings 'CycleCustomer' back into itself; project it with Pick<CycleCustomer, ...> to cut the cycle." }),
         ]);
     });
 
@@ -219,19 +295,22 @@ describe('planGeneration() – diagnostics', () => {
     });
 });
 
-describe('readModelTypes()', () => {
+describe('readDeclaredClass()', () => {
     const modelFile = nodePath.join(fixturesRoot, 'models', 'SalesOrder.ts');
     const program = createModelTypeProgram([modelFile, nodePath.join(fixturesRoot, 'models', 'Customer.ts')], compilerOptions);
 
     it('returns undefined for unknown files and exports', () => {
-        expect(readModelTypes(program, nodePath.join(fixturesRoot, 'models', 'Missing.ts'), 'SalesOrder', 'SalesOrder')).toBeUndefined();
-        expect(readModelTypes(program, modelFile, 'NotExported', 'NotExported')).toBeUndefined();
-        expect(readModelTypes(program, modelFile, 'uppercaseText', 'uppercaseText')).toBeUndefined();
+        expect(readDeclaredClass(program, nodePath.join(fixturesRoot, 'models', 'Missing.ts'), 'SalesOrder')).toBeUndefined();
+        expect(readDeclaredClass(program, modelFile, 'NotExported')).toBeUndefined();
     });
 
-    it('describes nested shapes with their field types', () => {
-        const types = readModelTypes(program, modelFile, 'SalesOrder', 'SalesOrder');
-        expect(types?.root.properties.find((property) => property.name === 'lines')).toEqual({ name: 'lines', typeText: 'SalesOrderLine[]', optional: false, isArray: true, nestedShapeName: 'SalesOrderLine' });
-        expect(types?.nested.map((shape) => shape.name)).toEqual(['ShippingAddress', 'SalesOrderLine', 'CustomerLookup']);
+    it('describes inherited members, projected relation targets, and array element targets', () => {
+        const declared = readDeclaredClass(program, modelFile, 'SalesOrder');
+        expect(declared?.base).toEqual({ className: 'Transaction', filePath: toPosixPath(nodePath.join(fixturesRoot, 'models', 'Transaction.ts')) });
+        expect(declared?.properties.map((property) => property.name)).toEqual(['id', 'tranId', 'tranDate', 'memo', 'customerId', 'statusText', 'shippingAddress', 'billingAddress', 'poNumber', 'approved', 'shipMethodId', 'total', 'customer', 'lines', 'cachedLabel']);
+        expect(declared?.properties.find((property) => property.name === 'memo')).toEqual({ name: 'memo', optional: true, nullable: true, isArray: false, typeText: 'string | null', scalarType: 'string', inherited: true });
+        expect(declared?.properties.find((property) => property.name === 'customer')).toEqual(expect.objectContaining({ optional: true, isArray: false, inherited: false, target: expect.objectContaining({ className: 'Customer', projection: ['id', 'companyName'] }) }));
+        expect(declared?.properties.find((property) => property.name === 'lines')).toEqual(expect.objectContaining({ isArray: true, target: expect.objectContaining({ className: 'SalesOrderLine', projection: 'all' }) }));
+        expect(declared?.properties.find((property) => property.name === 'shippingAddress')?.target).toEqual(expect.objectContaining({ className: 'TransactionAddress', projection: 'all' }));
     });
 });

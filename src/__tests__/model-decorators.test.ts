@@ -1,131 +1,130 @@
-import { Column, Entity, Key, NotMapped, OwnsOne, RecordField, RestMetadata, compileEntityModel, configFromEntity, isEntityClass, isRootEntityClass, resolveDecoratedEntityMetadata, resolveQueryConfig } from '../model';
-import { customerConfig } from './fixtures';
-import { DecoratedCustomer, DecoratedSalesOrder, DecoratedSalesOrderLine, buildSalesOrderMetadata, uppercaseTransform } from './model-fixtures';
+import {
+    ExcludeFromDefaultSelect,
+    Field,
+    InternalId,
+    Join,
+    NotMapped,
+    ReadOnly,
+    RecordType,
+    Reference,
+    RestMetadata,
+    SetFirst,
+    Sublist,
+    Subrecord,
+    Transform,
+    UpdaterOptions,
+    getClassKind,
+    getClassOverrides,
+    getOwnClassOverrides,
+    isModelClass,
+    isRecordTypeClass,
+    mergeClassOverrides,
+    createClassOverrides,
+} from '../model';
 
-describe('configFromEntity() – decorated classes', () => {
-    it('compiles the decorated sales order to the same config as the hand-built metadata', () => {
-        expect(configFromEntity(DecoratedSalesOrder)).toEqual(compileEntityModel(buildSalesOrderMetadata()));
+const upper = (value: unknown) => String(value).toUpperCase();
+
+@Subrecord({ table: 'customaddress', key: 'nkey' })
+class Address {
+    addr1!: string | null;
+    @SetFirst() state!: string | null;
+}
+
+@Sublist('item', { table: 'transactionline', where: "{alias}.mainline = 'F'", parentColumn: 'transaction', lineKey: { column: 'id', field: 'line' } })
+class Line {
+    id!: number;
+    @Field('item') itemId!: number;
+}
+
+@UpdaterOptions({ requireFastPath: true })
+@RestMetadata({ recordType: 'transaction' })
+abstract class Transaction {
+    @InternalId() internalId!: number;
+    @Field('tranid') @Transform(upper) tranId!: string;
+    @Field({ column: 'status', text: true }) statusText!: string;
+    @NotMapped() cachedLabel?: string;
+    @Subrecord('shippingaddress', { clearListField: 'shipaddresslist', join: 'inner' }) shippingAddress!: Address;
+}
+
+@RecordType('salesorder', { setName: 'orders', coerce: false, discriminator: { column: 'type', value: 'SalesOrd' }, tables: { salesorder: { key: 'id' } } })
+class SalesOrder extends Transaction {
+    @Field('shipmethod', { table: 'salesorder', type: 'integer', coerce: false }) shipMethodId!: number | null;
+    @ReadOnly() @ExcludeFromDefaultSelect() total!: number;
+    @Reference('entityId', { join: 'inner', targetKey: 'externalId' }) customer?: object;
+    @Join('inner') lines!: Line[];
+    @Field('tranid') tranId!: string;
+}
+
+class Plain {
+    value!: string;
+}
+
+describe('decorator registry', () => {
+    it('records class-level overrides for record types, sublists, and subrecords', () => {
+        expect(getOwnClassOverrides(SalesOrder)).toEqual(expect.objectContaining({ kind: 'recordType', recordType: 'salesorder', setName: 'orders', coerce: false, discriminator: { column: 'type', value: 'SalesOrd' }, typeTables: { salesorder: { key: 'id' } } }));
+        expect(getOwnClassOverrides(Line)).toEqual(expect.objectContaining({ kind: 'sublist', sublistId: 'item', sublistTable: 'transactionline', sublistWhere: "{alias}.mainline = 'F'", parentColumn: 'transaction', lineKey: { column: 'id', field: 'line' } }));
+        expect(getOwnClassOverrides(Address)).toEqual(expect.objectContaining({ kind: 'subrecord', subrecordTable: 'customaddress', subrecordKey: 'nkey' }));
+        expect(getOwnClassOverrides(Transaction)).toEqual(expect.objectContaining({ updaterOptions: { requireFastPath: true }, restRecordMetadata: { recordType: 'transaction' }, keyProperty: 'internalId' }));
+        expect(getOwnClassOverrides(Plain)).toBeUndefined();
     });
 
-    it('caches the compiled config per class', () => {
-        expect(configFromEntity(DecoratedSalesOrder)).toBe(configFromEntity(DecoratedSalesOrder));
+    it('records property overrides', () => {
+        const properties = getClassOverrides(SalesOrder).properties;
+        expect(properties.get('shipMethodId')).toEqual({ name: 'shipMethodId', fieldId: 'shipmethod', table: 'salesorder', type: 'integer', coerce: false });
+        expect(properties.get('total')).toEqual({ name: 'total', readOnly: true, selectByDefault: false });
+        expect(properties.get('customer')).toEqual({ name: 'customer', selectFieldProperty: 'entityId', joinType: 'inner', targetKeyProperty: 'externalId' });
+        expect(properties.get('lines')).toEqual({ name: 'lines', joinType: 'inner' });
+        expect(properties.get('statusText')).toEqual({ name: 'statusText', column: 'status', text: true });
+        expect(properties.get('shippingAddress')).toEqual({ name: 'shippingAddress', subrecordFieldId: 'shippingaddress', clearListField: 'shipaddresslist', joinType: 'inner' });
+        expect(getClassOverrides(Address).properties.get('state')).toEqual({ name: 'state', setFirst: true });
+        expect(getClassOverrides(Transaction).notMapped).toEqual(new Set(['cachedLabel']));
     });
 
-    it('applies the remaining decorators and inherits base-class properties', () => {
-        const config = configFromEntity(DecoratedCustomer);
-
-        expect(config.recordType).toBe('customer');
-        expect(config.query.from).toEqual({ name: 'customer', alias: 'customer' });
-        expect(config.coerce).toBe(false);
-        expect(config.updaterOptions).toEqual({ requireFastPath: true });
-        expect(config.fields.id).toEqual({ queryFieldId: 'id', tableAlias: 'customer', type: 'integer', isPrimary: true, readonly: true });
-        expect(config.fields.companyName).toEqual({ queryFieldId: 'companyname', tableAlias: 'customer', type: 'string', alias: 'name', recordFieldId: 'companyname', setFirst: true });
-        expect(config.fields.status).toEqual({ queryFieldId: 'entitystatus', tableAlias: 'customer', type: 'string', useText: true, transform: uppercaseTransform, select: false, readonly: true });
-        expect(config.fields.lastModified).toEqual({ queryFieldId: 'lastmodifieddate', tableAlias: 'customer', type: 'date', readonly: true });
-        expect(config.fields.cachedLabel).toBeUndefined();
+    it('merges base-class overrides under the derived class, letting the derived class win per property', () => {
+        const merged = getClassOverrides(SalesOrder);
+        expect(merged.keyProperty).toBe('internalId');
+        expect(merged.updaterOptions).toEqual({ requireFastPath: true });
+        expect(merged.properties.get('tranId')).toEqual({ name: 'tranId', fieldId: 'tranid', transform: upper });
+        expect(merged.notMapped).toEqual(new Set(['cachedLabel']));
+        expect(getOwnClassOverrides(SalesOrder)?.properties.get('tranId')).toEqual({ name: 'tranId', fieldId: 'tranid' });
     });
 
-    it('names the metadata after the class and keeps the explicit set name separate', () => {
-        expect(resolveDecoratedEntityMetadata(DecoratedCustomer).name).toBe('DecoratedCustomer');
-        expect(resolveDecoratedEntityMetadata(DecoratedCustomer).setName).toBeUndefined();
-        expect(resolveDecoratedEntityMetadata(DecoratedSalesOrder).name).toBe('DecoratedSalesOrder');
-        expect(resolveDecoratedEntityMetadata(DecoratedSalesOrder).setName).toBe('salesOrders');
-    });
-
-    it('distinguishes root entity classes from nested classes', () => {
-        expect(isRootEntityClass(DecoratedSalesOrder)).toBe(true);
-        expect(isRootEntityClass(DecoratedSalesOrderLine)).toBe(false);
-        expect(isRootEntityClass(customerConfig)).toBe(false);
-    });
-
-    it('rejects classes without @Entity', () => {
-        class Plain {}
-        expect(() => configFromEntity(Plain)).toThrow("Class 'Plain' is not decorated with @Entity.");
-        expect(() => configFromEntity(DecoratedSalesOrderLine)).toThrow("Class 'DecoratedSalesOrderLine' is not decorated with @Entity.");
-    });
-
-    it('rejects navigations pointing at classes without decorated properties', () => {
-        class EmptyAddress {}
-
-        @Entity({ recordType: 'salesorder', table: 'transaction' })
-        class Broken {
-            @Key() id!: number;
-            @OwnsOne(() => EmptyAddress, { subrecord: 'shippingaddress', from: 'transaction' }) shippingAddress!: EmptyAddress;
-        }
-
-        expect(() => configFromEntity(Broken)).toThrow("Class 'EmptyAddress' used by 'Broken.shippingAddress' declares no decorated properties.");
+    it('classifies classes', () => {
+        expect(isModelClass(SalesOrder)).toBe(true);
+        expect(isModelClass(Transaction)).toBe(true);
+        expect(isModelClass(Plain)).toBe(false);
+        expect(isModelClass('SalesOrder')).toBe(false);
+        expect(isRecordTypeClass(SalesOrder)).toBe(true);
+        expect(isRecordTypeClass(Line)).toBe(false);
+        expect(isRecordTypeClass(null)).toBe(false);
+        expect(getClassKind(Address)).toBe('subrecord');
+        expect(getClassKind(Plain)).toBeUndefined();
     });
 
     it('rejects symbol property keys', () => {
-        const symbolKey = Symbol('hidden');
+        const key = Symbol('hidden');
         expect(() => {
-            class WithSymbol {
-                [symbolKey]!: string;
+            class Broken {
+                @Field() [key]!: string;
             }
-            Column('x')(WithSymbol.prototype, symbolKey);
-        }).toThrow("Symbol properties cannot be mapped on 'WithSymbol'.");
+            return Broken;
+        }).toThrow("Symbol properties cannot be mapped on 'Broken'.");
     });
 
-    it('surfaces compiler validation for decorated classes', () => {
-        @Entity({ recordType: 'customer', table: 'customer' })
-        @RestMetadata({ recordType: 'customer' })
-        class NoKey {
-            @Column('companyname') @RecordField() companyName!: string;
-        }
+    it('merges override objects without losing untouched members', () => {
+        const target = createClassOverrides();
+        target.recordType = 'customer';
+        target.properties.set('name', { name: 'name', fieldId: 'companyname' });
+        const source = createClassOverrides();
+        source.coerce = false;
+        source.properties.set('name', { name: 'name', readOnly: true });
+        source.notMapped.add('cache');
 
-        expect(() => configFromEntity(NoKey)).toThrow("Model 'NoKey' is invalid");
-        expect(resolveDecoratedEntityMetadata(NoKey).restRecordMetadata).toEqual({ recordType: 'customer' });
-    });
+        mergeClassOverrides(target, source);
 
-    it('lets a subclass override an inherited navigation and add nested fields via additional mappings', () => {
-        class Address {
-            @RecordField('addr1') addr1!: string;
-        }
-
-        @Entity({ recordType: 'vendorbill', table: 'transaction', alias: 'txn' })
-        class Bill {
-            @Key() id!: number;
-            @OwnsOne(() => Address, { subrecord: 'billingaddress', from: 'txn', fields: { line1: 'billingAddress_addr1' } }) billingAddress!: Address;
-        }
-
-        class BillWithReload extends Bill {
-            @OwnsOne(() => Address, { subrecord: 'billingaddress', clearListField: 'billaddresslist', from: 'txn' }) billingAddress!: Address;
-        }
-
-        expect(configFromEntity(Bill).relationships?.billingAddress).toEqual({ kind: 'owned', recordAccessId: 'billingaddress', fields: { addr1: 'billingAddress_addr1', line1: 'billingAddress_addr1' } });
-        expect(configFromEntity(BillWithReload).relationships?.billingAddress).toEqual({ kind: 'owned', recordAccessId: 'billingaddress', fields: { addr1: 'billingAddress_addr1' }, reload: { listFieldToClear: 'billaddresslist' } });
-    });
-});
-
-describe('isEntityClass() and resolveQueryConfig()', () => {
-    it('recognizes decorated classes only', () => {
-        expect(isEntityClass(DecoratedSalesOrder)).toBe(true);
-        expect(isEntityClass(class Plain {})).toBe(false);
-        expect(isEntityClass(customerConfig)).toBe(false);
-        expect(isEntityClass(null)).toBe(false);
-    });
-
-    it('resolves classes through configFromEntity and configs through normalizeQueryConfig', () => {
-        expect(resolveQueryConfig(DecoratedSalesOrder)).toBe(configFromEntity(DecoratedSalesOrder));
-        expect(resolveQueryConfig(customerConfig)).toEqual(customerConfig);
-        expect(resolveQueryConfig({ ...customerConfig, fields: { id: { query: { queryFieldId: 'id', tableAlias: 'cust' }, common: { isPrimary: true } } } }).fields.id).toEqual({ queryFieldId: 'id', tableAlias: 'cust', isPrimary: true });
-    });
-});
-
-describe('@NotMapped() on nested classes', () => {
-    it('excludes ignored nested properties from the navigation', () => {
-        class Address {
-            @RecordField('addr1') addr1!: string;
-            @NotMapped() formatted!: string;
-        }
-
-        @Entity({ recordType: 'vendorbill', table: 'transaction', alias: 'txn' })
-        class Bill {
-            @Key() id!: number;
-            @OwnsOne(() => Address, { subrecord: 'billingaddress', from: 'txn' }) billingAddress!: Address;
-        }
-
-        const config = configFromEntity(Bill);
-        expect(Object.keys(config.fields)).toEqual(['id', 'billingAddress_addr1']);
+        expect(target.recordType).toBe('customer');
+        expect(target.coerce).toBe(false);
+        expect(target.properties.get('name')).toEqual({ name: 'name', fieldId: 'companyname', readOnly: true });
+        expect(target.notMapped).toEqual(new Set(['cache']));
     });
 });

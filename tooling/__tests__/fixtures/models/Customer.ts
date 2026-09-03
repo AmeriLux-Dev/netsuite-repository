@@ -1,27 +1,11 @@
-import { defineModel } from '@amerilux/netsuite-repository';
+import { Field, RecordType, Transform } from '@amerilux/netsuite-repository';
 import { trimText } from './shared';
 
-export interface Customer {
-    id: number;
-    companyName: string;
-    email: string | null;
-    isInactive: boolean;
-    categoryIds: number[];
-    billingAddress: { addr1: string | null; city: string | null };
+@RecordType('customer', { setName: 'customers' })
+export class Customer {
+    id!: number;
+    @Field('companyname') @Transform(trimText) companyName!: string;
+    email!: string | null;
+    @Field('isinactive') isInactive!: boolean;
+    @Field('category') categoryIds!: number[];
 }
-
-export const CustomerModel = defineModel<Customer>((model) => model
-    .hasSetName('customers')
-    .toRecord('customer')
-    .toTable('customer', 'cust')
-    .hasKey('id')
-    .property('companyName').hasColumn('companyname').hasRecordField().transform(trimText)
-    .property('email').hasRecordField()
-    .property('isInactive').hasColumn('isinactive').hasRecordField()
-    .property('categoryIds').hasColumn('category')
-    .end()
-    .ownsOne('billingAddress', (address) => address
-        .toSubrecord('billingaddress')
-        .fromAlias('cust')
-        .property('addr1').hasColumn('billaddr1').hasRecordField('addr1')
-        .property('city').hasColumn('billcity').hasRecordField('city')));

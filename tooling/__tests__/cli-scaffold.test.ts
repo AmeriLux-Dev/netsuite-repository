@@ -62,7 +62,7 @@ describe('runCli() – scaffold', () => {
         expect(await runCli(['scaffold', '--record', 'customer', '--snapshot', 'meta.json'], environment)).toBe(EXIT_SUCCESS);
 
         const written = nodePath.join(cwd, 'src/models/Customer.ts');
-        expect(fileSystem.readTextFile(written)).toContain("@Entity({ recordType: 'customer', table: 'customer', alias: 'cust' })");
+        expect(fileSystem.readTextFile(written)).toContain("@RecordType('customer')\nexport class Customer {");
         expect(stdout[0]).toContain(`wrote ${written}`);
 
         expect(await runCli(['scaffold', 'customer', '--snapshot', 'meta.json', '--out', 'lib/models'], environment)).toBe(EXIT_SUCCESS);

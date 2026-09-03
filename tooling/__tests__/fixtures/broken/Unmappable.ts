@@ -1,17 +1,13 @@
-import { Column, Entity, Key } from '@amerilux/netsuite-repository';
+import { Field, RecordType } from '@amerilux/netsuite-repository';
 
 export const inlineTransform = (value: unknown) => value;
 const hiddenTransform = (value: unknown) => value;
 
-@Entity({ recordType: 'customer', table: 'customer' })
+@RecordType('customer')
 export class Unmappable {
-    @Key() id!: number;
-    @Column('extra') extra!: Map<string, string>;
-    @Column('name', { type: 'string' }) name!: string;
-}
-
-export class NoKey {
-    @Column('x') x!: string;
+    id!: number;
+    extra!: Map<string, string>;
+    @Field({ type: 'string' }) name!: string;
 }
 
 export { hiddenTransform as hidden };

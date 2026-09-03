@@ -74,7 +74,7 @@ describe('runCli()', () => {
 
     it('runs generate and maps diagnostics to the exit code', async () => {
         const ok = createEnvironment();
-        const generate = jest.fn((options: GenerateOptions) => emptyResult({ models: [{ modelName: 'A', setName: 'as', filePath: 'A.ts', source: 'class' }], writtenFiles: [nodePath.join(options.cwd, 'A.config.gen.ts')] }));
+        const generate = jest.fn((options: GenerateOptions) => emptyResult({ models: [{ modelName: 'A', setName: 'as', filePath: 'A.ts' }], writtenFiles: [nodePath.join(options.cwd, 'A.config.gen.ts')] }));
         expect(await runCli(['generate'], { ...ok.environment, generate })).toBe(EXIT_SUCCESS);
         expect(generate).toHaveBeenCalledWith(expect.objectContaining({ cwd, config: { ...defaultBuildConfig, rootDirectory: cwd } }));
         expect(ok.stdout[0]).toBe('netsuite-repository: 1 model(s), 1 file(s) written, 0 unchanged.');
@@ -91,7 +91,7 @@ describe('runCli()', () => {
 
     it('supports a dry run that lists planned files', async () => {
         const dry = createEnvironment();
-        const plan: GenerationPlan = { files: [{ path: '/project/out/A.config.gen.ts', content: '' }], models: [{ modelName: 'A', setName: 'as', filePath: 'A.ts', source: 'class' }], diagnostics: [] };
+        const plan: GenerationPlan = { files: [{ path: '/project/out/A.config.gen.ts', content: '' }], models: [{ modelName: 'A', setName: 'as', filePath: 'A.ts' }], diagnostics: [] };
         expect(await runCli(['generate', '--dry-run'], { ...dry.environment, plan: () => plan })).toBe(EXIT_SUCCESS);
         expect(dry.stdout[0]).toBe('1 model(s); would write:\n - /project/out/A.config.gen.ts');
 

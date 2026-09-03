@@ -1,34 +1,24 @@
 import { EntitySet, NetSuiteContext, createNetSuiteContext } from '../context';
 import { repository } from '../index';
-import { configFromEntity, defineModel } from '../model';
 import * as NsRecord from 'N/record';
 import * as NsQuery from 'N/query';
 import { createMockRecord } from '../__mocks__/netsuite/record';
 import { customerConfig } from './fixtures';
-import { DecoratedSalesOrder } from './model-fixtures';
-import type { SalesOrderModel } from './model-fixtures';
+import { salesOrderModelConfig, vendorModelConfig } from './model-fixtures';
+import type { SalesOrderModel, VendorModel } from './model-fixtures';
 
 const mockCreate = NsRecord.create as unknown as jest.Mock;
 const mockDelete = NsRecord.delete as unknown as jest.Mock;
 const mockRunSuiteQL = NsQuery.runSuiteQL as unknown as jest.Mock;
 
-interface Vendor {
-    id: number;
-    companyName: string;
-}
-
-const VendorModel = defineModel<Vendor>((model) => model
-    .toRecord('vendor').toTable('vendor', 'v').hasKey('id')
-    .property('companyName').hasColumn('companyname').hasRecordField());
-
 beforeEach(() => {
     jest.clearAllMocks();
 });
 
-describe('EntitySet – model sources', () => {
-    it('accepts a decorated class, a fluent definition, and a raw config', () => {
-        expect(new EntitySet(DecoratedSalesOrder).metadata).toBe(configFromEntity(DecoratedSalesOrder));
-        expect(new EntitySet(VendorModel).metadata).toBe(VendorModel.compile());
+describe('EntitySet – config sources', () => {
+    it('accepts a generated config and a sectioned hand-written config', () => {
+        expect(new EntitySet(salesOrderModelConfig).metadata.query.joins).toHaveLength(3);
+        expect(new EntitySet(vendorModelConfig).metadata.recordType).toBe('vendor');
         expect(new EntitySet(customerConfig).recordType).toBe('customer');
     });
 
@@ -36,7 +26,7 @@ describe('EntitySet – model sources', () => {
         const mockRecord = createMockRecord({ id: 77, save: jest.fn().mockReturnValue(77) });
         mockCreate.mockReturnValue(mockRecord);
         mockDelete.mockReturnValue(77);
-        const vendors = new EntitySet<Vendor>(VendorModel);
+        const vendors = new EntitySet<VendorModel>(vendorModelConfig);
 
         const created = vendors.createRecord({ companyName: 'Acme' }, { enableSourcing: true });
         const staged = vendors.create();
@@ -52,21 +42,21 @@ describe('EntitySet – model sources', () => {
     it('creates without options', () => {
         const mockRecord = createMockRecord({ id: 78, save: jest.fn().mockReturnValue(78) });
         mockCreate.mockReturnValue(mockRecord);
-        expect(new EntitySet<Vendor>(VendorModel).createRecord({ companyName: 'Acme' }).id).toBe(78);
+        expect(new EntitySet<VendorModel>(vendorModelConfig).createRecord({ companyName: 'Acme' }).id).toBe(78);
         expect(mockRecord.save).toHaveBeenCalledWith(expect.objectContaining({ enableSourcing: false }));
     });
 });
 
 describe('createNetSuiteContext() – mixed schema', () => {
-    it('types each set from its source and exposes options', () => {
-        const db = createNetSuiteContext({ salesOrders: DecoratedSalesOrder, vendors: VendorModel, customers: customerConfig }, { tracking: false });
+    it('types each set from its config and exposes options', () => {
+        const db = createNetSuiteContext({ salesOrders: salesOrderModelConfig, vendors: vendorModelConfig, customers: customerConfig }, { tracking: false });
 
         expect(db.salesOrders.metadata.query.joins).toHaveLength(3);
         expect(db.set('vendors').recordType).toBe('vendor');
         expect(db.customers.recordType).toBe('customer');
-        expect(db.getConfig('salesOrders')).toBe(DecoratedSalesOrder);
+        expect(db.getConfig('salesOrders')).toBe(salesOrderModelConfig);
         expect(db.options).toEqual({ tracking: false });
-        expect(new NetSuiteContext({ vendors: VendorModel }).options).toEqual({ tracking: true });
+        expect(new NetSuiteContext({ vendors: vendorModelConfig }).options).toEqual({ tracking: true });
 
         mockRunSuiteQL.mockReturnValue({ asMappedResults: () => [{ id: '5', tranid: 'SO5' }] });
         const order: SalesOrderModel | null = db.salesOrders.find(5);
@@ -75,12 +65,12 @@ describe('createNetSuiteContext() – mixed schema', () => {
     });
 });
 
-describe('repository() – model sources and create/delete', () => {
-    it('works with a decorated class', () => {
+describe('repository() – create/delete', () => {
+    it('works with a generated config', () => {
         mockDelete.mockReturnValue(3);
         const mockRecord = createMockRecord({ id: 9, save: jest.fn().mockReturnValue(9) });
         mockCreate.mockReturnValue(mockRecord);
-        const salesOrders = repository<SalesOrderModel, Record<string, unknown>>(DecoratedSalesOrder);
+        const salesOrders = repository<SalesOrderModel, Record<string, unknown>>(salesOrderModelConfig);
 
         expect(salesOrders.query().build().sql).toContain('FROM transaction txn');
         expect(salesOrders.create().mode).toBe('create');

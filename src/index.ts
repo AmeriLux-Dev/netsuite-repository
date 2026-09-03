@@ -13,7 +13,7 @@ import { createNetSuiteContext } from './context';
 import { query } from './query';
 import { createRecord, deleteRecord, updateRecord } from './record-updater';
 
-/** Repository-style access to one model without a context. Accepts a raw config, a decorated class, or a fluent definition. */
+/** Repository-style access to one model without a context, from its generated config. */
 export function repository<TResult, TUpdate extends Record<string, unknown> = Partial<TResult> & Record<string, unknown>>(source: QueryConfigSource<TResult>) {
     function update(id: RecordId): RecordUpdater<TResult, TUpdate>;
     function update(id: RecordId, patch: RecordGraphPatch<TUpdate>, options?: RecordUpdaterOptions): UpdateResult;

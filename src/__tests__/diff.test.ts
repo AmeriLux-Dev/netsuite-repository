@@ -1,9 +1,9 @@
-import { configFromEntity } from '../model';
+
 import { areFieldValuesEqual, buildAddedEntityPatch, diffTrackedEntity } from '../tracking';
 import type { QueryConfig } from '../types';
-import { DecoratedSalesOrder } from './model-fixtures';
+import { salesOrderModelConfig } from './model-fixtures';
 
-const salesOrderConfig = configFromEntity(DecoratedSalesOrder) as QueryConfig<unknown>;
+const salesOrderConfig = salesOrderModelConfig as QueryConfig<unknown>;
 
 function snapshotOrder() {
     return {
@@ -22,7 +22,7 @@ function snapshotOrder() {
 }
 
 function withoutLineField(config: QueryConfig<unknown>, alsoWithoutMatchField = false): QueryConfig<unknown> {
-    const lines = { ...(config.relationships!.lines as { kind: 'collection'; recordAccessId: string; fields: Record<string, string>; matchField?: string; lineField?: string }) };
+    const lines = { ...(config.relationships!.lines as { kind: 'sublist'; recordAccessId: string; fields: Record<string, string>; matchField?: string; lineField?: string }) };
     delete lines.lineField;
     if (alsoWithoutMatchField) {
         delete lines.matchField;
@@ -83,7 +83,7 @@ describe('diffTrackedEntity() – scalars and owned subrecords', () => {
             fields: { ...salesOrderConfig.fields, shippingAddress_city: { ...salesOrderConfig.fields.shippingAddress_city, readonly: true } },
             relationships: {
                 ...salesOrderConfig.relationships,
-                shippingAddress: { kind: 'owned', recordAccessId: 'shippingaddress', fields: { addr1: 'shippingAddress_addr1', city: 'shippingAddress_city', ghost: 'missing_field' } },
+                shippingAddress: { kind: 'subrecord', recordAccessId: 'shippingaddress', fields: { addr1: 'shippingAddress_addr1', city: 'shippingAddress_city', ghost: 'missing_field' } },
             },
         };
         const current = { ...snapshotOrder(), shippingAddress: { addr1: '2 Main', city: 'Austin', ghost: 'x' } };

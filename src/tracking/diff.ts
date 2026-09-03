@@ -111,7 +111,7 @@ function diffOwned(context: DiffContext, name: string, relationship: EntityRelat
     return Object.keys(values).length > 0 ? values : undefined;
 }
 
-type CollectionRelationship = Extract<EntityRelationship, { kind: 'collection' }>;
+type CollectionRelationship = Extract<EntityRelationship, { kind: 'sublist' }>;
 
 function lineIdentity(line: Record<string, unknown>, index: number, relationship: CollectionRelationship): { key: string; mode: 'line' | 'match' | 'index'; value: unknown } {
     if (relationship.lineField && line[relationship.lineField] !== undefined && line[relationship.lineField] !== null) {
@@ -209,12 +209,32 @@ function diffCollection(context: DiffContext, name: string, relationship: Collec
     return Object.keys(patch).length > 0 ? patch : undefined;
 }
 
+/** Referenced records are never written through the parent; changes to their fields are reported as ignored. */
+function reportReferenceChanges(context: DiffContext, relationship: EntityRelationship, snapshot: Record<string, unknown> | undefined, current: Record<string, unknown>, includeUnchanged: boolean): void {
+    for (const key of Object.values(relationship.fields ?? {})) {
+        const field = context.config.fields[key];
+        if (!field) {
+            continue;
+        }
+        const path = field.nestPath ?? key;
+        const currentValue = readPath(current, path);
+        const changed = includeUnchanged ? currentValue !== undefined : !areFieldValuesEqual(readPath(snapshot, path), currentValue, field.type);
+        if (changed) {
+            context.ignoredProperties.push(key);
+        }
+    }
+}
+
 function buildPatch(config: QueryConfig<unknown>, snapshot: Record<string, unknown> | undefined, current: Record<string, unknown>, includeUnchanged: boolean): EntityDiff {
     const context: DiffContext = { config, relationships: config.relationships ?? {}, ignoredProperties: [] };
     const patch: Record<string, unknown> = diffScalars(context, snapshot, current, includeUnchanged);
 
     for (const [name, relationship] of Object.entries(context.relationships)) {
-        const nested = relationship.kind === 'owned'
+        if (relationship.kind === 'reference') {
+            reportReferenceChanges(context, relationship, snapshot, current, includeUnchanged);
+            continue;
+        }
+        const nested = relationship.kind === 'subrecord'
             ? diffOwned(context, name, relationship, snapshot, current, includeUnchanged)
             : diffCollection(context, name, relationship, snapshot, current, includeUnchanged);
         if (nested !== undefined) {

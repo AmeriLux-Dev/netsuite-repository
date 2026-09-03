@@ -84,7 +84,7 @@ export const vendorBillConfig = defineQueryConfig<VendorBill>({
         },
     },
     relationships: {
-        billingAddress: { kind: 'owned', recordAccessId: 'billingaddress' },
+        billingAddress: { kind: 'subrecord', recordAccessId: 'billingaddress' },
     },
 });
 
@@ -105,7 +105,7 @@ export const salesOrderConfig = defineQueryConfig<SalesOrder>({
             updateMapping: { kind: 'sublist', sublistId: 'item', fieldId: 'quantity', matchBy: 'item' } },
     },
     relationships: {
-        lines: { kind: 'collection', recordAccessId: 'item', matchField: 'itemId' },
+        lines: { kind: 'sublist', recordAccessId: 'item', matchField: 'itemId' },
     },
 });
 

@@ -1,9 +1,9 @@
-import { Column, Entity, Key, Transform } from '@amerilux/netsuite-repository';
+import { RecordType, Transform } from '@amerilux/netsuite-repository';
 
 const hiddenTransform = (value: unknown) => value;
 
-@Entity({ recordType: 'customer', table: 'customer' })
+@RecordType('customer')
 export class HiddenFunction {
-    @Key() id!: number;
-    @Column('name') @Transform(hiddenTransform) name!: string;
+    id!: number;
+    @Transform(hiddenTransform) name!: string;
 }

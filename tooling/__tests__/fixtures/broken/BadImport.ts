@@ -1,8 +1,8 @@
-import { Entity, Key } from '@amerilux/netsuite-repository';
+import { RecordType } from '@amerilux/netsuite-repository';
 import * as fs from 'fs';
 
-@Entity({ recordType: 'customer', table: 'customer' })
+@RecordType('customer')
 export class BadImport {
-    @Key() id!: number;
+    id!: number;
     static readonly marker = typeof fs;
 }

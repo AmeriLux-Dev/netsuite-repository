@@ -7,7 +7,7 @@ import type {
     DeleteResult,
     EntityRelationship,
     LineUpdate,
-    OwnedSubrecordRelationship,
+    SubrecordRelationship,
     QueryConfig,
     QueryField,
     RecordFieldValue,
@@ -104,7 +104,7 @@ export class OwnedSubrecordUpdater<TResult, TUpdate extends Record<string, unkno
     constructor(
         private readonly parent: RecordUpdater<TResult, TUpdate>,
         private readonly relationshipName: string,
-        private readonly relationship: OwnedSubrecordRelationship,
+        private readonly relationship: SubrecordRelationship,
     ) {}
 
     set(fieldKey: string, value: RecordFieldValue): this {
@@ -337,7 +337,7 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
         return this;
     }
 
-    setOwnedField(relationshipName: string, relationship: OwnedSubrecordRelationship, fieldKey: string, value: unknown): this {
+    setOwnedField(relationshipName: string, relationship: SubrecordRelationship, fieldKey: string, value: unknown): this {
         const configFieldKey = this.resolveRelationshipFieldKey(relationshipName, relationship, fieldKey);
         const field = this.resolveWritableField(configFieldKey);
         const update = this.toPendingUpdate(configFieldKey, field, value);
@@ -348,7 +348,7 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
         return this;
     }
 
-    setOwnedMany(relationshipName: string, relationship: OwnedSubrecordRelationship, updates: Record<string, unknown>): this {
+    setOwnedMany(relationshipName: string, relationship: SubrecordRelationship, updates: Record<string, unknown>): this {
         for (const [fieldKey, value] of Object.entries(this.flattenRelationshipUpdates(updates))) {
             if (value !== undefined) {
                 this.setOwnedField(relationshipName, relationship, fieldKey, value);
@@ -789,16 +789,20 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
     }
 
     private patchRelationship(relationshipName: string, relationship: EntityRelationship, value: unknown): void {
-        if (relationship.kind === 'owned') {
+        if (relationship.kind === 'subrecord') {
             if (!isPlainObject(value)) {
-                throw new Error(`Owned relationship '${relationshipName}' expects an object patch.`);
+                throw new Error(`Subrecord '${relationshipName}' expects an object patch.`);
             }
             this.setOwnedMany(relationshipName, relationship, value);
             return;
         }
 
+        if (relationship.kind === 'reference') {
+            throw new Error(`Reference '${relationshipName}' is read-only; set its select field instead.`);
+        }
+
         if (!isPlainObject(value)) {
-            throw new Error(`Collection relationship '${relationshipName}' expects a collection patch object.`);
+            throw new Error(`Sublist '${relationshipName}' expects a sublist patch object.`);
         }
         this.patchCollection(relationshipName, relationship, value as CollectionPatch);
     }
@@ -844,9 +848,9 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
         return relationship;
     }
 
-    private getOwnedRelationship(name: string): OwnedSubrecordRelationship {
+    private getOwnedRelationship(name: string): SubrecordRelationship {
         const relationship = this.getRelationship(name);
-        if (relationship.kind !== 'owned') {
+        if (relationship.kind !== 'subrecord') {
             throw new Error(`Relationship '${name}' is not an owned subrecord relationship.`);
         }
         return relationship;
@@ -854,7 +858,7 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
 
     private getCollectionRelationship(name: string): SublistRelationship {
         const relationship = this.getRelationship(name);
-        if (relationship.kind !== 'collection') {
+        if (relationship.kind !== 'sublist') {
             throw new Error(`Relationship '${name}' is not a collection relationship.`);
         }
         return relationship;
@@ -872,7 +876,7 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
         }
 
         for (const [configFieldKey, field] of Object.entries(this.config.fields)) {
-            if (field.recordAccessId === relationship.recordAccessId && (field.nestPath === `${relationshipName}.${fieldKey}` || field.nestPath?.endsWith(`.${fieldKey}`))) {
+            if ('recordAccessId' in relationship && field.recordAccessId === relationship.recordAccessId && (field.nestPath === `${relationshipName}.${fieldKey}` || field.nestPath?.endsWith(`.${fieldKey}`))) {
                 return configFieldKey;
             }
         }
@@ -880,7 +884,7 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
         throw new Error(`Field '${fieldKey}' is not mapped on relationship '${relationshipName}' for '${this.config.recordType}'.`);
     }
 
-    private registerSubrecordReload(subrecordId: string, relationship: OwnedSubrecordRelationship, field: QueryField): void {
+    private registerSubrecordReload(subrecordId: string, relationship: SubrecordRelationship, field: QueryField): void {
         const listFieldToClear = relationship.reload?.listFieldToClear ?? field.subrecordListFieldToClear;
         if ((relationship.reload || field.subrecordNeedsReload) && listFieldToClear && !this.subrecordReloads.has(subrecordId)) {
             this.subrecordReloads.set(subrecordId, {

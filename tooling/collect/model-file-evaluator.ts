@@ -1,8 +1,9 @@
 import * as nodePath from 'path';
 import * as vm from 'vm';
 import * as ts from 'typescript';
-import type { EntityModelMetadata } from '../../src/model';
+import type { ClassOverrides } from '../../src/model';
 import type { FileSystemAdapter } from '../file-system';
+import { toPosixPath } from '../file-system';
 
 export interface ModelFileDiagnostic {
     filePath: string;
@@ -10,13 +11,15 @@ export interface ModelFileDiagnostic {
     exportName?: string;
 }
 
-export interface CollectedModel {
+/** An exported class from a model file together with the overrides its decorators registered. */
+export interface CollectedClass {
+    /** Posix path, matching the type checker's source file names. */
     filePath: string;
     exportName: string;
-    /** Class name for decorated classes; export name without a trailing `Model`/`Definition` for fluent definitions. */
-    modelName: string;
-    source: 'class' | 'definition';
-    metadata: EntityModelMetadata;
+    className: string;
+    constructor: Function;
+    /** Overrides merged along the prototype chain, base first. */
+    overrides: ClassOverrides;
 }
 
 /** Where an exported function lives, so transforms can be emitted as imports by name. */
@@ -27,9 +30,7 @@ export interface FunctionReference {
 
 /** The subset of the runtime the evaluator relies on. Passed in so the sandbox shares the caller's module instance. */
 export interface RuntimeModelApi {
-    isRootEntityClass(value: unknown): boolean;
-    isEntityModelDefinition(value: unknown): value is { buildMetadata(): EntityModelMetadata };
-    resolveDecoratedEntityMetadata(entityClass: Function): EntityModelMetadata;
+    getClassOverrides(modelClass: Function): ClassOverrides;
 }
 
 export interface EvaluateModelFilesOptions {
@@ -43,9 +44,9 @@ export interface EvaluateModelFilesOptions {
 }
 
 export interface EvaluateModelFilesResult {
-    models: CollectedModel[];
+    classes: CollectedClass[];
     diagnostics: ModelFileDiagnostic[];
-    /** Every function exported by any evaluated module (model files and their relative imports). */
+    /** Every non-class function exported by any evaluated module (model files and their relative imports). */
     functionReferences: Map<Function, FunctionReference>;
 }
 
@@ -59,9 +60,8 @@ const transpileOptions: ts.CompilerOptions = {
 
 class ModelImportError extends Error {}
 
-function stripDefinitionSuffix(exportName: string): string {
-    const stripped = exportName.replace(/(Model|Definition)$/, '');
-    return stripped === '' ? exportName : stripped;
+function isClassConstructor(value: unknown): value is Function {
+    return typeof value === 'function' && /^class[\s{]/.test(Function.prototype.toString.call(value));
 }
 
 function resolveRelativeModelFile(fileSystem: FileSystemAdapter, importingFile: string, specifier: string): string | undefined {
@@ -71,14 +71,14 @@ function resolveRelativeModelFile(fileSystem: FileSystemAdapter, importingFile: 
 }
 
 /**
- * Transpiles and runs model files in a sandbox whose `require` only knows the library and relative model files.
- * Decorated classes and fluent definitions register themselves through the shared runtime instance.
+ * Transpiles and runs model files in a sandbox whose `require` only knows the library and relative model files,
+ * then collects every exported class with the overrides its decorators registered through the shared runtime instance.
  */
 export function evaluateModelFiles(options: EvaluateModelFilesOptions): EvaluateModelFilesResult {
     const { fileSystem, libraryModule, runtimeModule, runtimeApi } = options;
     const moduleCache = new Map<string, { exports: Record<string, unknown> }>();
     const diagnostics: ModelFileDiagnostic[] = [];
-    const models: CollectedModel[] = [];
+    const classes: CollectedClass[] = [];
 
     const loadModelModule = (filePath: string): Record<string, unknown> => {
         const cached = moduleCache.get(filePath);
@@ -110,6 +110,7 @@ export function evaluateModelFiles(options: EvaluateModelFilesOptions): Evaluate
         return moduleRecord.exports;
     };
 
+    const seenClasses = new Set<Function>();
     for (const filePath of options.filePaths) {
         let exports: Record<string, unknown>;
         try {
@@ -120,13 +121,12 @@ export function evaluateModelFiles(options: EvaluateModelFilesOptions): Evaluate
         }
 
         for (const [exportName, value] of Object.entries(exports)) {
+            if (!isClassConstructor(value) || seenClasses.has(value)) {
+                continue;
+            }
+            seenClasses.add(value);
             try {
-                if (runtimeApi.isRootEntityClass(value)) {
-                    const entityClass = value as Function;
-                    models.push({ filePath, exportName, modelName: entityClass.name, source: 'class', metadata: runtimeApi.resolveDecoratedEntityMetadata(entityClass) });
-                } else if (runtimeApi.isEntityModelDefinition(value)) {
-                    models.push({ filePath, exportName, modelName: stripDefinitionSuffix(exportName), source: 'definition', metadata: value.buildMetadata() });
-                }
+                classes.push({ filePath: toPosixPath(filePath), exportName, className: value.name, constructor: value, overrides: runtimeApi.getClassOverrides(value) });
             } catch (error) {
                 diagnostics.push({ filePath, exportName, message: error instanceof Error ? error.message : String(error) });
             }
@@ -136,11 +136,11 @@ export function evaluateModelFiles(options: EvaluateModelFilesOptions): Evaluate
     const functionReferences = new Map<Function, FunctionReference>();
     for (const [modulePath, moduleRecord] of moduleCache) {
         for (const [exportName, value] of Object.entries(moduleRecord.exports)) {
-            if (typeof value === 'function' && !runtimeApi.isRootEntityClass(value) && !functionReferences.has(value)) {
+            if (typeof value === 'function' && !isClassConstructor(value) && !functionReferences.has(value)) {
                 functionReferences.set(value, { exportName, filePath: modulePath });
             }
         }
     }
 
-    return { models, diagnostics, functionReferences };
+    return { classes, diagnostics, functionReferences };
 }

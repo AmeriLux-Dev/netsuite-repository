@@ -1,146 +1,103 @@
-import type {
-    CompositeModelMapping,
-    FieldSourceMapping,
-    FieldType,
-    FieldUpdateMapping,
-    JoinOn,
-    JoinType,
-    QueryField,
-    QueryParamValue,
-    RecordUpdaterOptions,
-    RelationshipFieldMap,
-    RestRecordMetadata,
-    TableRef,
-} from '../types';
+import type { Discriminator, FieldType, JoinType, QueryField, RecordUpdaterOptions, RestRecordMetadata } from '../types';
 
-/** A join declared on an entity or on a navigation property. */
-export interface JoinMetadata {
-    alias: string;
-    table: string;
-    /** Defaults to 'leftOuter' so optional nested data never filters the root rows. */
-    type?: JoinType;
-    /** Alias the equality keys are read from; defaults to the root table alias. */
-    from?: string;
-    on: JoinOn;
-    params?: QueryParamValue[];
+/** What a decorated class is: a queryable record type, a sublist line, or a subrecord. */
+export type ModelClassKind = 'recordType' | 'sublist' | 'subrecord';
+
+/** A table-per-type table that shares the record's internal id (for example `salesorder` next to `transaction`). */
+export interface TypeTableOptions {
+    /** Column on both sides of the join; defaults to 'id'. */
+    key?: string;
 }
 
-/** Everything an authoring surface can say about one scalar property. */
-export interface PropertyMetadata {
+/** Column and field id pair identifying a sublist line: the SuiteQL column read and the sublist field matched on write. */
+export interface LineKey {
+    column: string;
+    field: string;
+}
+
+/** Everything the decorators can say about one property. Every member is an override; the build step fills the rest by convention. */
+export interface PropertyOverrides {
     name: string;
-    /** SuiteQL column; defaults to the lowercased property name. */
+    /** NetSuite record field id; also the SuiteQL column unless `column` is set. */
+    fieldId?: string;
+    /** SuiteQL column when it differs from the field id (transaction `status` reads `status` but writes `orderstatus`). */
     column?: string;
-    /** Table alias the column is read from; defaults to the owning scope (root table or navigation join). */
-    tableAlias?: string;
-    /** SQL result alias; defaults to the flattened field key. */
-    alias?: string;
-    /** Defaults to 'string', or 'integer' for the key property. */
+    /** Type table the column is read from instead of the record's base table. */
+    table?: string;
     type?: FieldType;
-    /** NetSuite record field id. Never inferred: absent means the property is read-only. */
-    recordFieldId?: string;
-    /** Explicit opt-in to write through the record field whose id equals the query column. */
-    recordFieldFollowsColumn?: boolean;
+    /** Read the display text of a select field (BUILTIN.DF). */
+    text?: boolean;
+    coerce?: boolean;
     readOnly?: boolean;
     setFirst?: boolean;
-    useText?: boolean;
     selectByDefault?: boolean;
-    coerce?: boolean;
     transform?: QueryField['transform'];
-    updateMapping?: FieldUpdateMapping;
-    source?: FieldSourceMapping;
-    meta?: unknown;
-}
-
-export type NavigationKind = 'owned' | 'collection' | 'related';
-
-/** An owned subrecord, a sublist collection, or a read-only related lookup. */
-export interface NavigationMetadata {
-    name: string;
-    kind: NavigationKind;
-    /** Owned only: NetSuite subrecord field id (never inferred). */
+    /** Reference: property holding the internal id of the referenced record. */
+    selectFieldProperty?: string;
+    /** Reference: property on the referenced class to join on when it is not its internal id (EF principal key). */
+    targetKeyProperty?: string;
+    /** Reference, subrecord, or sublist: forces the join type. */
+    joinType?: JoinType;
+    /** Subrecord: field id when it is not the lowercased property name. */
     subrecordFieldId?: string;
-    /** Owned only: list field cleared before the subrecord can be edited (for example 'shipaddresslist'). */
-    clearListFieldId?: string;
-    /** Collection only: NetSuite sublist id (never inferred). */
-    sublistId?: string;
-    /** Collection only: nested property used to match existing lines. */
-    matchByProperty?: string;
-    /** Collection only: nested property holding the NetSuite line index. */
-    lineNumberProperty?: string;
-    /** Join that makes the nested columns queryable. */
-    join?: JoinMetadata;
-    /** Alternative to a join: the nested columns live on an existing alias (for example billing fields on the transaction row). */
-    sourceAlias?: string;
-    properties: Map<string, PropertyMetadata>;
-    /** Extra relationship field mappings merged under the inferred ones. */
-    additionalRelationshipFields?: RelationshipFieldMap;
+    /** Subrecord: queryable table and its key column when the conventions do not know them. */
+    subrecordTable?: string;
+    subrecordKey?: string;
+    /** Subrecord: list field cleared before the subrecord can be edited. */
+    clearListField?: string;
 }
 
-export interface EntityModelMetadata {
-    /** Display name used in diagnostics: the class name or the record type. */
-    name?: string;
-    /** Explicit entity set name (for example 'salesOrders'); the build step derives one when absent. */
-    setName?: string;
+/** Everything the decorators can say about one class, merged along the prototype chain by getClassOverrides(). */
+export interface ClassOverrides {
+    kind?: ModelClassKind;
     recordType?: string;
-    table?: TableRef;
-    keyProperty?: string;
-    properties: Map<string, PropertyMetadata>;
-    ignoredProperties: Set<string>;
-    joins: JoinMetadata[];
-    navigations: Map<string, NavigationMetadata>;
-    updaterOptions?: RecordUpdaterOptions;
+    /** Base SuiteQL table; defaults from the conventions for the record type. */
+    table?: string;
+    setName?: string;
     coerce?: boolean;
+    discriminator?: Discriminator;
+    /** Type tables fields may read from with @Field({ table }). */
+    typeTables?: Record<string, TypeTableOptions>;
+    sublistId?: string;
+    sublistTable?: string;
+    /** Extra predicate on the sublist join; `{alias}` stands for the line table alias. */
+    sublistWhere?: string;
+    /** Column on the line table holding the parent's internal id. */
+    parentColumn?: string;
+    lineKey?: LineKey;
+    subrecordTable?: string;
+    subrecordKey?: string;
+    keyProperty?: string;
+    updaterOptions?: RecordUpdaterOptions;
     restRecordMetadata?: RestRecordMetadata;
-    composite?: CompositeModelMapping;
-    postProcess?: (result: unknown) => unknown;
+    properties: Map<string, PropertyOverrides>;
+    notMapped: Set<string>;
 }
 
-export function createEntityModelMetadata(name?: string): EntityModelMetadata {
-    return {
-        name,
-        properties: new Map(),
-        ignoredProperties: new Set(),
-        joins: [],
-        navigations: new Map(),
-    };
+export function createClassOverrides(): ClassOverrides {
+    return { properties: new Map(), notMapped: new Set() };
 }
 
-export function getOrCreatePropertyMetadata(properties: Map<string, PropertyMetadata>, name: string): PropertyMetadata {
-    let property = properties.get(name);
+export function getOrCreatePropertyOverrides(overrides: ClassOverrides, name: string): PropertyOverrides {
+    let property = overrides.properties.get(name);
     if (!property) {
         property = { name };
-        properties.set(name, property);
+        overrides.properties.set(name, property);
     }
     return property;
 }
 
-export function getOrCreateNavigationMetadata(metadata: EntityModelMetadata, name: string, kind: NavigationKind): NavigationMetadata {
-    let navigation = metadata.navigations.get(name);
-    if (!navigation) {
-        navigation = { name, kind, properties: new Map() };
-        metadata.navigations.set(name, navigation);
-    } else {
-        navigation.kind = kind;
+/** Layers `source` over `target`: scalar members win when set, property overrides merge per property. */
+export function mergeClassOverrides(target: ClassOverrides, source: ClassOverrides): ClassOverrides {
+    const { properties, notMapped, ...scalars } = source;
+    for (const [key, value] of Object.entries(scalars)) {
+        if (value !== undefined) {
+            (target as unknown as Record<string, unknown>)[key] = value;
+        }
     }
-    return navigation;
-}
-
-function clonePropertyMap(properties: Map<string, PropertyMetadata>): Map<string, PropertyMetadata> {
-    return new Map(Array.from(properties.entries()).map(([name, property]) => [name, { ...property }]));
-}
-
-/** Deep-enough copy so a derived model can be changed without touching its base. */
-export function cloneEntityModelMetadata(metadata: EntityModelMetadata): EntityModelMetadata {
-    return {
-        ...metadata,
-        properties: clonePropertyMap(metadata.properties),
-        ignoredProperties: new Set(metadata.ignoredProperties),
-        joins: metadata.joins.map((join) => ({ ...join })),
-        navigations: new Map(Array.from(metadata.navigations.entries()).map(([name, navigation]) => [name, {
-            ...navigation,
-            join: navigation.join ? { ...navigation.join } : undefined,
-            properties: clonePropertyMap(navigation.properties),
-            additionalRelationshipFields: navigation.additionalRelationshipFields ? { ...navigation.additionalRelationshipFields } : undefined,
-        }])),
-    };
+    for (const [name, property] of properties) {
+        target.properties.set(name, { ...(target.properties.get(name) ?? { name }), ...property });
+    }
+    notMapped.forEach((name) => target.notMapped.add(name));
+    return target;
 }

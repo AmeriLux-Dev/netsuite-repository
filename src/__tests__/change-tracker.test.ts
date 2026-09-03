@@ -1,11 +1,11 @@
-import { configFromEntity } from '../model';
+
 import { ChangeTracker, EntityState } from '../tracking';
 import type { QueryConfig } from '../types';
 import { customerConfig } from './fixtures';
-import { DecoratedSalesOrder } from './model-fixtures';
+import { salesOrderModelConfig } from './model-fixtures';
 
 const configs: Record<string, QueryConfig<unknown>> = {
-    salesOrders: configFromEntity(DecoratedSalesOrder) as QueryConfig<unknown>,
+    salesOrders: salesOrderModelConfig as QueryConfig<unknown>,
     customers: customerConfig as QueryConfig<unknown>,
     noKey: { recordType: 'nokey', query: { from: { name: 'x', alias: 'x' } }, fields: { name: { queryFieldId: 'name', tableAlias: 'x' } } },
 };

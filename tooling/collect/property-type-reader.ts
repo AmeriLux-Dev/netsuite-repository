@@ -2,27 +2,42 @@ import * as ts from 'typescript';
 import type { FieldType } from '../../src/types';
 import { toPosixPath } from '../file-system';
 
-export interface PropertyTypeInfo {
+/** Identifies a class across the type checker and the evaluator: posix file path plus class name. */
+export interface ClassIdentity {
+    className: string;
+    filePath: string;
+}
+
+export function classKeyOf(identity: ClassIdentity): string {
+    return `${identity.filePath}#${identity.className}`;
+}
+
+/** A property typed as another model class, with the members its declared type keeps. */
+export interface DeclaredRelationTarget extends ClassIdentity {
+    /** 'all' for the bare class; otherwise the property names of the declared type (Pick, Omit, or an alias of them). */
+    projection: string[] | 'all';
+}
+
+export interface DeclaredProperty {
     name: string;
-    /** Type text as written for the generated interface. */
-    typeText: string;
+    /** Declared with `?`. */
     optional: boolean;
-    /** NetSuite field type inferred from the TypeScript type, when one applies. */
-    fieldType?: FieldType;
-    /** Name of a nested shape when the property holds an object or an array of objects. */
-    nestedShapeName?: string;
+    /** Declared type admits null or undefined; with `optional`, decides whether a relation joins left outer. */
+    nullable: boolean;
     isArray: boolean;
+    /** Type text as written, used for scalar members of the generated interface. */
+    typeText: string;
+    /** NetSuite field type inferred from the TypeScript type, when the property is a scalar. */
+    scalarType?: FieldType;
+    /** Declared on a base class rather than on the class being read. */
+    inherited: boolean;
+    /** Set when the (element) type resolves to a class; the build step decides whether it is a reference, subrecord, or sublist. */
+    target?: DeclaredRelationTarget;
 }
 
-export interface ModelTypeShape {
-    name: string;
-    properties: PropertyTypeInfo[];
-}
-
-export interface ModelTypeInfo {
-    root: ModelTypeShape;
-    /** Named object shapes referenced by the root, emitted as their own interfaces. */
-    nested: ModelTypeShape[];
+export interface DeclaredClass extends ClassIdentity {
+    base?: ClassIdentity;
+    properties: DeclaredProperty[];
 }
 
 export const defaultModelCompilerOptions: ts.CompilerOptions = {
@@ -50,27 +65,13 @@ export function readCompilerOptionsFromTsconfig(tsconfigPath: string): ts.Compil
     return parsed.options;
 }
 
-function findExportedDeclaration(sourceFile: ts.SourceFile, exportName: string): ts.ClassDeclaration | ts.VariableDeclaration | undefined {
+function findExportedClass(sourceFile: ts.SourceFile, exportName: string): ts.ClassDeclaration | undefined {
     for (const statement of sourceFile.statements) {
         if (ts.isClassDeclaration(statement) && statement.name?.text === exportName) {
             return statement;
         }
-        if (ts.isVariableStatement(statement)) {
-            const declaration = statement.declarationList.declarations.find((candidate) => ts.isIdentifier(candidate.name) && candidate.name.text === exportName);
-            if (declaration) {
-                return declaration;
-            }
-        }
     }
     return undefined;
-}
-
-function isUserDeclaredNamedType(type: ts.Type, program: ts.Program): boolean {
-    const symbol = type.getSymbol();
-    if (!symbol || symbol.name.startsWith('__')) {
-        return false;
-    }
-    return (symbol.declarations ?? []).some((declaration) => !program.isSourceFileDefaultLibrary(declaration.getSourceFile()));
 }
 
 function classifyScalarFieldType(type: ts.Type): FieldType | undefined {
@@ -86,25 +87,123 @@ function classifyScalarFieldType(type: ts.Type): FieldType | undefined {
     return undefined;
 }
 
-function toPascalCase(value: string): string {
-    return value.charAt(0).toUpperCase() + value.slice(1);
+function identityOf(declaration: ts.ClassDeclaration): ClassIdentity | undefined {
+    return declaration.name ? { className: declaration.name.text, filePath: toPosixPath(declaration.getSourceFile().fileName) } : undefined;
 }
 
-interface TypeReaderContext {
-    program: ts.Program;
+function classDeclarationOfType(type: ts.Type): ts.ClassDeclaration | undefined {
+    const declaration = type.getSymbol()?.valueDeclaration;
+    return declaration && ts.isClassDeclaration(declaration) ? declaration : undefined;
+}
+
+interface ReaderContext {
     checker: ts.TypeChecker;
-    nested: Map<string, ModelTypeShape>;
 }
 
-function readShapeProperties(context: TypeReaderContext, type: ts.Type, location: ts.Node, shapeName: string, allowNested: boolean): PropertyTypeInfo[] {
-    const { checker, program } = context;
-    const properties: PropertyTypeInfo[] = [];
+/** Follows `Pick<Customer, ...>`, `Omit<...>`, and aliases of them down to the class they project. */
+function classDeclarationOfTypeNode(context: ReaderContext, node: ts.TypeNode | undefined, depth = 0): ts.ClassDeclaration | undefined {
+    if (!node || depth > 8) {
+        return undefined;
+    }
+    const direct = classDeclarationOfType(context.checker.getTypeFromTypeNode(node));
+    if (direct) {
+        return direct;
+    }
+    if (ts.isTypeReferenceNode(node)) {
+        for (const argument of node.typeArguments ?? []) {
+            const found = classDeclarationOfTypeNode(context, argument, depth + 1);
+            if (found) {
+                return found;
+            }
+        }
+        const symbol = context.checker.getSymbolAtLocation(node.typeName);
+        const aliasDeclaration = symbol?.declarations?.find(ts.isTypeAliasDeclaration);
+        if (aliasDeclaration) {
+            return classDeclarationOfTypeNode(context, aliasDeclaration.type, depth + 1);
+        }
+    }
+    return undefined;
+}
 
-    for (const symbol of checker.getPropertiesOfType(type)) {
+/** Last resort for projected types: the class that declares the projected members. */
+function classDeclarationOfMembers(context: ReaderContext, type: ts.Type): ts.ClassDeclaration | undefined {
+    for (const property of context.checker.getPropertiesOfType(type)) {
+        const declaration = property.declarations?.[0];
+        if (declaration && ts.isPropertyDeclaration(declaration) && ts.isClassDeclaration(declaration.parent)) {
+            return declaration.parent;
+        }
+    }
+    return undefined;
+}
+
+function resolveRelationTarget(context: ReaderContext, type: ts.Type, typeNode: ts.TypeNode | undefined): DeclaredRelationTarget | undefined {
+    const direct = classDeclarationOfType(type);
+    if (direct) {
+        const identity = identityOf(direct);
+        return identity ? { ...identity, projection: 'all' } : undefined;
+    }
+    const aliasArguments = type.aliasTypeArguments ?? [];
+    const fromAlias = aliasArguments.map(classDeclarationOfType).find((declaration): declaration is ts.ClassDeclaration => Boolean(declaration));
+    const declaration = fromAlias ?? classDeclarationOfTypeNode(context, typeNode) ?? classDeclarationOfMembers(context, type);
+    const identity = declaration ? identityOf(declaration) : undefined;
+    if (!identity) {
+        return undefined;
+    }
+    return { ...identity, projection: context.checker.getPropertiesOfType(type).map((property) => property.name) };
+}
+
+function elementTypeNodeOf(node: ts.TypeNode | undefined): ts.TypeNode | undefined {
+    if (!node) return undefined;
+    if (ts.isArrayTypeNode(node)) return node.elementType;
+    if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) && node.typeName.text === 'Array') return node.typeArguments?.[0];
+    if (ts.isUnionTypeNode(node)) {
+        const member = node.types.find((candidate) => !(ts.isLiteralTypeNode(candidate) && candidate.literal.kind === ts.SyntaxKind.NullKeyword) && candidate.kind !== ts.SyntaxKind.UndefinedKeyword);
+        return elementTypeNodeOf(member);
+    }
+    return undefined;
+}
+
+function nonNullTypeNodeOf(node: ts.TypeNode | undefined): ts.TypeNode | undefined {
+    if (node && ts.isUnionTypeNode(node)) {
+        return node.types.find((candidate) => !(ts.isLiteralTypeNode(candidate) && candidate.literal.kind === ts.SyntaxKind.NullKeyword) && candidate.kind !== ts.SyntaxKind.UndefinedKeyword);
+    }
+    return node;
+}
+
+function includesNullOrUndefined(type: ts.Type): boolean {
+    return type.isUnion() && type.types.some((member) => (member.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)) !== 0);
+}
+
+/** Reads the declared instance properties of an exported class, including inherited ones. Undefined when the class is not found. */
+export function readDeclaredClass(program: ts.Program, filePath: string, className: string): DeclaredClass | undefined {
+    const sourceFile = program.getSourceFile(toPosixPath(filePath));
+    const declaration = sourceFile ? findExportedClass(sourceFile, className) : undefined;
+    if (!sourceFile || !declaration?.name) {
+        return undefined;
+    }
+
+    const checker = program.getTypeChecker();
+    const context: ReaderContext = { checker };
+    const classSymbol = checker.getSymbolAtLocation(declaration.name);
+    const classType = classSymbol ? checker.getDeclaredTypeOfSymbol(classSymbol) : undefined;
+    if (!classType) {
+        return undefined;
+    }
+
+    const extendsExpression = declaration.heritageClauses?.find((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword)?.types[0];
+    const baseDeclaration = extendsExpression ? classDeclarationOfType(checker.getTypeAtLocation(extendsExpression.expression)) : undefined;
+    const base = baseDeclaration ? identityOf(baseDeclaration) : undefined;
+
+    const properties: DeclaredProperty[] = [];
+    for (const symbol of checker.getPropertiesOfType(classType)) {
         if (symbol.flags & ts.SymbolFlags.Method) {
             continue;
         }
-        const declaredType = checker.getTypeOfSymbolAtLocation(symbol, location);
+        const propertyDeclaration = symbol.declarations?.find(ts.isPropertyDeclaration);
+        if (!propertyDeclaration || propertyDeclaration.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword)) {
+            continue;
+        }
+        const declaredType = checker.getTypeOfSymbolAtLocation(symbol, declaration);
         const nonNullableType = checker.getNonNullableType(declaredType);
         if (nonNullableType.getCallSignatures().length > 0) {
             continue;
@@ -112,91 +211,29 @@ function readShapeProperties(context: TypeReaderContext, type: ts.Type, location
 
         const optional = (symbol.flags & ts.SymbolFlags.Optional) !== 0;
         const printedType = checker.typeToString(declaredType, undefined, ts.TypeFormatFlags.NoTruncation);
-        const info: PropertyTypeInfo = {
+        const isArray = checker.isArrayType(nonNullableType);
+        const elementType = isArray ? checker.getTypeArguments(nonNullableType as ts.TypeReference)[0] : nonNullableType;
+        const scalarFieldType = elementType ? classifyScalarFieldType(elementType) : undefined;
+        const property: DeclaredProperty = {
             name: symbol.name,
-            // Optional members already imply undefined; drop the union member the checker adds for them.
-            typeText: optional ? printedType.replace(/ \| undefined$/, '') : printedType,
             optional,
-            isArray: checker.isArrayType(nonNullableType),
+            nullable: includesNullOrUndefined(declaredType),
+            isArray,
+            typeText: optional ? printedType.replace(/ \| undefined$/, '') : printedType,
+            inherited: propertyDeclaration.parent !== declaration,
         };
 
-        const elementType = info.isArray ? checker.getTypeArguments(nonNullableType as ts.TypeReference)[0] : nonNullableType;
-        const scalarFieldType = elementType ? classifyScalarFieldType(elementType) : undefined;
-
-        if (info.isArray) {
-            if (scalarFieldType !== undefined && scalarFieldType !== 'date') {
-                info.fieldType = 'multiselect';
-            } else if (elementType && allowNested && (elementType.flags & ts.TypeFlags.Object)) {
-                info.nestedShapeName = registerNestedShape(context, elementType, location, shapeName, symbol.name);
-            }
-        } else if (scalarFieldType !== undefined) {
-            info.fieldType = scalarFieldType;
-        } else if (allowNested && (nonNullableType.flags & ts.TypeFlags.Object) && isUserDeclaredNamedType(nonNullableType, program)) {
-            info.nestedShapeName = registerNestedShape(context, nonNullableType, location, shapeName, symbol.name);
-        } else if (allowNested && (nonNullableType.flags & ts.TypeFlags.Object)) {
-            // Anonymous inline object: its members are read for field types but the text is emitted verbatim.
-            info.nestedShapeName = registerNestedShape(context, nonNullableType, location, shapeName, symbol.name, `${shapeName}${toPascalCase(symbol.name)}`);
+        if (scalarFieldType !== undefined) {
+            property.scalarType = isArray ? (scalarFieldType === 'date' ? undefined : 'multiselect') : scalarFieldType;
+        } else if (elementType && elementType.flags & ts.TypeFlags.Object) {
+            const typeNode = isArray ? elementTypeNodeOf(propertyDeclaration.type) : nonNullTypeNodeOf(propertyDeclaration.type);
+            property.target = resolveRelationTarget(context, elementType, typeNode);
         }
 
-        properties.push(info);
+        properties.push(property);
     }
 
-    return properties;
-}
-
-function registerNestedShape(context: TypeReaderContext, type: ts.Type, location: ts.Node, ownerShapeName: string, propertyName: string, anonymousName?: string): string {
-    const symbolName = type.getSymbol()?.name;
-    const isNamed = symbolName !== undefined && !symbolName.startsWith('__') && isUserDeclaredNamedType(type, context.program);
-    const shapeName = isNamed ? symbolName : anonymousName ?? `${ownerShapeName}${toPascalCase(propertyName)}`;
-
-    if (!context.nested.has(shapeName)) {
-        const shape: ModelTypeShape = { name: shapeName, properties: [] };
-        context.nested.set(shapeName, shape);
-        shape.properties = readShapeProperties(context, type, location, shapeName, false);
-        if (!isNamed) {
-            (shape as ModelTypeShape & { anonymous?: boolean }).anonymous = true;
-        }
-    }
-    return shapeName;
-}
-
-/**
- * Reads the declared TypeScript types of a model export: instance properties of a decorated class,
- * or the interface behind a fluent definition. Returns undefined when the export cannot be found.
- */
-export function readModelTypes(program: ts.Program, filePath: string, exportName: string, modelName: string): ModelTypeInfo | undefined {
-    const sourceFile = program.getSourceFile(toPosixPath(filePath));
-    if (!sourceFile) {
-        return undefined;
-    }
-
-    const declaration = findExportedDeclaration(sourceFile, exportName);
-    if (!declaration) {
-        return undefined;
-    }
-
-    const checker = program.getTypeChecker();
-    const context: TypeReaderContext = { program, checker, nested: new Map() };
-    let rootType: ts.Type | undefined;
-
-    if (ts.isClassDeclaration(declaration)) {
-        const symbol = declaration.name ? checker.getSymbolAtLocation(declaration.name) : undefined;
-        rootType = symbol ? checker.getDeclaredTypeOfSymbol(symbol) : undefined;
-    } else {
-        const definitionType = checker.getTypeAtLocation(declaration.name);
-        const resultSymbol = definitionType.getProperty('__result');
-        rootType = resultSymbol ? checker.getNonNullableType(checker.getTypeOfSymbolAtLocation(resultSymbol, declaration)) : undefined;
-    }
-
-    if (!rootType) {
-        return undefined;
-    }
-
-    const root: ModelTypeShape = { name: modelName, properties: readShapeProperties(context, rootType, declaration, modelName, true) };
-    return { root, nested: Array.from(context.nested.values()) };
-}
-
-/** Whether a nested shape came from an anonymous inline object type (its text is emitted verbatim on the parent). */
-export function isAnonymousShape(shape: ModelTypeShape): boolean {
-    return (shape as ModelTypeShape & { anonymous?: boolean }).anonymous === true;
+    // Base members first, so generated interfaces and configs read top-down like the class hierarchy.
+    properties.sort((left, right) => Number(right.inherited) - Number(left.inherited));
+    return { className, filePath: toPosixPath(filePath), base, properties };
 }

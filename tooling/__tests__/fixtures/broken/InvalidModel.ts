@@ -1,6 +1,6 @@
-import { Column, Entity } from '@amerilux/netsuite-repository';
+import { RecordType } from '@amerilux/netsuite-repository';
 
-@Entity({ recordType: 'customer', table: 'customer' })
+@RecordType('customer')
 export class InvalidModel {
-    @Column('companyname') companyName!: string;
+    companyName!: string;
 }

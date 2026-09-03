@@ -1,6 +1,6 @@
-import { Entity, Key } from '@amerilux/netsuite-repository';
+import { RecordType } from '@amerilux/netsuite-repository';
 
-@Entity({ recordType: 'vendor', table: 'vendor' })
+@RecordType('vendor')
 export class Duplicate {
-    @Key() id!: number;
+    id!: number;
 }

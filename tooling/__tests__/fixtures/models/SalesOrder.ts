@@ -1,50 +1,25 @@
-import { Column, Entity, Join, Key, OwnsMany, OwnsOne, ReadOnly, RecordField, Related, SetFirst, Transform } from '@amerilux/netsuite-repository';
-import { MAIN_LINE_FILTER } from './shared';
+import { ExcludeFromDefaultSelect, Field, NotMapped, ReadOnly, RecordType, Sublist } from '@amerilux/netsuite-repository';
+import type { Customer } from './Customer';
+import type { InventoryItem } from './InventoryItem';
+import { Transaction } from './Transaction';
 
-export class ShippingAddress {
-    @RecordField('addr1') addr1!: string | null;
-    @RecordField('city') city!: string | null;
-}
-
+@Sublist('item')
 export class SalesOrderLine {
-    @Column('linesequencenumber') @ReadOnly() line!: number;
-    @Column('item', { type: 'key' }) @RecordField('item') itemId!: number;
-    @RecordField() quantity!: number;
+    id!: number;
+    @Field('item') itemId!: number;
+    item?: Pick<InventoryItem, 'itemId' | 'displayName'>;
+    quantity!: number;
     @ReadOnly() amount!: number;
+    @ExcludeFromDefaultSelect() @Field('custcol_notes') notes!: string | null;
 }
 
-export class CustomerLookup {
-    @Column('companyname') companyName!: string;
-}
-
-export const uppercaseText = (value: unknown): unknown => (typeof value === 'string' ? value.toUpperCase() : value);
-
-@Entity({ recordType: 'salesorder', table: 'transaction', alias: 'txn' })
-@Join('cust', { table: 'customer', on: { sourceForeignKey: 'entity', targetPrimaryKey: 'id' } })
-export class SalesOrder {
-    @Key() id!: number;
-    @Column('tranid') @Transform(uppercaseText) tranId!: string;
-    @Column('trandate') tranDate!: Date;
-    @RecordField('memo') memo?: string | null;
-    @Column('custbody_approved') @RecordField() approved!: boolean;
-    @RecordField('entity') @SetFirst() customerId!: number;
-    @Column('companyname', { from: 'cust' }) customerName!: string;
-
-    @OwnsOne(() => ShippingAddress, {
-        subrecord: 'shippingaddress',
-        clearListField: 'shipaddresslist',
-        join: { alias: 'shipaddr', table: 'transactionshippingaddress', on: 'shipaddr.nkey = txn.shippingaddress' },
-    })
-    shippingAddress!: ShippingAddress;
-
-    @OwnsMany(() => SalesOrderLine, {
-        sublist: 'item',
-        matchBy: 'itemId',
-        lineNumberProperty: 'line',
-        join: { alias: 'tl', table: 'transactionline', on: MAIN_LINE_FILTER },
-    })
+@RecordType('salesorder')
+export class SalesOrder extends Transaction {
+    @Field('otherrefnum') poNumber!: string | null;
+    @Field('custbody_approved') approved!: boolean;
+    @Field('shipmethod', { table: 'salesorder' }) shipMethodId!: number | null;
+    @Field('foreigntotal') @ReadOnly() total!: number;
+    customer?: Pick<Customer, 'id' | 'companyName'>;
     lines!: SalesOrderLine[];
-
-    @Related(() => CustomerLookup, { from: 'cust' })
-    customer!: CustomerLookup;
+    @NotMapped() cachedLabel?: string;
 }
