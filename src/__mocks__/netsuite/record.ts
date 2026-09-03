@@ -1,5 +1,8 @@
 export const submitFields = jest.fn<number, [any]>();
 export const load = jest.fn<any, [any]>();
+export const create = jest.fn<any, [any]>();
+const deleteRecordMock = jest.fn<number, [any]>();
+export { deleteRecordMock as delete };
 
 export function createMockRecord(overrides: Partial<{
     id: number;

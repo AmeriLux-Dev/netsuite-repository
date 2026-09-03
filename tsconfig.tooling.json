@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "target": "es2020",
+    "lib": ["es2020"],
+    "types": ["node"],
+    "rootDir": ".",
+    "outDir": "dist-tooling"
+  },
+  "include": ["tooling/**/*.ts"],
+  "exclude": ["tooling/__tests__/**"]
+}

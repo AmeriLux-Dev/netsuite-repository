@@ -4,14 +4,22 @@
     "module": "commonjs",
     "declaration": true,
     "outDir": "dist",
-    "rootDir": "src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false,
     "paths": {
-      "N/*": ["./node_modules/@hitc/netsuite-types/N/*"]
+      "N/*": [
+        "./node_modules/@hitc/netsuite-types/N/*"
+      ]
     }
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["src/__tests__/**", "src/__mocks__/**"]
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "src/__tests__/**",
+    "src/__mocks__/**"
+  ]
 }

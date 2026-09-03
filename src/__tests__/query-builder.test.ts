@@ -298,34 +298,34 @@ describe('QueryBuilder.build() – ORDER BY and pagination', () => {
         expect(sql).toContain('cust.companyname ASC');
     });
 
-    it('generates TOP N clause from limit()', () => {
+    it('generates OFFSET/FETCH clause from limit()', () => {
         const { sql } = QueryBuilder.from(customerConfig).limit(10).build();
-        expect(sql).toContain('TOP 10');
+        expect(sql).toContain('OFFSET 0 ROWS FETCH NEXT 10 ROWS ONLY');
     });
 
-    it('uses limit + offset in TOP clause', () => {
+    it('uses limit + offset in OFFSET/FETCH clause', () => {
         const { sql } = QueryBuilder.from(customerConfig).limit(10).offset(20).build();
-        expect(sql).toContain('TOP 30');
+        expect(sql).toContain('OFFSET 20 ROWS FETCH NEXT 10 ROWS ONLY');
     });
 
     it('page() sets limit and offset correctly', () => {
         const { sql } = QueryBuilder.from(customerConfig).page(3, 10).build();
-        expect(sql).toContain('TOP 30');
+        expect(sql).toContain('OFFSET 20 ROWS FETCH NEXT 10 ROWS ONLY');
     });
 
     it('clamps limit to 0 minimum', () => {
         const { sql } = QueryBuilder.from(customerConfig).limit(-5).build();
-        expect(sql).toContain('TOP 0');
+        expect(sql).toContain('FETCH NEXT 0 ROWS ONLY');
     });
 
     it('clamps offset to 0 minimum', () => {
         const { sql } = QueryBuilder.from(customerConfig).limit(5).offset(-99).build();
-        expect(sql).toContain('TOP 5');
+        expect(sql).toContain('OFFSET 0 ROWS FETCH NEXT 5 ROWS ONLY');
     });
 
     it('clamps page to minimum of 1', () => {
         const { sql } = QueryBuilder.from(customerConfig).page(-1, 10).build();
-        expect(sql).toContain('TOP 10');
+        expect(sql).toContain('OFFSET 0 ROWS FETCH NEXT 10 ROWS ONLY');
     });
 });
 

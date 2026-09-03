@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.tooling.json",
+  "compilerOptions": {
+    "types": ["node", "jest"]
+  },
+  "include": ["tooling/**/*.ts"],
+  "exclude": []
+}

@@ -23,9 +23,9 @@ describe('QueryBuilder.execute()', () => {
         );
     });
 
-    it('slices rows by offset when set', () => {
+    it('slices rows by offset in top pagination mode', () => {
         mockRows([{ id: 1 }, { id: 2 }, { id: 3 }]);
-        const result = QueryBuilder.from(customerConfig).limit(2).offset(1).execute();
+        const result = QueryBuilder.from(customerConfig).pagination('top').limit(2).offset(1).execute();
         expect(result.data).toHaveLength(2);
         expect(result.data[0]).toMatchObject({ id: 2 });
     });
@@ -88,7 +88,7 @@ describe('QueryBuilder.first()', () => {
         const builder = QueryBuilder.from(customerConfig).limit(50);
         builder.first();
         const { sql } = builder.build();
-        expect(sql).toContain('TOP 50');
+        expect(sql).toContain('FETCH NEXT 50 ROWS ONLY');
     });
 });
 
@@ -109,7 +109,7 @@ describe('QueryBuilder.firstTyped()', () => {
         const builder = QueryBuilder.from(customerConfig).limit(25);
         builder.firstTyped();
         const { sql } = builder.build();
-        expect(sql).toContain('TOP 25');
+        expect(sql).toContain('FETCH NEXT 25 ROWS ONLY');
     });
 });
 

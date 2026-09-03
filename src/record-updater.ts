@@ -1,13 +1,14 @@
 import type * as NsRecord from 'N/record';
-import { normalizeQueryConfig } from './types';
+import { resolveQueryConfig } from './model/resolve';
+import type { QueryConfigSource } from './model/resolve';
 import type {
     CollectionLinePatch,
     CollectionPatch,
+    DeleteResult,
     EntityRelationship,
     LineUpdate,
     OwnedSubrecordRelationship,
     QueryConfig,
-    QueryConfigInput,
     QueryField,
     RecordFieldValue,
     RecordGraphPatch,
@@ -21,6 +22,7 @@ import type {
     UpdatePerformanceEstimate,
     UpdatePlan,
     UpdatePlanField,
+    UpdatePlanExecutionMode,
     UpdatePlanOperation,
     UpdateResult,
 } from './types';
@@ -162,6 +164,7 @@ export class SublistCollectionUpdater<TResult, TUpdate extends Record<string, un
 export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Partial<TResult> & Record<string, unknown>> {
     private readonly config: QueryConfig<TResult>;
     private recordId: RecordId | null = null;
+    private executionKind: 'update' | 'create' = 'update';
     private options: Required<RecordUpdaterOptions> = {
         isDynamic: false,
         enableSourcing: false,
@@ -182,11 +185,30 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
         this.config = config;
     }
 
-    static for<TResult, TUpdate extends Record<string, unknown> = Partial<TResult> & Record<string, unknown>>(config: QueryConfig<TResult> | QueryConfigInput<TResult>): RecordUpdater<TResult, TUpdate> {
-        return new RecordUpdater<TResult, TUpdate>(normalizeQueryConfig(config));
+    static for<TResult, TUpdate extends Record<string, unknown> = Partial<TResult> & Record<string, unknown>>(config: QueryConfigSource<TResult>): RecordUpdater<TResult, TUpdate> {
+        const normalizedConfig = resolveQueryConfig(config);
+        const updater = new RecordUpdater<TResult, TUpdate>(normalizedConfig);
+        if (normalizedConfig.updaterOptions) {
+            updater.withOptions(normalizedConfig.updaterOptions);
+        }
+        return updater;
+    }
+
+    /** Switches this updater to create mode: submit() calls record.create and record.save instead of updating an existing record. */
+    asCreate(): this {
+        this.executionKind = 'create';
+        this.recordId = null;
+        return this;
+    }
+
+    get mode(): 'update' | 'create' {
+        return this.executionKind;
     }
 
     id(recordId: RecordId): this {
+        if (this.executionKind === 'create') {
+            throw new Error('id() is not applicable when creating a record.');
+        }
         this.recordId = recordId;
         return this;
     }
@@ -361,6 +383,10 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
     }
 
     submit(): UpdateResult {
+        if (this.executionKind === 'create') {
+            return this.submitCreate();
+        }
+
         if (this.recordId === null) {
             return { success: false, error: 'Record ID is not set. Call id() before submit().' };
         }
@@ -377,10 +403,27 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
         }
     }
 
+    /** Deletes the record identified by id(). Never throws. */
+    delete(): DeleteResult {
+        if (this.recordId === null) {
+            return { success: false, error: 'Record ID is not set. Call id() before delete().' };
+        }
+        return deleteRecord(this.config, this.recordId);
+    }
+
+    private submitCreate(): UpdateResult {
+        try {
+            this.assertPerformanceGuardrails(this.plan());
+            return this.createSave();
+        } catch (error) {
+            return { success: false, error: formatError(error) };
+        }
+    }
+
     plan(): UpdatePlan {
         const pendingCount = this.getPendingCount();
-        const executionMode = pendingCount === 0 ? 'none' : this.canUseSubmitFields() ? 'submitFields' : 'loadSave';
-        const operations = executionMode === 'submitFields' ? this.planSubmitFieldsOperations() : executionMode === 'loadSave' ? this.planLoadSaveOperations() : [];
+        const executionMode = this.resolveExecutionMode(pendingCount);
+        const operations = this.planOperations(executionMode);
         const details = this.getPendingDetails();
 
         return {
@@ -412,6 +455,29 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
         return count;
     }
 
+    private resolveExecutionMode(pendingCount: number): UpdatePlanExecutionMode {
+        if (this.executionKind === 'create') {
+            return 'create';
+        }
+        if (pendingCount === 0) {
+            return 'none';
+        }
+        return this.canUseSubmitFields() ? 'submitFields' : 'loadSave';
+    }
+
+    private planOperations(executionMode: UpdatePlanExecutionMode): UpdatePlanOperation[] {
+        switch (executionMode) {
+            case 'submitFields':
+                return this.planSubmitFieldsOperations();
+            case 'loadSave':
+                return this.planLoadSaveOperations();
+            case 'create':
+                return this.planCreateOperations();
+            default:
+                return [];
+        }
+    }
+
     private canUseSubmitFields(): boolean {
         return this.bodyFields.size > 0 && this.subrecordFields.size === 0 && this.lineUpdates.length === 0 && this.lineAdds.length === 0 && this.lineRemoves.length === 0;
     }
@@ -436,12 +502,30 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
     }
 
     private planLoadSaveOperations(): UpdatePlanOperation[] {
-        const operations: UpdatePlanOperation[] = [{
-            kind: 'loadRecord',
-            recordType: this.config.recordType,
-            recordId: this.recordId ?? undefined,
-            isDynamic: this.options.isDynamic,
-        }];
+        return [
+            {
+                kind: 'loadRecord',
+                recordType: this.config.recordType,
+                recordId: this.recordId ?? undefined,
+                isDynamic: this.options.isDynamic,
+            },
+            ...this.planStagedOperations(true),
+        ];
+    }
+
+    private planCreateOperations(): UpdatePlanOperation[] {
+        return [
+            {
+                kind: 'createRecord',
+                recordType: this.config.recordType,
+                isDynamic: this.options.isDynamic,
+            },
+            ...this.planStagedOperations(false),
+        ];
+    }
+
+    private planStagedOperations(includeSubrecordReload: boolean): UpdatePlanOperation[] {
+        const operations: UpdatePlanOperation[] = [];
 
         if (this.bodyFields.size > 0) {
             operations.push({
@@ -473,7 +557,7 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
         }
 
         for (const [subrecordId, updates] of Array.from(this.subrecordFields.entries())) {
-            const reload = this.subrecordReloads.get(subrecordId);
+            const reload = includeSubrecordReload ? this.subrecordReloads.get(subrecordId) : undefined;
             operations.push({
                 kind: 'subrecord',
                 subrecordFieldId: subrecordId,
@@ -492,7 +576,9 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
     }
 
     private estimatePerformance(executionMode: UpdatePlan['executionMode']): UpdatePerformanceEstimate {
-        const conditionalSubrecordReloads = Array.from(this.subrecordFields.keys()).filter((subrecordId) => this.subrecordReloads.has(subrecordId)).length;
+        const conditionalSubrecordReloads = executionMode === 'create'
+            ? 0
+            : Array.from(this.subrecordFields.keys()).filter((subrecordId) => this.subrecordReloads.has(subrecordId)).length;
         const sublistLineScans = this.lineUpdates.filter((lineUpdate) => Boolean(lineUpdate.matchField)).length;
         const notes: string[] = [];
 
@@ -500,6 +586,8 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
             notes.push('Uses record.submitFields; avoids record.load and record.save.');
         } else if (executionMode === 'loadSave') {
             notes.push('Uses record.load and record.save because the update touches subrecords, sublists, or line operations.');
+        } else if (executionMode === 'create') {
+            notes.push('Uses record.create and record.save.');
         }
         if (conditionalSubrecordReloads > 0) {
             notes.push('Subrecord reloads are conditional; each one may add one save and one reload if the linked list field has a value.');
@@ -512,7 +600,8 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
             executionMode,
             netSuiteRecordCalls: executionMode === 'none' ? 0 : executionMode === 'submitFields' ? 1 : 2 + conditionalSubrecordReloads * 2,
             recordLoads: executionMode === 'loadSave' ? 1 + conditionalSubrecordReloads : 0,
-            recordSaves: executionMode === 'loadSave' ? 1 + conditionalSubrecordReloads : 0,
+            recordSaves: executionMode === 'loadSave' ? 1 + conditionalSubrecordReloads : executionMode === 'create' ? 1 : 0,
+            recordCreates: executionMode === 'create' ? 1 : 0,
             submitFieldsCalls: executionMode === 'submitFields' ? 1 : 0,
             sublistLineScans,
             conditionalSubrecordReloads,
@@ -527,7 +616,7 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
     private assertPerformanceGuardrails(plan: UpdatePlan): void {
         const violations: string[] = [];
 
-        if (this.options.requireFastPath && plan.executionMode !== 'submitFields' && plan.executionMode !== 'none') {
+        if (this.executionKind === 'update' && this.options.requireFastPath && plan.executionMode !== 'submitFields' && plan.executionMode !== 'none') {
             violations.push(`requires fast path but planned execution is '${plan.executionMode}'`);
         }
 
@@ -573,39 +662,52 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
     }
 
     private loadSave(): UpdateResult {
-        let loadedRecord = getNsRecord().load({
+        const loadedRecord = getNsRecord().load({
             type: this.config.recordType,
             id: this.recordId as string | number,
             isDynamic: this.options.isDynamic,
         }) as EditableRecord;
+        return this.applyStagedChangesAndSave(loadedRecord, true);
+    }
+
+    private createSave(): UpdateResult {
+        const createdRecord = getNsRecord().create({
+            type: this.config.recordType,
+            isDynamic: this.options.isDynamic,
+        }) as EditableRecord;
+        return this.applyStagedChangesAndSave(createdRecord, false);
+    }
+
+    private applyStagedChangesAndSave(recordInstance: EditableRecord, allowSubrecordReload: boolean): UpdateResult {
+        let currentRecord = recordInstance;
         const details = emptyDetails();
 
         for (const update of this.sortUpdates(Array.from(this.bodyFields.values()))) {
-            loadedRecord.setValue({ fieldId: update.recordFieldId, value: update.value, ignoreFieldChange: true });
+            currentRecord.setValue({ fieldId: update.recordFieldId, value: update.value, ignoreFieldChange: true });
             details.bodyFieldsUpdated++;
         }
 
         for (const remove of [...this.lineRemoves].sort((left, right) => right.line - left.line)) {
-            loadedRecord.removeLine({ sublistId: remove.sublistId, line: remove.line });
+            currentRecord.removeLine({ sublistId: remove.sublistId, line: remove.line });
             details.sublistLinesRemoved++;
         }
 
         for (const lineUpdate of this.lineUpdates) {
-            this.applyLineUpdate(loadedRecord, lineUpdate);
+            this.applyLineUpdate(currentRecord, lineUpdate);
             details.sublistLinesUpdated++;
         }
 
         for (const lineAdd of this.lineAdds) {
-            this.applyLineAdd(loadedRecord, lineAdd);
+            this.applyLineAdd(currentRecord, lineAdd);
             details.sublistLinesAdded++;
         }
 
         for (const [subrecordId, updates] of Array.from(this.subrecordFields.entries())) {
-            loadedRecord = this.applySubrecordUpdate(loadedRecord, subrecordId, Array.from(updates.values()));
+            currentRecord = this.applySubrecordUpdate(currentRecord, subrecordId, Array.from(updates.values()), allowSubrecordReload);
             details.subrecordsUpdated++;
         }
 
-        const savedId = loadedRecord.save({
+        const savedId = currentRecord.save({
             enableSourcing: this.options.enableSourcing,
             ignoreMandatoryFields: this.options.ignoreMandatoryFields,
         });
@@ -635,8 +737,8 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
         }
     }
 
-    private applySubrecordUpdate(recordInstance: EditableRecord, subrecordId: string, updates: PendingFieldUpdate[]): EditableRecord {
-        const reload = this.subrecordReloads.get(subrecordId);
+    private applySubrecordUpdate(recordInstance: EditableRecord, subrecordId: string, updates: PendingFieldUpdate[], allowSubrecordReload: boolean): EditableRecord {
+        const reload = allowSubrecordReload ? this.subrecordReloads.get(subrecordId) : undefined;
         let currentRecord = recordInstance;
 
         if (reload && currentRecord.getValue({ fieldId: reload.listFieldToClear })) {
@@ -1386,6 +1488,22 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
     }
 }
 
-export function updateRecord<TResult, TUpdate extends Record<string, unknown> = Partial<TResult> & Record<string, unknown>>(config: QueryConfig<TResult> | QueryConfigInput<TResult>): RecordUpdater<TResult, TUpdate> {
+/** Creates an updater in create mode: stage values, then submit() calls record.create and record.save. */
+export function createRecord<TResult, TUpdate extends Record<string, unknown> = Partial<TResult> & Record<string, unknown>>(config: QueryConfigSource<TResult>): RecordUpdater<TResult, TUpdate> {
+    return RecordUpdater.for<TResult, TUpdate>(config).asCreate();
+}
+
+/** Deletes a record with record.delete. Never throws; failures are reported in the result. */
+export function deleteRecord<TResult>(config: QueryConfigSource<TResult>, recordId: RecordId): DeleteResult {
+    const recordType = resolveQueryConfig(config).recordType;
+    try {
+        const deletedId = getNsRecord().delete({ type: recordType, id: recordId });
+        return { success: true, id: Number(deletedId) };
+    } catch (error) {
+        return { success: false, id: Number(recordId), error: formatError(error) };
+    }
+}
+
+export function updateRecord<TResult, TUpdate extends Record<string, unknown> = Partial<TResult> & Record<string, unknown>>(config: QueryConfigSource<TResult>): RecordUpdater<TResult, TUpdate> {
     return RecordUpdater.for<TResult, TUpdate>(config);
 }

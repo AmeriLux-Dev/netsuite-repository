@@ -1,12 +1,19 @@
 import type * as NsQuery from 'N/query';
-import { normalizeQueryConfig } from './types';
+import { coerceQueryResultValueByFieldType } from './coercion';
+import { resolveQueryConfig } from './model/resolve';
+import type { QueryConfigSource } from './model/resolve';
 import type {
     BuiltQuery,
     FieldMap,
+    FieldType,
     JoinDef,
+    JoinKeys,
+    JoinOn,
+    JoinType,
+    PaginationMode,
     QueryConfig,
-    QueryConfigInput,
     QueryExecution,
+    QueryField,
     QueryOperator,
     QueryPageOptions,
     QueryParamValue,
@@ -27,25 +34,68 @@ interface SortDef {
     direction: SortDirection;
 }
 
+export interface DynamicJoinOptions {
+    /** Join type; defaults to 'inner' for join() and is fixed by innerJoin()/leftJoin()/rightJoin(). */
+    type?: JoinType;
+    /** Alias of the table the equality keys are read from; defaults to the root table alias. */
+    from?: string;
+    /** Positional parameters for `?` placeholders in a raw predicate. */
+    params?: QueryParamValue[];
+}
+
+export interface QueryBuilderOptions<TResult> {
+    /** Receives every typed result set (executeTyped, firstTyped) and may substitute instances; used by change tracking. */
+    resultObserver?: (results: TResult[]) => TResult[];
+}
+
+export interface RawSelectionOptions {
+    type?: FieldType;
+    nestPath?: string;
+    coerce?: boolean;
+    transform?: QueryField['transform'];
+}
+
+type SelectableField = [string, QueryField];
+
 function getNsQuery(): typeof import('N/query') {
     return require<typeof import('N/query')>('N/query');
 }
 
+function countPlaceholders(sql: string): number {
+    return (sql.match(/\?/g) ?? []).length;
+}
+
 export class QueryBuilder<TResult> {
     private readonly config: QueryConfig<TResult>;
+    private readonly inheritedJoinAliases: string[];
+    private readonly options: QueryBuilderOptions<TResult>;
+    private trackingDisabled = false;
     private selectedKeys: Set<string> | null = null;
+    private readonly rawSelections = new Map<string, QueryField>();
     private readonly conditions: ConditionDef[] = [];
     private readonly sorts: SortDef[] = [];
+    private readonly dynamicJoins: JoinDef[] = [];
     private limitValue: number | undefined;
     private offsetValue: number | undefined;
     private distinctFlag = false;
+    private paginationMode: PaginationMode = 'offsetFetch';
+    private coerceEnabled: boolean;
 
-    private constructor(config: QueryConfig<TResult>) {
+    private constructor(config: QueryConfig<TResult>, inheritedJoinAliases: string[] = [], options: QueryBuilderOptions<TResult> = {}) {
         this.config = config;
+        this.inheritedJoinAliases = inheritedJoinAliases;
+        this.options = options;
+        this.coerceEnabled = config.coerce ?? false;
     }
 
-    static from<TResult>(config: QueryConfig<TResult> | QueryConfigInput<TResult>): QueryBuilder<TResult> {
-        return new QueryBuilder(normalizeQueryConfig(config));
+    static from<TResult>(config: QueryConfigSource<TResult>, options: QueryBuilderOptions<TResult> = {}): QueryBuilder<TResult> {
+        return new QueryBuilder(resolveQueryConfig(config), [], options);
+    }
+
+    /** Results of this query are not registered with the owning context (EF AsNoTracking). */
+    asNoTracking(): this {
+        this.trackingDisabled = true;
+        return this;
     }
 
     select(...keys: Array<keyof TResult | string>): this {
@@ -65,9 +115,50 @@ export class QueryBuilder<TResult> {
         return this;
     }
 
+    /**
+     * Adds a computed column rendered verbatim, mapped onto the result under `alias`.
+     * Usable in orderBy() and where() by its alias.
+     */
+    selectRaw(expression: string, alias: string, options: RawSelectionOptions = {}): this {
+        if (this.config.fields[alias] || this.rawSelections.has(alias)) {
+            throw new Error(`Alias '${alias}' is already used by a field in query config for '${this.config.recordType}'.`);
+        }
+
+        this.rawSelections.set(alias, {
+            queryFieldId: alias,
+            tableAlias: '',
+            expression,
+            alias,
+            type: options.type,
+            nestPath: options.nestPath,
+            coerce: options.coerce,
+            transform: options.transform,
+        });
+        return this;
+    }
+
     distinct(): this {
         this.distinctFlag = true;
         return this;
+    }
+
+    /** Adds a join for this query only. Config joins are rendered first. */
+    join(table: string, alias: string, on: JoinOn, options: DynamicJoinOptions = {}): this {
+        this.assertJoinAliasAvailable(alias);
+        this.dynamicJoins.push(this.toJoinDef(table, alias, on, options));
+        return this;
+    }
+
+    innerJoin(table: string, alias: string, on: JoinOn, options: Omit<DynamicJoinOptions, 'type'> = {}): this {
+        return this.join(table, alias, on, { ...options, type: 'inner' });
+    }
+
+    leftJoin(table: string, alias: string, on: JoinOn, options: Omit<DynamicJoinOptions, 'type'> = {}): this {
+        return this.join(table, alias, on, { ...options, type: 'leftOuter' });
+    }
+
+    rightJoin(table: string, alias: string, on: JoinOn, options: Omit<DynamicJoinOptions, 'type'> = {}): this {
+        return this.join(table, alias, on, { ...options, type: 'rightOuter' });
     }
 
     where(field: keyof TResult | string, operator: QueryOperator, value?: QueryParamValue | QueryParamValue[], useText = false): this {
@@ -147,29 +238,23 @@ export class QueryBuilder<TResult> {
         return this;
     }
 
+    /**
+     * 'offsetFetch' (default) emits OFFSET ... ROWS FETCH NEXT ... ROWS ONLY.
+     * 'top' emits TOP offset+limit and discards the offset rows client-side, which is the legacy behavior.
+     */
+    pagination(mode: PaginationMode): this {
+        this.paginationMode = mode;
+        return this;
+    }
+
+    /** Enables or disables read-side coercion of values to their declared field types for this query. */
+    coerce(enabled = true): this {
+        this.coerceEnabled = enabled;
+        return this;
+    }
+
     build(): BuiltQuery {
-        const fields = this.getFieldsToBuild();
-        const fieldMap = this.buildFieldMap(fields);
-        const distinct = this.distinctFlag ? 'DISTINCT ' : '';
-        const top = this.limitValue === undefined ? '' : `TOP ${(this.offsetValue ?? 0) + this.limitValue} `;
-
-        let sql = `SELECT ${distinct}${top}${this.buildSelectClause(fields)}\nFROM ${this.buildFromClause()}`;
-        const whereClause = this.buildWhereClause();
-        const orderByClause = this.buildOrderByClause();
-
-        if (whereClause) {
-            sql += `\nWHERE ${whereClause}`;
-        }
-
-        if (orderByClause) {
-            sql += `\nORDER BY ${orderByClause}`;
-        }
-
-        return {
-            sql,
-            params: this.getParams(),
-            fieldMap,
-        };
+        return this.buildSelectQuery(true);
     }
 
     execute(): QueryExecution<TResult> {
@@ -179,7 +264,7 @@ export class QueryBuilder<TResult> {
             params: built.params as Array<string | number | boolean>,
         });
         const rows = resultSet.asMappedResults() as Record<string, QueryResultValue>[];
-        const data = this.offsetValue ? rows.slice(this.offsetValue) : rows;
+        const data = this.paginationMode === 'top' && this.offsetValue ? rows.slice(this.offsetValue) : rows;
 
         return { data, query: built };
     }
@@ -194,7 +279,7 @@ export class QueryBuilder<TResult> {
     }
 
     executePaged(options: QueryPageOptions = {}): NsQuery.PagedData {
-        const built = this.build();
+        const built = this.buildSelectQuery(false);
         return getNsQuery().runSuiteQLPaged({
             query: built.sql,
             params: built.params as Array<string | number | boolean>,
@@ -258,7 +343,50 @@ export class QueryBuilder<TResult> {
             : rows.map((row) => this.mapSingleRow(row, fieldMap, arrayPaths));
 
         const { postProcess } = this.config;
-        return postProcess ? results.map((row) => postProcess(row) ?? row) : results;
+        const finalResults = postProcess ? results.map((row) => postProcess(row) ?? row) : results;
+        return this.trackingDisabled || !this.options.resultObserver ? finalResults : this.options.resultObserver(finalResults);
+    }
+
+    private buildSelectQuery(includePagination: boolean): BuiltQuery {
+        const fields = this.getFieldsToBuild();
+        const fieldMap = this.buildFieldMap(fields);
+        const distinct = this.distinctFlag ? 'DISTINCT ' : '';
+        const useTop = includePagination && this.paginationMode === 'top' && this.limitValue !== undefined;
+        const top = useTop ? `TOP ${(this.offsetValue ?? 0) + (this.limitValue as number)} ` : '';
+
+        let sql = `SELECT ${distinct}${top}${this.buildSelectClause(fields)}\nFROM ${this.buildFromClause()}`;
+        const whereClause = this.buildWhereClause();
+        const orderByClause = this.buildOrderByClause();
+
+        if (whereClause) {
+            sql += `\nWHERE ${whereClause}`;
+        }
+
+        if (orderByClause) {
+            sql += `\nORDER BY ${orderByClause}`;
+        }
+
+        if (includePagination && this.paginationMode === 'offsetFetch') {
+            sql += this.buildOffsetFetchClause();
+        }
+
+        return {
+            sql,
+            params: this.getParams(),
+            fieldMap,
+        };
+    }
+
+    private buildOffsetFetchClause(): string {
+        if (this.limitValue === undefined && !this.offsetValue) {
+            return '';
+        }
+
+        let clause = `\nOFFSET ${this.offsetValue ?? 0} ROWS`;
+        if (this.limitValue !== undefined) {
+            clause += ` FETCH NEXT ${this.limitValue} ROWS ONLY`;
+        }
+        return clause;
     }
 
     private addWhere(linkType: 'AND' | 'OR', field: keyof TResult | string, operator: QueryOperator, value?: QueryParamValue | QueryParamValue[], useText = false): this {
@@ -273,7 +401,7 @@ export class QueryBuilder<TResult> {
     }
 
     private addWhereGroup(linkType: 'AND' | 'OR', callback: (builder: QueryBuilder<TResult>) => QueryBuilder<TResult>): this {
-        const child = new QueryBuilder(this.config);
+        const child = new QueryBuilder(this.config, this.getKnownAliases());
         callback(child);
 
         if (child.conditions.length === 0) {
@@ -286,7 +414,7 @@ export class QueryBuilder<TResult> {
 
         this.conditions.push({
             expression: `(${expression})`,
-            params: child.getParams(),
+            params: child.conditions.flatMap((condition) => condition.params),
             linkType,
         });
         return this;
@@ -318,8 +446,51 @@ export class QueryBuilder<TResult> {
         return { expression: `${expression} ${operator} ?`, params: [value ?? null] };
     }
 
-    private getFieldsToBuild(): Array<[string, NonNullable<QueryConfig<TResult>['fields'][string]>]> {
-        return Object.entries(this.config.fields).filter(([key, field]) => {
+    private toJoinDef(table: string, alias: string, on: JoinOn, options: DynamicJoinOptions): JoinDef {
+        const joinDef: JoinDef = {
+            toTable: { name: table, alias },
+            fromTable: options.from ?? this.config.query.from.alias,
+            type: options.type ?? 'inner',
+        };
+
+        if (typeof on === 'string') {
+            const placeholderCount = countPlaceholders(on);
+            const parameterCount = options.params?.length ?? 0;
+            if (placeholderCount !== parameterCount) {
+                throw new Error(`Join '${alias}' declares ${placeholderCount} placeholder(s) but received ${parameterCount} parameter(s).`);
+            }
+            return { ...joinDef, on, params: options.params };
+        }
+
+        if (options.params && options.params.length > 0) {
+            throw new Error(`Join '${alias}' only accepts parameters with a raw predicate.`);
+        }
+
+        const joinKeys: JoinKeys[] = Array.isArray(on) ? on : [on];
+        if (joinKeys.length === 0) {
+            throw new Error(`Join '${alias}' requires at least one key pair.`);
+        }
+
+        return { ...joinDef, constraints: joinKeys.map((keys) => ({ joinKeys: keys })) };
+    }
+
+    private assertJoinAliasAvailable(alias: string): void {
+        if (this.getKnownAliases().includes(alias)) {
+            throw new Error(`Join alias '${alias}' is already used in the query for '${this.config.recordType}'.`);
+        }
+    }
+
+    private getKnownAliases(): string[] {
+        return [
+            this.config.query.from.alias,
+            ...(this.config.query.joins ?? []).map((join) => join.toTable.alias),
+            ...this.inheritedJoinAliases,
+            ...this.dynamicJoins.map((join) => join.toTable.alias),
+        ];
+    }
+
+    private getFieldsToBuild(): SelectableField[] {
+        const configuredFields = Object.entries(this.config.fields).filter(([key, field]) => {
             if (field.isPrimary) {
                 return true;
             }
@@ -328,9 +499,10 @@ export class QueryBuilder<TResult> {
             }
             return !this.selectedKeys || this.selectedKeys.has(key);
         });
+        return [...configuredFields, ...Array.from(this.rawSelections.entries())];
     }
 
-    private buildFieldMap(fields: Array<[string, NonNullable<QueryConfig<TResult>['fields'][string]>]>): FieldMap {
+    private buildFieldMap(fields: SelectableField[]): FieldMap {
         const map: FieldMap = {};
         for (const [key, field] of fields) {
             const alias = (field.alias ?? key).toLowerCase();
@@ -343,25 +515,38 @@ export class QueryBuilder<TResult> {
         return map;
     }
 
-    private buildSelectClause(fields: Array<[string, NonNullable<QueryConfig<TResult>['fields'][string]>]>): string {
+    private buildSelectClause(fields: SelectableField[]): string {
         if (fields.length === 0) {
             throw new Error('At least one selectable field is required.');
         }
 
         return fields.map(([key, field]) => {
             const alias = field.alias ?? key;
-            const expression = `${field.tableAlias}.${field.queryFieldId}`;
+            const expression = field.expression ?? `${field.tableAlias}.${field.queryFieldId}`;
             return `${field.useText ? `BUILTIN.DF(${expression})` : expression} AS "${alias}"`;
         }).join(',\n       ');
     }
 
+    private getAllJoins(): JoinDef[] {
+        return [...(this.config.query.joins ?? []), ...this.dynamicJoins];
+    }
+
     private buildFromClause(): string {
-        const { from, joins = [] } = this.config.query;
-        return [`${from.name} ${from.alias}`, ...joins.map((join) => `${this.joinTypeToSql(join.type)} ${join.toTable.name} ${join.toTable.alias} ON ${this.buildOnClause(join)}`)].join('\n');
+        const { from } = this.config.query;
+        return [`${from.name} ${from.alias}`, ...this.getAllJoins().map((join) => `${this.joinTypeToSql(join.type)} ${join.toTable.name} ${join.toTable.alias} ON ${this.buildOnClause(join)}`)].join('\n');
     }
 
     private buildOnClause(join: JoinDef): string {
-        return join.constraints.map((constraint, index) => {
+        if (join.on !== undefined) {
+            return join.on;
+        }
+
+        const constraints = join.constraints ?? [];
+        if (constraints.length === 0) {
+            throw new Error(`Join '${join.toTable.alias}' requires an on predicate or at least one constraint.`);
+        }
+
+        return constraints.map((constraint, index) => {
             const sourceAlias = constraint.joinKeys.sourceTable ?? join.fromTable;
             const targetAlias = constraint.joinKeys.targetTable ?? join.toTable.alias;
             const expression = `${sourceAlias}.${constraint.joinKeys.sourceForeignKey} = ${targetAlias}.${constraint.joinKeys.targetPrimaryKey}`;
@@ -379,14 +564,26 @@ export class QueryBuilder<TResult> {
 
     private resolveFieldExpression(fieldKey: string): string {
         const field = this.config.fields[fieldKey];
-        if (!field) {
-            throw new Error(`Field '${fieldKey}' is not defined in query config for '${this.config.recordType}'.`);
+        if (field) {
+            return field.expression ?? `${field.tableAlias}.${field.queryFieldId}`;
         }
-        return `${field.tableAlias}.${field.queryFieldId}`;
+
+        const rawSelection = this.rawSelections.get(fieldKey);
+        if (rawSelection) {
+            return rawSelection.expression as string;
+        }
+
+        const separatorIndex = fieldKey.indexOf('.');
+        if (separatorIndex > 0 && this.getKnownAliases().includes(fieldKey.slice(0, separatorIndex))) {
+            return fieldKey;
+        }
+
+        throw new Error(`Field '${fieldKey}' is not defined in query config for '${this.config.recordType}'.`);
     }
 
     private getParams(): QueryParamValue[] {
-        return this.conditions.flatMap((condition) => condition.params);
+        const joinParams = this.getAllJoins().flatMap((join) => join.params ?? []);
+        return [...joinParams, ...this.conditions.flatMap((condition) => condition.params)];
     }
 
     private getArrayPaths(): string[] {
@@ -453,7 +650,7 @@ export class QueryBuilder<TResult> {
         const output: Record<string, unknown> = {};
         for (const [alias, mapping] of Object.entries(fieldMap)) {
             const path = mapping.outputPath;
-            const value = this.transformValue(row[alias], row, mapping.field.transform);
+            const value = this.transformValue(row[alias], row, mapping.field);
             if (arrayPaths.some((arrayPath) => path === arrayPath || path.startsWith(`${arrayPath}.`))) {
                 continue;
             }
@@ -473,7 +670,7 @@ export class QueryBuilder<TResult> {
             }
 
             const itemPath = path === arrayPath ? mapping.key : path.slice(arrayPath.length + 1);
-            const value = this.transformValue(row[alias], row, mapping.field.transform);
+            const value = this.transformValue(row[alias], row, mapping.field);
             if (value !== null && value !== undefined && value !== '') {
                 hasValue = true;
             }
@@ -483,8 +680,10 @@ export class QueryBuilder<TResult> {
         return hasValue ? item : null;
     }
 
-    private transformValue(value: QueryResultValue, row: Record<string, QueryResultValue>, transform?: (value: QueryResultValue, row: Record<string, QueryResultValue>) => unknown): unknown {
-        return transform ? transform(value, row) : value;
+    private transformValue(value: QueryResultValue, row: Record<string, QueryResultValue>, field: QueryField): unknown {
+        const shouldCoerce = field.coerce ?? this.coerceEnabled;
+        const coerced = shouldCoerce ? coerceQueryResultValueByFieldType(value, field.type) : value;
+        return field.transform ? field.transform(coerced, row) : coerced;
     }
 
     private setPath(target: Record<string, unknown>, path: string, value: unknown): void {
@@ -524,10 +723,10 @@ export class QueryBuilder<TResult> {
     }
 }
 
-export function query<TResult>(config: QueryConfig<TResult> | QueryConfigInput<TResult>): QueryBuilder<TResult> {
-    return QueryBuilder.from(config);
+export function query<TResult>(config: QueryConfigSource<TResult>, options?: QueryBuilderOptions<TResult>): QueryBuilder<TResult> {
+    return QueryBuilder.from(config, options);
 }
 
-export function runQuery<TResult>(config: QueryConfig<TResult> | QueryConfigInput<TResult>): TResult[] {
+export function runQuery<TResult>(config: QueryConfigSource<TResult>): TResult[] {
     return query(config).executeTyped();
 }

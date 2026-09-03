@@ -3,6 +3,8 @@ import type * as NsRecord from 'N/record';
 export type QueryParamValue = string | number | boolean | null;
 export type QueryResultValue = string | number | boolean | null;
 export type RecordId = string | number;
+export type CoercedQueryValue = QueryResultValue | Date;
+export type PaginationMode = 'offsetFetch' | 'top';
 
 export type FieldType =
     | 'string'
@@ -115,8 +117,16 @@ export interface JoinDef {
     toTable: TableRef;
     fromTable: string;
     type: JoinType;
-    constraints: JoinConstraint[];
+    /** Equality constraints rendered as `source.key = target.key`. Ignored when `on` is set. */
+    constraints?: JoinConstraint[];
+    /** Raw ON predicate rendered verbatim, e.g. "tl.transaction = txn.id AND tl.mainline = 'F'". */
+    on?: string;
+    /** Positional parameters for `?` placeholders inside `on`. Bound before WHERE parameters. */
+    params?: QueryParamValue[];
 }
+
+/** Accepted shapes for a join predicate: raw SQL, one equality pair, or several equality pairs joined with AND. */
+export type JoinOn = string | JoinKeys | JoinKeys[];
 
 export interface QueryShape {
     from: TableRef;
@@ -133,7 +143,11 @@ export interface QueryField<TRow = unknown> {
     isPrimary?: boolean;
     select?: boolean;
     useText?: boolean;
-    transform?: (value: QueryResultValue, row: Record<string, QueryResultValue>) => unknown;
+    /** Rendered verbatim in SELECT instead of `tableAlias.queryFieldId` (computed columns, selectRaw). */
+    expression?: string;
+    /** Per-field override of read-side type coercion. */
+    coerce?: boolean;
+    transform?(value: CoercedQueryValue, row: Record<string, QueryResultValue>): unknown;
     recordFieldId?: string;
     readonly?: boolean;
     recordAccess?: RecordAccess;
@@ -242,6 +256,8 @@ export interface SublistRelationship {
     recordAccessId: string;
     fields?: RelationshipFieldMap;
     matchField?: string;
+    /** Property holding the NetSuite line index, used by change tracking to identify lines. */
+    lineField?: string;
 }
 
 export type EntityRelationship = OwnedSubrecordRelationship | SublistRelationship;
@@ -254,6 +270,10 @@ export interface QueryConfig<TResult, TFieldMeta = unknown> {
     restRecordMetadata?: RestRecordMetadata;
     composite?: CompositeModelMapping;
     postProcess?: (result: TResult) => TResult;
+    /** Coerce query results to the declared field types on read. Defaults to false for hand-written configs. */
+    coerce?: boolean;
+    /** Default RecordUpdater options applied to every updater created from this config. */
+    updaterOptions?: RecordUpdaterOptions;
 }
 
 export interface QueryConfigInput<TResult, TFieldMeta = unknown> extends Omit<QueryConfig<TResult, TFieldMeta>, 'fields'> {
@@ -312,7 +332,13 @@ export interface UpdateResult {
     details?: UpdateDetails;
 }
 
-export type UpdatePlanExecutionMode = 'none' | 'submitFields' | 'loadSave';
+export interface DeleteResult {
+    success: boolean;
+    id?: number;
+    error?: string;
+}
+
+export type UpdatePlanExecutionMode = 'none' | 'submitFields' | 'loadSave' | 'create';
 
 export interface UpdatePlanField {
     key: string;
@@ -330,6 +356,12 @@ export interface LoadRecordUpdatePlanOperation {
     kind: 'loadRecord';
     recordType: string;
     recordId?: RecordId;
+    isDynamic: boolean;
+}
+
+export interface CreateRecordUpdatePlanOperation {
+    kind: 'createRecord';
+    recordType: string;
     isDynamic: boolean;
 }
 
@@ -377,6 +409,7 @@ export interface SaveRecordUpdatePlanOperation {
 export type UpdatePlanOperation =
     | SubmitFieldsUpdatePlanOperation
     | LoadRecordUpdatePlanOperation
+    | CreateRecordUpdatePlanOperation
     | BodyFieldsUpdatePlanOperation
     | SubrecordUpdatePlanOperation
     | SublistUpdatePlanOperation
@@ -389,6 +422,7 @@ export interface UpdatePerformanceEstimate {
     netSuiteRecordCalls: number;
     recordLoads: number;
     recordSaves: number;
+    recordCreates: number;
     submitFieldsCalls: number;
     sublistLineScans: number;
     conditionalSubrecordReloads: number;
@@ -428,7 +462,7 @@ export interface CollectionPatch {
     remove?: number[];
 }
 
-export type RecordGraphPatch<TUpdate extends Record<string, unknown> = Record<string, unknown>> = Partial<TUpdate> & Record<string, unknown>;
+export type RecordGraphPatch<TUpdate extends object = Record<string, unknown>> = Partial<TUpdate> & Record<string, unknown>;
 
 export interface SubrecordReloadConfig {
     subrecordFieldId: string;

@@ -2,7 +2,7 @@
   "name": "@amerilux/netsuite-repository",
   "version": "0.1.0",
   "private": false,
-  "description": "Typed query configuration and record update helpers for NetSuite SuiteScript.",
+  "description": "Entity Framework style data access for NetSuite SuiteScript: decorated models, a build step that generates configs and types, typed SuiteQL queries, change tracking, and record updates.",
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -22,15 +22,38 @@
     "./context": {
       "types": "./dist/context.d.ts",
       "default": "./dist/context.js"
+    },
+    "./model": {
+      "types": "./dist/model/index.d.ts",
+      "default": "./dist/model/index.js"
+    },
+    "./tracking": {
+      "types": "./dist/tracking/index.d.ts",
+      "default": "./dist/tracking/index.js"
+    },
+    "./coercion": {
+      "types": "./dist/coercion.d.ts",
+      "default": "./dist/coercion.js"
+    },
+    "./cli": {
+      "types": "./dist-tooling/tooling/index.d.ts",
+      "default": "./dist-tooling/tooling/index.js"
+    },
+    "./plugin": {
+      "types": "./dist-tooling/tooling/plugin.d.ts",
+      "default": "./dist-tooling/tooling/plugin.js"
     }
   },
   "files": [
     "dist",
+    "dist-tooling",
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "npm run build:runtime && npm run build:tooling",
+    "build:runtime": "tsc -p tsconfig.build.json",
+    "build:tooling": "tsc -p tsconfig.tooling.json",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.tooling.json --noEmit",
     "pack": "npm pack",
     "pack:dry-run": "npm pack --dry-run",
     "publish:npm": "npm publish",
@@ -50,5 +73,19 @@
   "publishConfig": {
     "tag": "latest",
     "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "netsuite-repository": "dist-tooling/tooling/cli/bin.js"
+  },
+  "peerDependencies": {
+    "typescript": ">=5.0"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
   }
 }

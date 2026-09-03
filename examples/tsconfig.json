@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "es2019",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "strict": true,
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@amerilux/netsuite-repository": ["../src/index.ts"],
+      "N/*": ["../node_modules/@hitc/netsuite-types/N/*"]
+    }
+  },
+  "include": ["models/**/*.ts", "scripts/**/*.ts"]
+}
