@@ -1,6 +1,8 @@
 import type * as NsRecord from 'N/record';
 
 export type QueryParamValue = string | number | boolean | null;
+/** A value a where() condition accepts: a parameter value, or a Date the builder binds through TO_DATE. */
+export type ConditionParamValue = QueryParamValue | Date;
 export type QueryResultValue = string | number | boolean | null;
 export type RecordId = string | number;
 export type CoercedQueryValue = QueryResultValue | Date;

@@ -349,7 +349,7 @@ describe('QueryBuilder.toSQL()', () => {
     });
 
     it('inlines null param as NULL', () => {
-        const sql = QueryBuilder.from(customerConfig).where('name', '=', null).toSQL();
+        const sql = QueryBuilder.from(customerConfig).whereRaw('cust.companyname = ?', null).toSQL();
         expect(sql).toContain('NULL');
     });
 
@@ -359,8 +359,13 @@ describe('QueryBuilder.toSQL()', () => {
     });
 
     it('inlines boolean param as true/false string', () => {
-        const sql = QueryBuilder.from(customerConfig).where('isActive', '=', true).toSQL();
+        const sql = QueryBuilder.from(customerConfig).whereRaw('cust.flag = ?', true).toSQL();
         expect(sql).toContain('true');
+    });
+
+    it("inlines a boolean on a checkbox field as NetSuite's T/F", () => {
+        const sql = QueryBuilder.from(customerConfig).where('isActive', '=', true).toSQL();
+        expect(sql).toContain("cust.isinactive = 'T'");
     });
 });
 

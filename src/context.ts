@@ -1,6 +1,6 @@
-import type { DeleteResult, QueryConfig, QueryOperator, QueryParamValue, RecordGraphPatch, RecordId, RecordUpdaterOptions, UpdatePlan, UpdateResult } from './types';
+import type { DeleteResult, QueryConfig, RecordGraphPatch, RecordId, RecordUpdaterOptions, UpdatePlan, UpdateResult } from './types';
 import { QueryBuilder, query } from './query';
-import type { FieldPath } from './field-path';
+import type { ConditionValue, FieldPath, FieldValue, OperatorFor } from './field-path';
 import { RecordUpdater, createRecord, deleteRecord, updateRecord } from './record-updater';
 import { resolveQueryConfig } from './model/resolve';
 import type { QueryConfigSource, QueryConfigSourceResult } from './model/resolve';
@@ -87,8 +87,9 @@ export class RecordSet<TResult, TUpdate extends Record<string, unknown> = Partia
         return applySpecifications(this.query(), specifications).exists();
     }
 
-    where(field: FieldPath<TResult>, operator: QueryOperator, value?: QueryParamValue | QueryParamValue[]): QueryBuilder<TResult> {
-        return this.query().where(field, operator, value);
+    /** Starts a query with one condition; the operators and the value are typed from the field, as on the query builder. */
+    where<TField extends FieldPath<TResult>, TOperator extends OperatorFor<FieldValue<TResult, TField>>>(field: TField, operator: TOperator, value?: ConditionValue<FieldValue<TResult, TField>, TOperator>): QueryBuilder<TResult> {
+        return this.untypedQuery().where(field, operator, value as ConditionValue<unknown, TOperator>) as QueryBuilder<TResult>;
     }
 
     /** Returns the tracked instance when the key is already loaded, otherwise queries NetSuite (EF Find). */
@@ -97,7 +98,12 @@ export class RecordSet<TResult, TUpdate extends Record<string, unknown> = Partia
         if (tracked) {
             return tracked;
         }
-        return this.firstRecord(this.query().where(this.getPrimaryFieldKey() as FieldPath<TResult>, '=', id));
+        return this.firstRecord(this.untypedQuery().where(this.getPrimaryFieldKey(), '=', id) as QueryBuilder<TResult>);
+    }
+
+    /** The builder with the model's field typing set aside, for conditions the set states on the model's behalf. */
+    private untypedQuery(): QueryBuilder<unknown> {
+        return this.query() as QueryBuilder<unknown>;
     }
 
     /** A one-row SQL limit would cut a record with a sublist down to its first line, so those models read every row and keep the first record. */

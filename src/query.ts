@@ -1,4 +1,4 @@
-import type { FieldReference, RelationName } from './field-path';
+import type { ConditionValue, FieldReference, FieldReferenceFor, FieldValue, OperatorFor, ParamFor, RelationName, TextOperator } from './field-path';
 import type * as NsQuery from 'N/query';
 import { coerceQueryResultValueByFieldType } from './coercion';
 import { resolveQueryConfig } from './model/resolve';
@@ -15,6 +15,7 @@ import type {
     QueryConfig,
     QueryExecution,
     QueryField,
+    ConditionParamValue,
     QueryOperator,
     QueryPageOptions,
     QueryParamValue,
@@ -184,11 +185,23 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
         return this.join(table, alias, on, { ...options, type: 'rightOuter' });
     }
 
-    where(field: FieldReference<TResult, TDeclared>, operator: QueryOperator, value?: QueryParamValue | QueryParamValue[], useText = false): this {
+    /**
+     * Adds an AND condition. The operators and the value are typed from the property the field path points at:
+     * text takes equality, LIKE, and IN; numbers add order comparisons and BETWEEN; dates take order comparisons
+     * and BETWEEN with Date values; a checkbox takes a boolean or 'T'/'F'. With `useText` the comparison is made
+     * against the display text (BUILTIN.DF), so the text operators and string values apply whatever the field.
+     * An undefined value skips the condition.
+     */
+    where<TField extends FieldReference<TResult, TDeclared>, TOperator extends OperatorFor<FieldValue<TResult, TField>>>(field: TField, operator: TOperator, value?: ConditionValue<FieldValue<TResult, TField>, TOperator>, useText?: false): this;
+    where<TOperator extends TextOperator>(field: FieldReference<TResult, TDeclared>, operator: TOperator, value: ConditionValue<string, TOperator> | undefined, useText: true): this;
+    where(field: FieldReference<TResult, TDeclared>, operator: QueryOperator, value?: ConditionParamValue | ConditionParamValue[], useText = false): this {
         return this.addWhere('AND', String(field), operator, value, useText);
     }
 
-    orWhere(field: FieldReference<TResult, TDeclared>, operator: QueryOperator, value?: QueryParamValue | QueryParamValue[], useText = false): this {
+    /** Adds an OR condition; see where() for how the operators and the value are typed. */
+    orWhere<TField extends FieldReference<TResult, TDeclared>, TOperator extends OperatorFor<FieldValue<TResult, TField>>>(field: TField, operator: TOperator, value?: ConditionValue<FieldValue<TResult, TField>, TOperator>, useText?: false): this;
+    orWhere<TOperator extends TextOperator>(field: FieldReference<TResult, TDeclared>, operator: TOperator, value: ConditionValue<string, TOperator> | undefined, useText: true): this;
+    orWhere(field: FieldReference<TResult, TDeclared>, operator: QueryOperator, value?: ConditionParamValue | ConditionParamValue[], useText = false): this {
         return this.addWhere('OR', String(field), operator, value, useText);
     }
 
@@ -202,24 +215,27 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
         return this;
     }
 
-    whereIn(field: FieldReference<TResult, TDeclared>, values: QueryParamValue[] | undefined): this {
-        return values && values.length > 0 ? this.where(field, 'IN', values) : this;
+    /** IN over a text or numeric field; skipped when the list is empty or undefined. */
+    whereIn<TField extends FieldReferenceFor<TResult, TDeclared, 'IN'>>(field: TField, values: Array<ParamFor<FieldValue<TResult, TField>>> | undefined): this {
+        return values && values.length > 0 ? this.addWhere('AND', String(field), 'IN', values) : this;
     }
 
-    whereNotIn(field: FieldReference<TResult, TDeclared>, values: QueryParamValue[] | undefined): this {
-        return values && values.length > 0 ? this.where(field, 'NOT IN', values) : this;
+    /** NOT IN over a text or numeric field; skipped when the list is empty or undefined. */
+    whereNotIn<TField extends FieldReferenceFor<TResult, TDeclared, 'NOT IN'>>(field: TField, values: Array<ParamFor<FieldValue<TResult, TField>>> | undefined): this {
+        return values && values.length > 0 ? this.addWhere('AND', String(field), 'NOT IN', values) : this;
     }
 
     whereNull(field: FieldReference<TResult, TDeclared>): this {
-        return this.where(field, 'IS NULL');
+        return this.addWhere('AND', String(field), 'IS NULL');
     }
 
     whereNotNull(field: FieldReference<TResult, TDeclared>): this {
-        return this.where(field, 'IS NOT NULL');
+        return this.addWhere('AND', String(field), 'IS NOT NULL');
     }
 
-    whereBetween(field: FieldReference<TResult, TDeclared>, min: QueryParamValue | undefined, max: QueryParamValue | undefined): this {
-        return min === undefined || max === undefined ? this : this.where(field, 'BETWEEN', [min, max]);
+    /** BETWEEN over a numeric or date field; skipped when either bound is undefined. */
+    whereBetween<TField extends FieldReferenceFor<TResult, TDeclared, 'BETWEEN'>>(field: TField, min: ParamFor<FieldValue<TResult, TField>> | undefined, max: ParamFor<FieldValue<TResult, TField>> | undefined): this {
+        return min === undefined || max === undefined ? this : this.addWhere('AND', String(field), 'BETWEEN', [min, max]);
     }
 
     whereGroup(callback: (builder: QueryBuilder<TResult, TDeclared>) => QueryBuilder<TResult, any>): this {
@@ -412,14 +428,15 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
         return clause;
     }
 
-    private addWhere(linkType: 'AND' | 'OR', field: string, operator: QueryOperator, value?: QueryParamValue | QueryParamValue[], useText = false): this {
+    private addWhere(linkType: 'AND' | 'OR', field: string, operator: QueryOperator, value?: ConditionParamValue | ConditionParamValue[], useText = false): this {
         if (value === undefined && operator !== 'IS NULL' && operator !== 'IS NOT NULL') {
             return this;
         }
 
-        const rawExpression = this.resolveFieldExpression(String(field));
+        const rawExpression = this.resolveFieldExpression(field);
         const expression = useText ? `BUILTIN.DF(${rawExpression})` : rawExpression;
-        this.conditions.push({ ...this.buildCondition(expression, operator, value), linkType });
+        const fieldType = useText ? 'string' : this.resolveFieldType(field);
+        this.conditions.push({ ...this.buildCondition(expression, operator, value, fieldType), linkType });
         return this;
     }
 
@@ -443,7 +460,7 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
         return this;
     }
 
-    private buildCondition(expression: string, operator: QueryOperator, value?: QueryParamValue | QueryParamValue[]): Omit<ConditionDef, 'linkType'> {
+    private buildCondition(expression: string, operator: QueryOperator, value?: ConditionParamValue | ConditionParamValue[], fieldType?: FieldType): Omit<ConditionDef, 'linkType'> {
         if (operator === 'IS NULL' || operator === 'IS NOT NULL') {
             return { expression: `${expression} ${operator}`, params: [] };
         }
@@ -452,21 +469,45 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
             if (!Array.isArray(value) || value.length !== 2) {
                 throw new Error('BETWEEN requires exactly two values.');
             }
-            return { expression: `${expression} BETWEEN ? AND ?`, params: value };
+            const bounds = value.map((bound) => this.bindConditionValue(bound, fieldType));
+            return { expression: `${expression} BETWEEN ${bounds[0].placeholder} AND ${bounds[1].placeholder}`, params: bounds.map((bound) => bound.param) };
         }
 
         if (operator === 'IN' || operator === 'NOT IN') {
             if (!Array.isArray(value) || value.length === 0) {
                 throw new Error(`${operator} requires at least one value.`);
             }
-            return { expression: `${expression} ${operator} (${value.map(() => '?').join(', ')})`, params: value };
+            const members = value.map((member) => this.bindConditionValue(member, fieldType));
+            return { expression: `${expression} ${operator} (${members.map((member) => member.placeholder).join(', ')})`, params: members.map((member) => member.param) };
         }
 
         if (Array.isArray(value)) {
             throw new Error(`${operator} does not accept an array value.`);
         }
 
-        return { expression: `${expression} ${operator} ?`, params: [value ?? null] };
+        const bound = this.bindConditionValue(value ?? null, fieldType);
+        return { expression: `${expression} ${operator} ${bound.placeholder}`, params: [bound.param] };
+    }
+
+    /**
+     * Binds one condition value. A Date goes through TO_DATE, date-only for a date field and with the time
+     * otherwise; a boolean on a checkbox field becomes NetSuite's 'T'/'F'; anything else binds as it is.
+     */
+    private bindConditionValue(value: ConditionParamValue, fieldType: FieldType | undefined): { placeholder: string; param: QueryParamValue } {
+        if (value instanceof Date) {
+            const dateOnly = fieldType === 'date';
+            return { placeholder: `TO_DATE(?, '${dateOnly ? 'YYYY-MM-DD' : 'YYYY-MM-DD HH24:MI:SS'}')`, param: formatDateParam(value, dateOnly) };
+        }
+        if (typeof value === 'boolean' && (fieldType === 'boolean' || fieldType === 'checkbox')) {
+            return { placeholder: '?', param: value ? 'T' : 'F' };
+        }
+        return { placeholder: '?', param: value };
+    }
+
+    /** The declared type of a field or raw selection, when the query knows it. */
+    private resolveFieldType(rawFieldKey: string): FieldType | undefined {
+        const fieldKey = this.normalizeFieldKey(rawFieldKey);
+        return this.config.fields[fieldKey]?.type ?? this.rawSelections.get(fieldKey)?.type;
     }
 
     private toJoinDef(table: string, alias: string, on: JoinOn, options: DynamicJoinOptions): JoinDef {
@@ -799,6 +840,13 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
         }
         return `'${value.replace(/'/g, "''")}'`;
     }
+}
+
+/** Renders a Date in the account's local calendar as TO_DATE expects it: 'YYYY-MM-DD', with ' HH24:MI:SS' unless date-only. */
+function formatDateParam(value: Date, dateOnly: boolean): string {
+    const twoDigits = (part: number): string => (part < 10 ? '0' : '') + part;
+    const date = `${value.getFullYear()}-${twoDigits(value.getMonth() + 1)}-${twoDigits(value.getDate())}`;
+    return dateOnly ? date : `${date} ${twoDigits(value.getHours())}:${twoDigits(value.getMinutes())}:${twoDigits(value.getSeconds())}`;
 }
 
 export function query<TResult>(config: QueryConfigSource<TResult>, options?: QueryBuilderOptions<TResult>): QueryBuilder<TResult> {
