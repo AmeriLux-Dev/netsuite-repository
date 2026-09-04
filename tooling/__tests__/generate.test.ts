@@ -64,11 +64,11 @@ describe('planGeneration() – convention-mapped fixtures', () => {
             expect.objectContaining({ modelName: 'TransactionLine', setName: 'transactionLines' }),
         ]);
         expect(Array.from(fileByName.keys()).sort()).toEqual([
-            'Customer.config.gen.ts', 'Customer.repository.gen.ts', 'Customer.types.gen.ts',
-            'InventoryItem.config.gen.ts', 'InventoryItem.repository.gen.ts', 'InventoryItem.types.gen.ts',
-            'SalesOrder.config.gen.ts', 'SalesOrder.repository.gen.ts', 'SalesOrder.types.gen.ts',
+            'Customer.config.gen.ts', 'Customer.fields.gen.ts', 'Customer.repository.gen.ts', 'Customer.types.gen.ts',
+            'InventoryItem.config.gen.ts', 'InventoryItem.fields.gen.ts', 'InventoryItem.repository.gen.ts', 'InventoryItem.types.gen.ts',
+            'SalesOrder.config.gen.ts', 'SalesOrder.fields.gen.ts', 'SalesOrder.repository.gen.ts', 'SalesOrder.types.gen.ts',
             'Transaction.types.gen.ts', 'TransactionAddress.types.gen.ts',
-            'TransactionLine.config.gen.ts', 'TransactionLine.repository.gen.ts', 'TransactionLine.types.gen.ts',
+            'TransactionLine.config.gen.ts', 'TransactionLine.fields.gen.ts', 'TransactionLine.repository.gen.ts', 'TransactionLine.types.gen.ts',
             'context.gen.ts',
         ]);
     });
@@ -187,6 +187,49 @@ describe('planGeneration() – convention-mapped fixtures', () => {
         expect(context).toContain('export function createAppContext<TRepositories extends AppRepositoryMap = {}>(options: ContextFactoryOptions<TRepositories> = {}): AppContext<TRepositories> {');
     });
 
+    it('emits a fields constant per record type with the path of every field, nested by relation', () => {
+        expect(fileByName.get('SalesOrder.fields.gen.ts')).toContain([
+            'export const SalesOrderFields = {',
+            "    id: 'id',",
+            "    tranId: 'tranId',",
+            "    tranDate: 'tranDate',",
+            "    memo: 'memo',",
+            "    customerId: 'customerId',",
+            "    statusText: 'statusText',",
+            "    poNumber: 'poNumber',",
+            "    approved: 'approved',",
+            "    shipMethodId: 'shipMethodId',",
+            "    total: 'total',",
+            '    shippingAddress: {',
+            "        addr1: 'shippingAddress.addr1',",
+            "        city: 'shippingAddress.city',",
+            "        state: 'shippingAddress.state',",
+            '    },',
+            '    billingAddress: {',
+            "        addr1: 'billingAddress.addr1',",
+            "        city: 'billingAddress.city',",
+            "        state: 'billingAddress.state',",
+            '    },',
+            '    customer: {',
+            "        id: 'customer.id',",
+            "        companyName: 'customer.companyName',",
+            '    },',
+            '    lines: {',
+            "        id: 'lines.id',",
+            "        itemId: 'lines.itemId',",
+            "        quantity: 'lines.quantity',",
+            "        amount: 'lines.amount',",
+            "        notes: 'lines.notes',",
+            '        item: {',
+            "            itemId: 'lines.item.itemId',",
+            "            displayName: 'lines.item.displayName',",
+            '        },',
+            '    },',
+            '} as const;',
+        ].join('\n'));
+        expect(fileByName.get('SalesOrder.fields.gen.ts')).not.toContain('cachedLabel');
+    });
+
     it('leaves the repository bases out by default and emits the plain context factory', () => {
         const plain = planGeneration({ config: buildConfig(['tooling/__tests__/fixtures/models/**/*.ts'], outDir), cwd: repositoryRoot, fileSystem, compilerOptions, version: '0.0.0-test' });
         expect(plain.diagnostics).toEqual([]);
@@ -221,13 +264,13 @@ describe('runGenerate() and checkGenerated()', () => {
 
     it('writes every file once and reports them unchanged on the second run', () => {
         const first = runGenerate(options);
-        expect(first.writtenFiles).toHaveLength(15);
+        expect(first.writtenFiles).toHaveLength(19);
         expect(first.unchangedFiles).toEqual([]);
         expect(nodeFileSystem.existsSync(nodePath.join(outDir, 'SalesOrder.config.gen.ts'))).toBe(true);
 
         const second = runGenerate(options);
         expect(second.writtenFiles).toEqual([]);
-        expect(second.unchangedFiles).toHaveLength(15);
+        expect(second.unchangedFiles).toHaveLength(19);
     });
 
     it('detects drift and missing files without writing', () => {

@@ -13,6 +13,8 @@ import { emitConfigFile } from './emit/config-file-emitter';
 import type { FunctionImport } from './emit/config-file-emitter';
 import { emitContextFile } from './emit/context-file-emitter';
 import { emitRepositoryFile } from './emit/repository-file-emitter';
+import { emitFieldsFile } from './emit/fields-file-emitter';
+import type { FieldPathTree } from './emit/fields-file-emitter';
 import { emitTypeFile } from './emit/type-file-emitter';
 import type { TypeFileMember } from './emit/type-file-emitter';
 import { resolveGlobs, toPosixPath } from './file-system';
@@ -96,6 +98,18 @@ function relationTypeText(relation: ResolvedRelation, target: ResolvedClass | un
         ? `Pick<${relation.targetClassName}, ${projected.map((name) => `'${name}'`).join(' | ')}>`
         : relation.targetClassName;
     return relation.kind === 'sublist' ? `${base}[]` : base;
+}
+
+/** The field paths of a record type, nested by relation, for the generated fields constant. */
+function buildFieldPathTree(fields: Array<{ name: string }>, relations: ResolvedRelation[], prefix = ''): FieldPathTree {
+    const tree: FieldPathTree = {};
+    for (const field of fields) {
+        tree[field.name] = `${prefix}${field.name}`;
+    }
+    for (const relation of relations) {
+        tree[relation.name] = buildFieldPathTree(relation.fields, relation.relations, `${prefix}${relation.name}.`);
+    }
+    return tree;
 }
 
 function buildTypeFileMembers(model: ResolvedClass, classesByName: Map<string, ResolvedClass>): { members: TypeFileMember[]; imports: string[] } {
@@ -193,6 +207,10 @@ export function planGeneration(options: GenerateOptions): GenerationPlan {
                     functionImports,
                     version: options.version,
                 }),
+            });
+            files.push({
+                path: nodePath.join(outDir, `${model.className}.fields.gen.ts`),
+                content: emitFieldsFile({ modelName: model.className, tree: buildFieldPathTree(model.fields, model.relations), version: options.version }),
             });
             if (config.repositories === 'classes') files.push({
                 path: nodePath.join(outDir, `${model.className}.repository.gen.ts`),

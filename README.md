@@ -173,6 +173,7 @@ It writes:
 
 - `generated/<Class>.types.gen.ts` for every exported class: one interface, extending the base class's interface, importing the referenced ones. Record types also get `<Class>Patch` and `<Class>Create`.
 - `generated/<RecordType>.config.gen.ts` with `<RecordType>Config: QueryConfig<...>`, a plain object literal. Sublist line classes are record types, so they get one too.
+- `generated/<RecordType>.fields.gen.ts` with `<RecordType>Fields`, a constant whose properties mirror the model and hold its field paths (`SalesOrderFields.lines.item.type` is `'lines.item.type'`), for `where()`, `orderBy()`, and `select()`.
 - `generated/context.gen.ts` with `AppSchema`, the `AppContext` type, and `createAppContext()`.
 - With `"repositories": "classes"`: `generated/<RecordType>.repository.gen.ts` with `<RecordType>RepositoryBase`, a `RecordSet` bound to the config, and a context factory that accepts subclasses through `createAppContext({ repositories })`.
 
@@ -250,11 +251,13 @@ import type { Specification } from '@amerilux/netsuite-repository';
 import type { AppContext } from '../models/generated/context.gen';
 import type { SalesOrder } from '../models/generated/SalesOrder.types.gen';
 
-export const forCustomer = (customerId: number): Specification<SalesOrder> => (query) => query.where('customerId', '=', customerId);
-export const pendingFulfillment = (): Specification<SalesOrder> => (query) => query.where('status', '=', 'SalesOrd:B');
+import { SalesOrderFields as so } from '../models/generated/SalesOrder.fields.gen';
+
+export const forCustomer = (customerId: number): Specification<SalesOrder> => (query) => query.where(so.customerId, '=', customerId);
+export const pendingFulfillment = (): Specification<SalesOrder> => (query) => query.where(so.status, '=', 'SalesOrd:B');
 
 export function listPendingSalesOrders(db: AppContext, customerId: number): SalesOrder[] {
-    return db.salesOrders.list(forCustomer(customerId), pendingFulfillment(), (query) => query.orderByAsc('tranDate'));
+    return db.salesOrders.list(forCustomer(customerId), pendingFulfillment(), (query) => query.orderByAsc(so.tranDate));
 }
 
 // a script
@@ -301,7 +304,7 @@ db.salesOrders.query()
 ```
 
 - The root table alias is the table name (`transaction`), and relation aliases follow the property path (`customer`, `lines`, `lines_item`), so raw predicates can name them.
-- `where()`, `orderBy()`, and `select()` are typed against the model: properties and dotted paths into relations (`customer.companyName`, `lines.item.type`) are checked, so a misspelled path is a compile error, inside specifications too. An alias declared on the same query by `leftJoin()` or `selectRaw()` is accepted as well; anything the type cannot know goes through `raw('l.amount')`.
+- `where()`, `orderBy()`, and `select()` are typed against the model: properties and dotted paths into relations (`customer.companyName`, `lines.item.type`) are checked, so a misspelled path is a compile error, inside specifications too. The generated `<Model>Fields` constant spells them for you (`so.lines.item.type`), with completion on every level. An alias declared on the same query by `leftJoin()` or `selectRaw()` is accepted as well; anything the type cannot know goes through `raw('l.amount')`.
 - A record type that shares its table adds its discriminator to every query, including `count()` and `exists()`, and it is ANDed around the user conditions so an `OR` cannot escape it.
 - Sublists and subrecords join inner, so a query on `salesOrders` with `lines` in the select returns only orders that have lines; `exclude('lines')` or `@Sublist('item', { join: 'leftOuter' })` keeps the others.
 - Joins declared per query render after the model's joins. A raw `on` predicate can carry `?` placeholders; join parameters are bound before `WHERE` parameters.
