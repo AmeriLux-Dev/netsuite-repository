@@ -23,6 +23,7 @@ describe('loadBuildConfig()', () => {
             context: { name: 'Erp', fileName: 'erp.gen.ts' },
             tsconfig: 'tsconfig.json',
             libraryModule: '@acme/orm',
+            repositories: 'none',
             rootDirectory: cwd,
         });
     });
@@ -70,5 +71,13 @@ describe('loadBuildConfig()', () => {
             "'libraryModule' must be a non-empty string.",
         ]);
         expect(() => loadBuildConfig(createInMemoryFileSystemAdapter({ [defaultConfigPath]: JSON.stringify({ context: 'nope' }) }), cwd)).toThrow("'context' must be an object.");
+    });
+});
+
+describe('loadBuildConfig() repositories switch', () => {
+    it("defaults to 'none', accepts 'classes', and rejects anything else", () => {
+        expect(loadBuildConfig(createInMemoryFileSystemAdapter({}), cwd).repositories).toBe('none');
+        expect(loadBuildConfig(createInMemoryFileSystemAdapter({ [defaultConfigPath]: JSON.stringify({ repositories: 'classes' }) }), cwd).repositories).toBe('classes');
+        expect(() => loadBuildConfig(createInMemoryFileSystemAdapter({ [defaultConfigPath]: JSON.stringify({ repositories: 'modules' }) }), cwd)).toThrow("'repositories' must be 'classes' or 'none'.");
     });
 });

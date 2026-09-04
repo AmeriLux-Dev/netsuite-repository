@@ -194,7 +194,7 @@ export function planGeneration(options: GenerateOptions): GenerationPlan {
                     version: options.version,
                 }),
             });
-            files.push({
+            if (config.repositories === 'classes') files.push({
                 path: nodePath.join(outDir, `${model.className}.repository.gen.ts`),
                 content: emitRepositoryFile({
                     modelName: model.className,
@@ -218,6 +218,7 @@ export function planGeneration(options: GenerateOptions): GenerationPlan {
             content: emitContextFile({
                 contextName: config.context.name,
                 libraryModule: config.libraryModule,
+                repositories: config.repositories === 'classes',
                 version: options.version,
                 models: models.map((model) => ({ modelName: model.modelName, setName: model.setName, configImportPath: `./${model.modelName}.config.gen`, repositoryImportPath: `./${model.modelName}.repository.gen` })),
             }),

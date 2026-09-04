@@ -154,9 +154,12 @@ Add a config file at the project root (every key is optional). Relative paths in
   "models": ["src/models/**/*.ts", "!src/models/generated/**"],
   "outDir": "src/models/generated",
   "context": { "name": "App", "fileName": "context.gen.ts" },
-  "tsconfig": "tsconfig.json"
+  "tsconfig": "tsconfig.json",
+  "repositories": "none"
 }
 ```
+
+`repositories` is `none` by default. Set it to `classes` to also emit a base repository class per record type and let the context factory accept subclasses (see Repositories).
 
 Then run the build step:
 
@@ -170,8 +173,8 @@ It writes:
 
 - `generated/<Class>.types.gen.ts` for every exported class: one interface, extending the base class's interface, importing the referenced ones. Record types also get `<Class>Patch` and `<Class>Create`.
 - `generated/<RecordType>.config.gen.ts` with `<RecordType>Config: QueryConfig<...>`, a plain object literal. Sublist line classes are record types, so they get one too.
-- `generated/<RecordType>.repository.gen.ts` with `<RecordType>RepositoryBase`, a `RecordSet` bound to the config, for you to extend with domain queries.
-- `generated/context.gen.ts` with `AppSchema`, `AppRepositories`, the `AppContext` type, and `createAppContext({ repositories? })`.
+- `generated/context.gen.ts` with `AppSchema`, the `AppContext` type, and `createAppContext()`.
+- With `"repositories": "classes"`: `generated/<RecordType>.repository.gen.ts` with `<RecordType>RepositoryBase`, a `RecordSet` bound to the config, and a context factory that accepts subclasses through `createAppContext({ repositories })`.
 
 The build step reads the classes with the TypeScript type checker, so it sees every property, its declared type, `Pick` projections, and inheritance. Model files are also evaluated in a sandbox to collect the decorators; they may import the library and other model files by relative path, and nothing else. Anything that cannot be mapped is reported with the file, class, and property.
 
@@ -237,34 +240,51 @@ Use `asNoTracking()` for reporting reads, and `{ tracking: false }` on `createAp
 
 ## Repositories
 
-The record set on the context is the repository, the way a DbSet is in Entity Framework, and the context is the unit of work. The build step emits a base repository per record type. Extend it when a record type needs domain queries, and register the subclass when the context is created:
+The record set on the context is the repository, the way a DbSet is in Entity Framework, and the context is the unit of work. Domain queries are built from specifications: plain functions over the query builder that `list`, `first`, `count`, and `exists` apply in order.
+
+The simplest home for them is a module of functions that take the context:
 
 ```ts
-// repositories/SalesOrderRepository.ts
+// queries/salesOrders.ts
 import type { Specification } from '@amerilux/netsuite-repository';
-import { SalesOrderRepositoryBase } from '../models/generated/SalesOrder.repository.gen';
+import type { AppContext } from '../models/generated/context.gen';
 import type { SalesOrder } from '../models/generated/SalesOrder.types.gen';
 
 export const forCustomer = (customerId: number): Specification<SalesOrder> => (query) => query.where('customerId', '=', customerId);
 export const pendingFulfillment = (): Specification<SalesOrder> => (query) => query.where('status', '=', 'SalesOrd:B');
 
+export function listPendingSalesOrders(db: AppContext, customerId: number): SalesOrder[] {
+    return db.salesOrders.list(forCustomer(customerId), pendingFulfillment(), (query) => query.orderByAsc('tranDate'));
+}
+
+// a script
+const db = createAppContext();
+const pending = listPendingSalesOrders(db, 12);
+db.saveChanges();
+```
+
+Nothing is registered, a function can read several record sets, and a test can pass any object with the sets it needs. This is the style to reach for first.
+
+If you prefer the queries on the set itself, set `"repositories": "classes"` in the build config. The build step then emits a base repository per record type; extend it and register the subclass when the context is created:
+
+```ts
 export class SalesOrderRepository extends SalesOrderRepositoryBase {
     listPending(customerId: number): SalesOrder[] {
-        return this.list(forCustomer(customerId), pendingFulfillment(), (query) => query.orderByAsc('tranDate'));
+        return this.list(forCustomer(customerId), pendingFulfillment());
     }
 }
 
-// wherever the context is created
 const db = createAppContext({ repositories: { salesOrders: SalesOrderRepository } });
 db.salesOrders.listPending(12);      // typed as SalesOrderRepository
 db.customers.find(12);               // every other set is its generated base
-db.saveChanges();                    // the unit of work is unchanged
 ```
 
-- A specification is a function over the query builder. `list`, `first`, `count`, and `exists` take any number of them and apply them in order, so predicates are reusable and testable through `toSQL()` without a context.
-- `first()` limits the SQL to one row. On a model with a sublist use `list(...)[0]`, so every line row comes back.
-- A registered repository is constructed by the context with the context's change tracker, so the entities it returns are tracked and `saveChanges()` writes them.
-- Repositories are plain classes with no Node dependencies. They bundle into SuiteScript like the rest of the runtime; only the build step runs in Node.
+Either way:
+
+- Specifications are testable through `toSQL()` without a context, and compose by being passed together.
+- `first()` and `find()` read every matching row on a model with a sublist, so the record comes back with all of its lines; narrow them with a specification.
+- A registered repository is constructed with the context's change tracker, so the entities it returns are tracked and `saveChanges()` writes them.
+- Repositories and specifications are plain functions and classes with no Node dependencies. They bundle into SuiteScript like the rest of the runtime; only the build step runs in Node.
 
 ## Queries
 

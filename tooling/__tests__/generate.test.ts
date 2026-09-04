@@ -46,7 +46,7 @@ describe('planGeneration() – convention-mapped fixtures', () => {
     const outDir = createTemporaryOutDir();
     temporaryDirectories.push(outDir);
     const plan = planGeneration({
-        config: buildConfig(['tooling/__tests__/fixtures/models/**/*.ts'], outDir),
+        config: buildConfig(['tooling/__tests__/fixtures/models/**/*.ts'], outDir, { repositories: 'classes' }),
         cwd: repositoryRoot,
         fileSystem,
         compilerOptions,
@@ -187,7 +187,17 @@ describe('planGeneration() – convention-mapped fixtures', () => {
         expect(context).toContain('export function createAppContext<TRepositories extends AppRepositoryMap = {}>(options: ContextFactoryOptions<TRepositories> = {}): AppContext<TRepositories> {');
     });
 
-    it('emits a base repository per record type, bound to its config', () => {
+    it('leaves the repository bases out by default and emits the plain context factory', () => {
+        const plain = planGeneration({ config: buildConfig(['tooling/__tests__/fixtures/models/**/*.ts'], outDir), cwd: repositoryRoot, fileSystem, compilerOptions, version: '0.0.0-test' });
+        expect(plain.diagnostics).toEqual([]);
+        expect(plain.files.map((file) => nodePath.basename(file.path)).filter((name) => name.endsWith('.repository.gen.ts'))).toEqual([]);
+        const context = plain.files.find((file) => file.path.endsWith('context.gen.ts'))?.content as string;
+        expect(context).toContain('export type AppContext = NetSuiteContextInstance<typeof AppSchema>;');
+        expect(context).toContain('export function createAppContext(options?: NetSuiteContextOptions): AppContext {\n    return createNetSuiteContext(AppSchema, options);\n}');
+        expect(context).not.toContain('AppRepositories');
+    });
+
+    it('emits a base repository per record type, bound to its config, when the config asks for classes', () => {
         expect(fileByName.get('SalesOrder.repository.gen.ts')).toContain([
             "import { RecordSet } from '@amerilux/netsuite-repository';",
             "import type { QueryConfigSource, RecordSetOptions } from '@amerilux/netsuite-repository';",
@@ -207,7 +217,7 @@ describe('planGeneration() – convention-mapped fixtures', () => {
 describe('runGenerate() and checkGenerated()', () => {
     const outDir = createTemporaryOutDir();
     temporaryDirectories.push(outDir);
-    const options = { config: buildConfig(['tooling/__tests__/fixtures/models/**/*.ts'], outDir), cwd: repositoryRoot, fileSystem, compilerOptions, version: '0.0.0-test' };
+    const options = { config: buildConfig(['tooling/__tests__/fixtures/models/**/*.ts'], outDir, { repositories: 'classes' }), cwd: repositoryRoot, fileSystem, compilerOptions, version: '0.0.0-test' };
 
     it('writes every file once and reports them unchanged on the second run', () => {
         const first = runGenerate(options);

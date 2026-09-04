@@ -297,6 +297,8 @@ Added 2026-09-03. Entity Framework's DbSet is already a repository and the DbCon
 - The generated context exports `<Name>Repositories` (the bases) and `create<Name>Context({ repositories })` accepts a subclass per set. The return type carries the subclass for that set and the base for every other (`MergeRepositories`).
 - The context constructs a registered repository with its own change tracker, so a repository is part of the unit of work; `saveChanges()` writes what it returned.
 
+Preferred project convention (decided 2026-09-04 after comparing both): **modules of functions that take the context**, `listOpenSalesOrders(db, filters)`, built from exported specifications. They need no registration, can read several record sets, and are what a JavaScript developer without an ORM background writes on their own. The generated base and the `repositories` option stay as the class-shaped alternative for teams that want the queries on the set, behind the build config key `repositories` (`none` by default, `classes` to emit them), so the generated output carries nothing a project does not use.
+
 Rejected: discovering `repositories/<Model>Repository.ts` by convention (needs a config key, and ties one subclass to a model when different scripts may want different repositories over the same model), and scaffolding the subclass (EF does not).
 
 Runtime constraint, restated because it decides the shape: all of this runs in SuiteScript. The base and the subclasses are plain classes; the only Node code is the build step that writes them.

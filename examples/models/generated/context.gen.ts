@@ -4,15 +4,11 @@
 // </auto-generated>
 
 import { createNetSuiteContext } from '@amerilux/netsuite-repository';
-import type { ContextFactoryOptions, MergeRepositories, NetSuiteContextInstance, RepositoryMap } from '@amerilux/netsuite-repository';
+import type { NetSuiteContextInstance, NetSuiteContextOptions } from '@amerilux/netsuite-repository';
 import { CustomerConfig } from './Customer.config.gen';
 import { SalesOrderConfig } from './SalesOrder.config.gen';
 import { TaskConfig } from './Task.config.gen';
 import { TransactionLineConfig } from './TransactionLine.config.gen';
-import { CustomerRepositoryBase } from './Customer.repository.gen';
-import { SalesOrderRepositoryBase } from './SalesOrder.repository.gen';
-import { TaskRepositoryBase } from './Task.repository.gen';
-import { TransactionLineRepositoryBase } from './TransactionLine.repository.gen';
 
 export const ErpSchema = {
     customers: CustomerConfig,
@@ -21,18 +17,8 @@ export const ErpSchema = {
     transactionLines: TransactionLineConfig,
 };
 
-/** The generated base repositories. A subclass passed to the factory replaces the base for its set. */
-export const ErpRepositories = {
-    customers: CustomerRepositoryBase,
-    salesOrders: SalesOrderRepositoryBase,
-    tasks: TaskRepositoryBase,
-    transactionLines: TransactionLineRepositoryBase,
-};
+export type ErpContext = NetSuiteContextInstance<typeof ErpSchema>;
 
-export type ErpRepositoryMap = RepositoryMap<typeof ErpSchema>;
-
-export type ErpContext<TRepositories extends ErpRepositoryMap = {}> = NetSuiteContextInstance<typeof ErpSchema, MergeRepositories<typeof ErpRepositories, TRepositories>>;
-
-export function createErpContext<TRepositories extends ErpRepositoryMap = {}>(options: ContextFactoryOptions<TRepositories> = {}): ErpContext<TRepositories> {
-    return createNetSuiteContext(ErpSchema, { ...options, repositories: { ...ErpRepositories, ...options.repositories } }) as unknown as ErpContext<TRepositories>;
+export function createErpContext(options?: NetSuiteContextOptions): ErpContext {
+    return createNetSuiteContext(ErpSchema, options);
 }

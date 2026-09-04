@@ -15,6 +15,11 @@ export interface BuildConfig {
     tsconfig?: string;
     /** Module specifier model files import the library from, and generated files import the runtime from. */
     libraryModule: string;
+    /**
+     * 'classes' also emits a base repository class per record type and lets the context factory accept subclasses.
+     * 'none' (default) emits only the configs, types, and context; queries live in modules of functions that take the context.
+     */
+    repositories: 'classes' | 'none';
 }
 
 /** A loaded build config plus the directory its relative paths resolve against. */
@@ -30,6 +35,7 @@ export const defaultBuildConfig: BuildConfig = {
     outDir: 'src/models/generated',
     context: { name: 'App', fileName: 'context.gen.ts' },
     libraryModule: '@amerilux/netsuite-repository',
+    repositories: 'none',
 };
 
 export class BuildConfigError extends Error {
@@ -97,6 +103,14 @@ function validateBuildConfig(raw: Record<string, unknown>, configPath: string): 
             config.libraryModule = raw.libraryModule;
         } else {
             problems.push("'libraryModule' must be a non-empty string.");
+        }
+    }
+
+    if (raw.repositories !== undefined) {
+        if (raw.repositories === 'classes' || raw.repositories === 'none') {
+            config.repositories = raw.repositories;
+        } else {
+            problems.push("'repositories' must be 'classes' or 'none'.");
         }
     }
 
