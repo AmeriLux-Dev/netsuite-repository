@@ -1,3 +1,4 @@
+import { raw } from '../field-path';
 import { QueryBuilder } from '../query';
 import { defineQueryConfig } from '../types';
 import { customerConfig, orderConfig } from './fixtures';
@@ -97,8 +98,8 @@ describe('QueryBuilder.where() and orderBy() – alias-qualified columns', () =>
         const built = QueryBuilder.from(orderConfig)
             .leftJoin('customer', 'c', entityKeys)
             .where('c.companyname', 'LIKE', 'Acme%')
-            .where('tl.mainline', '=', 'F')
-            .orderByDesc('txn.trandate')
+            .where(raw('tl.mainline'), '=', 'F')
+            .orderByDesc(raw('txn.trandate'))
             .build();
         expect(built.sql).toContain('WHERE c.companyname LIKE ? AND tl.mainline = ?');
         expect(built.sql).toContain('ORDER BY txn.trandate DESC');
@@ -123,8 +124,8 @@ describe('QueryBuilder.where() and orderBy() – alias-qualified columns', () =>
     });
 
     it('still rejects unknown aliases and unknown fields', () => {
-        expect(() => QueryBuilder.from(orderConfig).where('nope.column', '=', 1)).toThrow("Field 'nope.column' is not defined in query config for 'salesorder'.");
-        expect(() => QueryBuilder.from(orderConfig).orderBy('.column')).toThrow("Field '.column' is not defined");
+        expect(() => QueryBuilder.from(orderConfig).where(raw('nope.column'), '=', 1)).toThrow("Field 'nope.column' is not defined in query config for 'salesorder'.");
+        expect(() => QueryBuilder.from(orderConfig).orderBy(raw('.column'))).toThrow("Field '.column' is not defined");
     });
 });
 

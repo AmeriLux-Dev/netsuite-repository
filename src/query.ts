@@ -1,3 +1,4 @@
+import type { FieldReference, RelationName } from './field-path';
 import type * as NsQuery from 'N/query';
 import { coerceQueryResultValueByFieldType } from './coercion';
 import { resolveQueryConfig } from './model/resolve';
@@ -65,7 +66,7 @@ function countPlaceholders(sql: string): number {
     return (sql.match(/\?/g) ?? []).length;
 }
 
-export class QueryBuilder<TResult> {
+export class QueryBuilder<TResult, TDeclared extends string = never> {
     private readonly config: QueryConfig<TResult>;
     private readonly inheritedJoinAliases: string[];
     private readonly options: QueryBuilderOptions<TResult>;
@@ -95,7 +96,7 @@ export class QueryBuilder<TResult> {
     }
 
     /** Loads a reference, subrecord, or sublist that is not selected by default (EF Include). */
-    include(...relationships: string[]): this {
+    include(...relationships: Array<RelationName<TResult>>): this {
         for (const name of relationships) {
             this.assertRelationship(name);
             this.includedRelationships.add(name);
@@ -105,7 +106,7 @@ export class QueryBuilder<TResult> {
     }
 
     /** Leaves a reference, subrecord, or sublist and its joins out of this query. */
-    exclude(...relationships: string[]): this {
+    exclude(...relationships: Array<RelationName<TResult>>): this {
         for (const name of relationships) {
             this.assertRelationship(name);
             this.excludedRelationships.add(name);
@@ -120,7 +121,7 @@ export class QueryBuilder<TResult> {
         return this;
     }
 
-    select(...keys: Array<keyof TResult | string>): this {
+    select(...keys: Array<FieldReference<TResult, TDeclared>>): this {
         if (!this.selectedKeys) {
             this.selectedKeys = new Set<string>();
         }
@@ -141,7 +142,7 @@ export class QueryBuilder<TResult> {
      * Adds a computed column rendered verbatim, mapped onto the result under `alias`.
      * Usable in orderBy() and where() by its alias.
      */
-    selectRaw(expression: string, alias: string, options: RawSelectionOptions = {}): this {
+    selectRaw<TAlias extends string>(expression: string, alias: TAlias, options: RawSelectionOptions = {}): QueryBuilder<TResult, TDeclared | TAlias> {
         if (this.config.fields[alias] || this.rawSelections.has(alias)) {
             throw new Error(`Alias '${alias}' is already used by a field in query config for '${this.config.recordType}'.`);
         }
@@ -165,30 +166,30 @@ export class QueryBuilder<TResult> {
     }
 
     /** Adds a join for this query only. Config joins are rendered first. */
-    join(table: string, alias: string, on: JoinOn, options: DynamicJoinOptions = {}): this {
+    join<TAlias extends string>(table: string, alias: TAlias, on: JoinOn, options: DynamicJoinOptions = {}): QueryBuilder<TResult, TDeclared | `${TAlias}.${string}`> {
         this.assertJoinAliasAvailable(alias);
         this.dynamicJoins.push(this.toJoinDef(table, alias, on, options));
         return this;
     }
 
-    innerJoin(table: string, alias: string, on: JoinOn, options: Omit<DynamicJoinOptions, 'type'> = {}): this {
+    innerJoin<TAlias extends string>(table: string, alias: TAlias, on: JoinOn, options: Omit<DynamicJoinOptions, 'type'> = {}): QueryBuilder<TResult, TDeclared | `${TAlias}.${string}`> {
         return this.join(table, alias, on, { ...options, type: 'inner' });
     }
 
-    leftJoin(table: string, alias: string, on: JoinOn, options: Omit<DynamicJoinOptions, 'type'> = {}): this {
+    leftJoin<TAlias extends string>(table: string, alias: TAlias, on: JoinOn, options: Omit<DynamicJoinOptions, 'type'> = {}): QueryBuilder<TResult, TDeclared | `${TAlias}.${string}`> {
         return this.join(table, alias, on, { ...options, type: 'leftOuter' });
     }
 
-    rightJoin(table: string, alias: string, on: JoinOn, options: Omit<DynamicJoinOptions, 'type'> = {}): this {
+    rightJoin<TAlias extends string>(table: string, alias: TAlias, on: JoinOn, options: Omit<DynamicJoinOptions, 'type'> = {}): QueryBuilder<TResult, TDeclared | `${TAlias}.${string}`> {
         return this.join(table, alias, on, { ...options, type: 'rightOuter' });
     }
 
-    where(field: keyof TResult | string, operator: QueryOperator, value?: QueryParamValue | QueryParamValue[], useText = false): this {
-        return this.addWhere('AND', field, operator, value, useText);
+    where(field: FieldReference<TResult, TDeclared>, operator: QueryOperator, value?: QueryParamValue | QueryParamValue[], useText = false): this {
+        return this.addWhere('AND', String(field), operator, value, useText);
     }
 
-    orWhere(field: keyof TResult | string, operator: QueryOperator, value?: QueryParamValue | QueryParamValue[], useText = false): this {
-        return this.addWhere('OR', field, operator, value, useText);
+    orWhere(field: FieldReference<TResult, TDeclared>, operator: QueryOperator, value?: QueryParamValue | QueryParamValue[], useText = false): this {
+        return this.addWhere('OR', String(field), operator, value, useText);
     }
 
     whereRaw(sql: string, ...params: QueryParamValue[]): this {
@@ -201,44 +202,44 @@ export class QueryBuilder<TResult> {
         return this;
     }
 
-    whereIn(field: keyof TResult | string, values: QueryParamValue[] | undefined): this {
+    whereIn(field: FieldReference<TResult, TDeclared>, values: QueryParamValue[] | undefined): this {
         return values && values.length > 0 ? this.where(field, 'IN', values) : this;
     }
 
-    whereNotIn(field: keyof TResult | string, values: QueryParamValue[] | undefined): this {
+    whereNotIn(field: FieldReference<TResult, TDeclared>, values: QueryParamValue[] | undefined): this {
         return values && values.length > 0 ? this.where(field, 'NOT IN', values) : this;
     }
 
-    whereNull(field: keyof TResult | string): this {
+    whereNull(field: FieldReference<TResult, TDeclared>): this {
         return this.where(field, 'IS NULL');
     }
 
-    whereNotNull(field: keyof TResult | string): this {
+    whereNotNull(field: FieldReference<TResult, TDeclared>): this {
         return this.where(field, 'IS NOT NULL');
     }
 
-    whereBetween(field: keyof TResult | string, min: QueryParamValue | undefined, max: QueryParamValue | undefined): this {
+    whereBetween(field: FieldReference<TResult, TDeclared>, min: QueryParamValue | undefined, max: QueryParamValue | undefined): this {
         return min === undefined || max === undefined ? this : this.where(field, 'BETWEEN', [min, max]);
     }
 
-    whereGroup(callback: (builder: QueryBuilder<TResult>) => QueryBuilder<TResult>): this {
+    whereGroup(callback: (builder: QueryBuilder<TResult, TDeclared>) => QueryBuilder<TResult, any>): this {
         return this.addWhereGroup('AND', callback);
     }
 
-    orWhereGroup(callback: (builder: QueryBuilder<TResult>) => QueryBuilder<TResult>): this {
+    orWhereGroup(callback: (builder: QueryBuilder<TResult, TDeclared>) => QueryBuilder<TResult, any>): this {
         return this.addWhereGroup('OR', callback);
     }
 
-    orderBy(field: keyof TResult | string, direction: SortDirection = 'ASC'): this {
+    orderBy(field: FieldReference<TResult, TDeclared>, direction: SortDirection = 'ASC'): this {
         this.sorts.push({ expression: this.resolveFieldExpression(String(field)), direction });
         return this;
     }
 
-    orderByAsc(field: keyof TResult | string): this {
+    orderByAsc(field: FieldReference<TResult, TDeclared>): this {
         return this.orderBy(field, 'ASC');
     }
 
-    orderByDesc(field: keyof TResult | string): this {
+    orderByDesc(field: FieldReference<TResult, TDeclared>): this {
         return this.orderBy(field, 'DESC');
     }
 
@@ -411,7 +412,7 @@ export class QueryBuilder<TResult> {
         return clause;
     }
 
-    private addWhere(linkType: 'AND' | 'OR', field: keyof TResult | string, operator: QueryOperator, value?: QueryParamValue | QueryParamValue[], useText = false): this {
+    private addWhere(linkType: 'AND' | 'OR', field: string, operator: QueryOperator, value?: QueryParamValue | QueryParamValue[], useText = false): this {
         if (value === undefined && operator !== 'IS NULL' && operator !== 'IS NOT NULL') {
             return this;
         }
@@ -422,8 +423,8 @@ export class QueryBuilder<TResult> {
         return this;
     }
 
-    private addWhereGroup(linkType: 'AND' | 'OR', callback: (builder: QueryBuilder<TResult>) => QueryBuilder<TResult>): this {
-        const child = new QueryBuilder(this.config, this.getKnownAliases());
+    private addWhereGroup(linkType: 'AND' | 'OR', callback: (builder: QueryBuilder<TResult, TDeclared>) => QueryBuilder<TResult, any>): this {
+        const child = new QueryBuilder<TResult, TDeclared>(this.config, this.getKnownAliases());
         callback(child);
 
         if (child.conditions.length === 0) {

@@ -1,3 +1,4 @@
+import { raw } from '../field-path';
 import * as NsQuery from 'N/query';
 import { query } from '../query';
 import type { QueryConfig } from '../types';
@@ -52,8 +53,8 @@ describe('QueryBuilder – include() and exclude()', () => {
     });
 
     it('rejects unknown relationship names', () => {
-        expect(() => query(salesOrderModelConfig).include('ghost')).toThrow("Relationship 'ghost' is not defined in query config for 'salesorder'.");
-        expect(() => query(salesOrderModelConfig).exclude('ghost')).toThrow("Relationship 'ghost' is not defined");
+        expect(() => query(salesOrderModelConfig).include('ghost' as never)).toThrow("Relationship 'ghost' is not defined in query config for 'salesorder'.");
+        expect(() => query(salesOrderModelConfig).exclude('ghost' as never)).toThrow("Relationship 'ghost' is not defined");
     });
 });
 
@@ -71,7 +72,7 @@ describe('QueryBuilder – dotted field keys', () => {
     });
 
     it('still rejects unknown dotted paths', () => {
-        expect(() => query(salesOrderModelConfig).where('customer.ghost', '=', 1)).toThrow("Field 'customer.ghost' is not defined in query config for 'salesorder'.");
+        expect(() => query(salesOrderModelConfig).where(raw('customer.ghost'), '=', 1)).toThrow("Field 'customer.ghost' is not defined in query config for 'salesorder'.");
     });
 });
 

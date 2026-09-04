@@ -1,5 +1,6 @@
 export * from './types';
 export * from './query';
+export * from './field-path';
 export * from './record-updater';
 export * from './context';
 export * from './model';

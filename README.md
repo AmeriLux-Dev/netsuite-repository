@@ -263,7 +263,7 @@ const pending = listPendingSalesOrders(db, 12);
 db.saveChanges();
 ```
 
-Nothing is registered, a function can read several record sets, and a test can pass any object with the sets it needs. This is the style to reach for first.
+Nothing is registered, a function can read several record sets, and a test can pass any object with the sets it needs. This is the style to reach for first. Keep the specifications in a module of their own, one per record type, and the query functions in another; the predicates then read as a vocabulary and the functions as sentences built from it.
 
 If you prefer the queries on the set itself, set `"repositories": "classes"` in the build config. The build step then emits a base repository per record type; extend it and register the subclass when the context is created:
 
@@ -301,7 +301,7 @@ db.salesOrders.query()
 ```
 
 - The root table alias is the table name (`transaction`), and relation aliases follow the property path (`customer`, `lines`, `lines_item`), so raw predicates can name them.
-- `where()`, `orderBy()`, and `select()` accept model properties, dotted paths into relations (`customer.companyName`), `selectRaw()` aliases, and `alias.column` for any known alias.
+- `where()`, `orderBy()`, and `select()` are typed against the model: properties and dotted paths into relations (`customer.companyName`, `lines.item.type`) are checked, so a misspelled path is a compile error, inside specifications too. An alias declared on the same query by `leftJoin()` or `selectRaw()` is accepted as well; anything the type cannot know goes through `raw('l.amount')`.
 - A record type that shares its table adds its discriminator to every query, including `count()` and `exists()`, and it is ANDed around the user conditions so an `OR` cannot escape it.
 - Sublists and subrecords join inner, so a query on `salesOrders` with `lines` in the select returns only orders that have lines; `exclude('lines')` or `@Sublist('item', { join: 'leftOuter' })` keeps the others.
 - Joins declared per query render after the model's joins. A raw `on` predicate can carry `?` placeholders; join parameters are bound before `WHERE` parameters.
