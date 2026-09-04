@@ -46,7 +46,7 @@ export const SalesOrderConfig: QueryConfig<SalesOrder> = {
                     alias: 'shippingAddress',
                 },
                 fromTable: 'transaction',
-                type: 'leftOuter',
+                type: 'inner',
                 on: 'shippingAddress.nkey = transaction.shippingaddress',
             },
             {
@@ -55,7 +55,7 @@ export const SalesOrderConfig: QueryConfig<SalesOrder> = {
                     alias: 'lines',
                 },
                 fromTable: 'transaction',
-                type: 'leftOuter',
+                type: 'inner',
                 on: 'lines.transaction = transaction.id AND lines.mainline = \'F\'',
             },
         ],

@@ -1,4 +1,4 @@
-import { Field, ReadOnly, RecordType, SetFirst, Sublist, Transform } from '@amerilux/netsuite-repository';
+import { Field, ReadOnly, RecordType, SetFirst, Sublist, Subrecord, Transform } from '@amerilux/netsuite-repository';
 import type { Customer } from './Customer';
 
 /** linesequencenumber is one-based in SuiteQL; sublist line indexes are zero-based. */
@@ -13,6 +13,17 @@ export class TransactionAddress {
     zip!: string | null;
 }
 
+/** One line of the item sublist, read from the transactionline table. `id` is matched to the sublist field 'line' on write. */
+@RecordType('transactionline')
+export class TransactionLine {
+    id!: number;
+    @Field('linesequencenumber') @Transform(toZeroBasedLine) @ReadOnly() line!: number;
+    @Field('item') itemId!: number;
+    quantity!: number;
+    rate!: number;
+    @ReadOnly() amount!: number;
+}
+
 /** Common transaction fields. No @RecordType, so it has no record set of its own; sales orders inherit it. */
 export abstract class Transaction {
     id!: number;
@@ -23,17 +34,7 @@ export abstract class Transaction {
     memo?: string | null;
     @Field('entity') @SetFirst() customerId!: number;
     customer?: Pick<Customer, 'id' | 'companyName' | 'email'>;
-    shippingAddress!: TransactionAddress;
-}
-
-@Sublist('item')
-export class SalesOrderLine {
-    id!: number;
-    @Field('linesequencenumber') @Transform(toZeroBasedLine) @ReadOnly() line!: number;
-    @Field('item') itemId!: number;
-    quantity!: number;
-    rate!: number;
-    @ReadOnly() amount!: number;
+    @Subrecord('shippingaddress') shippingAddress!: TransactionAddress;
 }
 
 @RecordType('salesorder')
@@ -41,5 +42,5 @@ export class SalesOrder extends Transaction {
     @Field('foreigntotal') @ReadOnly() total!: number;
     @Field('custbody_auto_approved') autoApproved!: boolean;
     @Field('shipmethod', { table: 'salesorder' }) shipMethodId!: number | null;
-    lines!: SalesOrderLine[];
+    @Sublist('item') lines!: TransactionLine[];
 }

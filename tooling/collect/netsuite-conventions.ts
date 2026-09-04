@@ -24,6 +24,8 @@ export interface SubrecordConvention {
 }
 
 export interface SublistConvention {
+    sublistId: string;
+    /** Line table. */
     table: string;
     /** Column on the line table holding the parent's internal id. */
     parentColumn: string;
@@ -131,14 +133,31 @@ export function resolveSubrecordConvention(table: string, subrecordFieldId: stri
     return subrecords[table.toLowerCase()]?.[subrecordFieldId.toLowerCase()];
 }
 
-const sublists: Record<string, Record<string, SublistConvention>> = {
-    transaction: {
-        item: { table: 'transactionline', parentColumn: 'transaction', where: "{alias}.mainline = 'F'", lineKey: { column: 'id', field: 'line' } },
-    },
+const sublists: Record<string, SublistConvention[]> = {
+    transaction: [
+        { sublistId: 'item', table: 'transactionline', parentColumn: 'transaction', where: "{alias}.mainline = 'F'", lineKey: { column: 'id', field: 'line' } },
+    ],
 };
 
-export function resolveSublistConvention(table: string, sublistId: string): SublistConvention | undefined {
-    return sublists[table.toLowerCase()]?.[sublistId.toLowerCase()];
+export interface SublistMatch {
+    /** The id the property declared with @Sublist('x'), when it did. */
+    sublistId?: string;
+    /** The line table named by the line class or by @Sublist({ table }), when known. */
+    lineTable?: string;
+}
+
+/** The sublist of `table` identified by its id or, when no id was declared, by the line table it reads from. */
+export function resolveSublistConvention(table: string, match: SublistMatch): SublistConvention | undefined {
+    const candidates = sublists[table.toLowerCase()] ?? [];
+    if (match.sublistId !== undefined) {
+        const sublistId = match.sublistId.toLowerCase();
+        return candidates.find((candidate) => candidate.sublistId === sublistId);
+    }
+    if (match.lineTable !== undefined) {
+        const lineTable = match.lineTable.toLowerCase();
+        return candidates.find((candidate) => candidate.table === lineTable);
+    }
+    return undefined;
 }
 
 /** The sublist field that identifies a line when nothing better is known. */

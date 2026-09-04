@@ -8,11 +8,13 @@ import type { NetSuiteContextInstance, NetSuiteContextOptions } from '@amerilux/
 import { CustomerConfig } from './Customer.config.gen';
 import { SalesOrderConfig } from './SalesOrder.config.gen';
 import { TaskConfig } from './Task.config.gen';
+import { TransactionLineConfig } from './TransactionLine.config.gen';
 
 export const ErpSchema = {
     customers: CustomerConfig,
     salesOrders: SalesOrderConfig,
     tasks: TaskConfig,
+    transactionLines: TransactionLineConfig,
 };
 
 export type ErpContext = NetSuiteContextInstance<typeof ErpSchema>;

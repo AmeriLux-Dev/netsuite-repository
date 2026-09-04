@@ -130,6 +130,7 @@ export async function scaffoldRecordModel(provider: MetadataProvider, options: S
         }
     }
 
+    // Subrecord shapes are plain classes; the property carries the NetSuite subrecord field id.
     for (const subrecord of Object.values(record.subrecords)) {
         const className = toNestedClassName(modelName, subrecord.fieldId, subrecord.propertyName);
         const mapping = resolveTableForSubrecord(recordType, subrecord.fieldId);
@@ -137,15 +138,10 @@ export async function scaffoldRecordModel(provider: MetadataProvider, options: S
         const lines = Object.values(subrecord.fields).map((field) => toPropertyLine({ fieldId: field.id, field, column: nestedTable?.columns[field.id.toLowerCase()], isKey: false, imports }));
         nestedClasses.push([`export class ${className} {`, ...lines, '}'].join('\n'));
         const propertyName = subrecord.propertyName ?? toCamelCasePropertyName(subrecord.fieldId);
-        const needsFieldId = propertyName.toLowerCase() !== subrecord.fieldId.toLowerCase();
 
         if (mapping) {
-            if (needsFieldId) {
-                imports.add('Subrecord');
-                relationProperties.push(`    @Subrecord(${quote(subrecord.fieldId)}) ${propertyName}!: ${className};`);
-            } else {
-                relationProperties.push(`    ${propertyName}!: ${className};`);
-            }
+            imports.add('Subrecord');
+            relationProperties.push(`    @Subrecord(${quote(subrecord.fieldId)}) ${propertyName}!: ${className};`);
         } else {
             todos.push(`subrecord '${subrecord.fieldId}' has no known SuiteQL table; declare it to query it`);
             const clearListField = subrecord.clearBeforeUpdateFieldId ? `, clearListField: ${quote(subrecord.clearBeforeUpdateFieldId)}` : '';
@@ -157,27 +153,30 @@ export async function scaffoldRecordModel(provider: MetadataProvider, options: S
         }
     }
 
+    // Sublist lines are record types of their own, reading the line table; the property carries the NetSuite sublist id.
     for (const sublist of Object.values(record.sublists)) {
         const className = `${toNestedClassName(modelName, sublist.sublistId, sublist.propertyName)}Line`;
         const mapping = resolveTableForSublist(recordType, sublist.sublistId);
         const lineTable = mapping ? await provider.getSuiteQlTableMetadata(mapping.table) : undefined;
         const lines = ['    id!: number;', ...Object.values(sublist.fields).map((field) => toPropertyLine({ fieldId: field.id, field, column: lineTable?.columns[field.id.toLowerCase()], isKey: false, imports }))];
-        imports.add('Sublist');
         const propertyName = sublist.propertyName ?? toCamelCasePropertyName(sublist.sublistId);
 
         if (mapping) {
-            nestedClasses.push([`@Sublist(${quote(sublist.sublistId)})`, `export class ${className} {`, ...lines, '}'].join('\n'));
-            relationProperties.push(`    ${propertyName}!: ${className}[];`);
+            imports.add('Sublist');
+            nestedClasses.push([`@RecordType(${quote(mapping.table)})`, `export class ${className} {`, ...lines, '}'].join('\n'));
+            relationProperties.push(`    @Sublist(${quote(sublist.sublistId)}) ${propertyName}!: ${className}[];`);
         } else {
             todos.push(`sublist '${sublist.sublistId}' has no known SuiteQL line table; declare it to query it`);
             nestedClasses.push([
-                `// TODO(scaffold): sublist '${sublist.sublistId}' has no known SuiteQL line table. Fill in the line table and the column holding the parent id.`,
-                `@Sublist(${quote(sublist.sublistId)}, { table: '<table>', parentColumn: '<column>' })`,
+                `// TODO(scaffold): sublist '${sublist.sublistId}' has no known SuiteQL line table. Name it with @RecordType('<table>') here or with @Sublist(${quote(sublist.sublistId)}, { table }) on the property.`,
                 `export class ${className} {`,
                 ...lines,
                 '}',
             ].join('\n'));
-            relationProperties.push(`    // TODO(scaffold): uncomment once '${className}' names its line table.\n    // ${propertyName}!: ${className}[];`);
+            relationProperties.push([
+                `    // TODO(scaffold): uncomment once the line table of '${sublist.sublistId}' and the column holding the parent id are known.`,
+                `    // @Sublist(${quote(sublist.sublistId)}, { table: '<table>', parentColumn: '<column>' }) ${propertyName}!: ${className}[];`,
+            ].join('\n'));
         }
     }
 

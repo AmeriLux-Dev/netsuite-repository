@@ -1,6 +1,6 @@
 # Conventions redesign: Entity Framework behaviour, NetSuite vocabulary
 
-Status: approved and implemented, 2026-09-03. Target version 0.3.0 (breaking; no compatibility shim before 1.0).
+Status: approved and implemented, 2026-09-03; member-decorator revision implemented the same day (see the last section). Target version 0.3.0 (breaking; no compatibility shim before 1.0).
 
 ## Goal
 
@@ -10,7 +10,7 @@ Three rules drive every decision below:
 
 1. **Every declared property is a mapped field.** `@NotMapped()` opts out.
 2. **Every mapped body field is writable.** `@ReadOnly()` opts out. The record field id is the property name lowercased and doubles as the SuiteQL column; `@Field(id)` renames it.
-3. **A property whose type is another model class is a reference, subrecord, or sublist.** The build step resolves the join from the declared type and the select field, never from a hand-written `ON` string.
+3. **A property whose type is another model class is a reference, subrecord, or sublist.** The member decorators `@Reference`, `@Subrecord`, and `@Sublist` name it the way NetSuite does; the build step resolves the join from the declared type, the select field, and the conventions, never from a hand-written `ON` string.
 
 ## Vocabulary
 
@@ -21,26 +21,31 @@ Three rules drive every decision below:
 | Field | Column / property | any declared property |
 | Select field | Foreign key | a `number` property holding an internal id, e.g. `customerId` |
 | Reference | Reference navigation | a property typed as another record class, e.g. `customer?: Pick<Customer, ...>` |
-| Subrecord | Owned type | a property typed as a plain class, e.g. `shippingAddress: TransactionAddress` |
-| Sublist | Collection navigation | an array property typed as a `@Sublist` class, e.g. `lines: SalesOrderLine[]` |
-| Sublist line | Dependent entity | one element of a sublist |
+| Subrecord | Owned type | an object-typed property, e.g. `@Subrecord('shippingaddress') shippingAddress: TransactionAddress` |
+| Sublist | Collection navigation | an array-typed property, e.g. `@Sublist('item') lines: TransactionLine[]` |
+| Sublist line | Dependent entity | a record type reading the line table, e.g. `@RecordType('transactionline')` |
 | Text of a select field | (none) | `@Field('price', { text: true })`, the `getText` value |
 | Record set | DbSet | `context.salesOrders` |
 
-The plan, the README, diagnostics, and identifier names in the code use the NetSuite column. "Navigation" survives only as the internal umbrella term for reference, subrecord, and sublist inside the collector.
+The plan, the README, diagnostics, and identifier names in the code use the NetSuite column. "Relation" survives only as the internal umbrella term for reference, subrecord, and sublist inside the collector.
 
-## The authoring surface after the change
+## The authoring surface
 
-### Class decorators
+### Class decorator
 
-| Decorator | Meaning | Replaces |
-| --- | --- | --- |
-| `@RecordType(id, options?)` | A root record. The SuiteQL `table` defaults from the conventions table (`salesorder` maps to `transaction`, `customrecord_x` to itself). `setName` defaults from the class name. `coerce` lives here. | `@Entity({ recordType, table, alias, setName })`, `@Coerce` |
-| `@Sublist(id, options?)` | A sublist line class, queried from its own table (`transactionline` by convention for transaction sublists). `where` adds a fixed predicate; the conventions table supplies `mainline = 'F'` for transaction lines. | `@OwnsMany` options plus the entity-level `@Join` for the line table |
-| `@Subrecord(options?)` | A subrecord class. Optional; a class used as a non-array property that is neither a `@RecordType` nor a `@Sublist` is a subrecord by convention. Options name the queryable table and key when the conventions table does not know them. | `@OwnsOne` options |
-| `@UpdaterOptions(options)` | Unchanged. | |
+There is exactly one: `@RecordType(id, options?)`. A class is either a record type or a plain class (a subrecord shape, a mapping base). Sublist line classes are record types named after the table they read (`@RecordType('transactionline')`), which also makes lines queryable on their own (`context.transactionLines`).
 
-Removed: `@Entity`, `@Join`, `@OwnsOne`, `@OwnsMany`, `@Related`, `@Coerce`, `@Column`, `@RecordField`, and the fluent API (`defineModel`, `extendModel`, `modelFromEntity`). `@RestMetadata` stays as scaffolding metadata but leaves the documented authoring surface.
+| Option | Meaning |
+| --- | --- |
+| `table` | Base SuiteQL table when the conventions do not know it (`salesorder` maps to `transaction`, `customrecord_x` to itself). |
+| `setName` | Record set name on the context; defaults from the class name. |
+| `coerce` | Read-side coercion default for the record type. |
+| `discriminator` | Table-per-hierarchy filter when the conventions do not know it. |
+| `tables` | Type tables fields may read from with `@Field({ table })`. |
+| `updater` | Default `RecordUpdaterOptions` for every write on the record type. |
+| `rest` | REST record metadata used by the scaffold and by runtime field lookups outside the model. |
+
+Removed over the course of the redesign: `@Entity`, `@Join`, `@OwnsOne`, `@OwnsMany`, `@Related`, `@Coerce`, `@Column`, `@RecordField`, the class-level `@Sublist` and `@Subrecord`, `@UpdaterOptions`, `@RestMetadata`, and the fluent API (`defineModel`, `extendModel`, `modelFromEntity`).
 
 `@Record` was rejected as the class decorator name because a value import named `Record` shadows TypeScript's `Record<K, V>` utility type in the same file.
 
@@ -49,11 +54,14 @@ Removed: `@Entity`, `@Join`, `@OwnsOne`, `@OwnsMany`, `@Related`, `@Coerce`, `@C
 | Decorator | Meaning |
 | --- | --- |
 | `@InternalId()` | Marks the internal id when it is not the property named `id`. |
-| `@Field(id?, options?)` | Renames the field. `column` overrides the SuiteQL column when it differs from the field id (`@Field('orderstatus', { column: 'status' })`). `type`, `text`, and `coerce` override the inferred settings. Never required. |
+| `@Field(id?, options?)` | Renames the field. `column` overrides the SuiteQL column when it differs from the field id (`@Field('orderstatus', { column: 'status' })`). `table` reads the column from a type table. `type`, `text`, and `coerce` override the inferred settings. Never required. |
 | `@ReadOnly()` | Excludes the property from writes. |
-| `@Reference(selectFieldProperty, options?)` | On a reference: which property holds the internal id when it is not `<reference>Id`; `join` forces the join type. |
-| `@Subrecord(fieldId, options?)` | On a subrecord property whose field id is not the lowercased property name, or whose queryable table and list field to clear are unknown to the conventions table. |
-| `@NotMapped()`, `@Transform(fn)`, `@SetFirst()`, `@ExcludeFromDefaultSelect()` | Unchanged. |
+| `@Reference(selectFieldProperty?, options?)` | A reference: which property holds the internal id when it is not `<reference>Id`; `targetKey` names the referenced property to join on when it is not its internal id; `join` forces the join type. |
+| `@Subrecord(fieldId?, options?)` | A subrecord: the field id when it is not the lowercased property name; `table`, `key`, and `clearListField` when the conventions do not know them; `join`. |
+| `@Sublist(sublistId?, options?)` | A sublist: the id when it is not known from the line table; `table`, `where`, `parentColumn`, and `lineKey` when the line class and the conventions do not supply them; `join`. |
+| `@NotMapped()`, `@Transform(fn)`, `@SetFirst()`, `@ExcludeFromDefaultSelect()` | Flags. |
+
+The three relation decorators are the NetSuite words for what EF calls navigations. None is required when the conventions can tell the kind from the declared type (an array is a sublist; a plain class is a subrecord; a record class is a reference), but they are the expected way to write a model: the sublist id and the subrecord field id almost never equal the property name.
 
 ### Conventions
 
@@ -63,13 +71,15 @@ Removed: `@Entity`, `@Join`, `@OwnsOne`, `@OwnsMany`, `@Related`, `@Coerce`, `@C
 | Field id and SuiteQL column | property name lowercased | `@Field('x')`, `@Field('x', { column: 'y' })` |
 | Field type | from the TypeScript type: `string`, `number` (float; integer for internal ids and select fields), `boolean`, `Date`, `string[]`/`number[]` (multiselect) | `@Field({ type })` |
 | Read-only by convention | the internal id, `text: true` fields, fields of a referenced record, `@NotMapped` | none for text fields: declare a second property to write the select field itself |
-| Table alias | generated from the class or property name; never authored | none, aliases are internal |
-| Join type | always left outer, so loading a reference, subrecord, or sublist never filters the parent (EF Include) | `@Join('inner')` on the property |
+| Table alias | the table name for the root, the property path for relations (`lines`, `lines_item`); never authored | none, aliases are internal |
+| Reference or subrecord | a plain class is a subrecord; a record class is a reference unless the conventions know a subrecord for the field | `@Reference()`, `@Subrecord()` |
+| Join type | sublists and subrecords inner, references left outer; a relation nested under a left outer join stays left outer | `{ join }` on the relation decorator |
 | Select field for a reference | `<reference>Id` on the same class | `@Reference('entityId')` |
 | Subrecord field id | lowercased property name (`shippingaddress`, `billingaddress`) | `@Subrecord('x')` |
-| Subrecord queryable table | conventions table (`transaction.shippingaddress` reads `transactionshippingaddress` on `nkey`) | `@Subrecord('x', { table, key })` |
+| Subrecord queryable table | conventions table (`transaction.shippingaddress` reads `transactionshippingaddress` on `nkey`); else the subrecord class's `@RecordType` table and internal id | `@Subrecord('x', { table, key })` |
 | List field cleared before a subrecord edit | conventions table (`shipaddresslist`, `billaddresslist`) | `@Subrecord('x', { clearListField })` |
-| Sublist table and parent select field | conventions table (`transactionline.transaction`, line key column `id` mapped to the sublist field `line`) | `@Sublist('item', { table, where, parentColumn, lineKey })` |
+| Sublist id | from the line table (`transactionline` under `transaction` is `item`), else the lowercased property name | `@Sublist('item')` |
+| Sublist table and parent column | the line class's `@RecordType` table; conventions table for the parent column and predicate (`transactionline.transaction`, `mainline = 'F'`, line key column `id` mapped to the sublist field `line`) | `@Sublist('item', { table, where, parentColumn, lineKey })` |
 | Sublist line match | the line class's internal id | `@InternalId()` on another line property |
 
 Two properties that share one class, such as shipping and billing addresses, work because the subrecord field id comes from the property, not the class.
@@ -95,7 +105,7 @@ export class Customer {
 }
 ```
 
-The build step sees that `customer` is typed from the `Customer` record class, finds the select field `customerId`, and emits a left outer join on `customer.id = txn.entity` with only the two projected fields selected. The result type is `Pick<Customer, 'id' | 'companyName'>`, so a lookup that needs two fields never pulls the whole record.
+The build step sees that `customer` is typed from the `Customer` record class, finds the select field `customerId`, and emits a left outer join on `customer.id = transaction.entity` with only the two projected fields selected. The result type is `Pick<Customer, 'id' | 'companyName'>`, so a lookup that needs two fields never pulls the whole record.
 
 ### Projection on a reference
 
@@ -125,18 +135,20 @@ export class TransactionAddress {
 
 @RecordType('salesorder')
 export class SalesOrder {
-    shippingAddress!: TransactionAddress;
-    billingAddress!: TransactionAddress;
+    @Subrecord('shippingaddress') shippingAddress!: TransactionAddress;
+    @Subrecord('billingaddress') billingAddress!: TransactionAddress;
 }
 ```
 
-`shippingAddress` maps to the `shippingaddress` subrecord, queried from `transactionshippingaddress`, cleared through `shipaddresslist`, all from the conventions table. Every address field is writable through the subrecord by rule 2.
+`shippingAddress` is the `shippingaddress` subrecord, queried from `transactionshippingaddress`, cleared through `shipaddresslist`, all from the conventions table. Every address field is writable through the subrecord by rule 2. The join is inner: a subrecord is part of its record. `@Subrecord('shippingaddress', { join: 'leftOuter' })` keeps records whose subrecord is empty.
+
+A subrecord class may itself be a record type when it has a table of its own (`@RecordType('locationmainaddress')` with `@InternalId() @Field('nkey') nKey`); the property then needs no table option.
 
 ### Sublist
 
 ```ts
-@Sublist('item')
-export class SalesOrderLine {
+@RecordType('transactionline')
+export class TransactionLine {
     id!: number;                                   // transactionline.id, sublist field 'line', match key, read-only
     @Field('item') itemId!: number;
     item?: Pick<Item, 'itemId' | 'displayName' | 'itemType'>;
@@ -148,11 +160,11 @@ export class SalesOrderLine {
 
 @RecordType('salesorder')
 export class SalesOrder {
-    lines!: SalesOrderLine[];                      // inner join because the property is required
+    @Sublist('item') lines!: TransactionLine[];    // inner join: the lines are part of the order
 }
 ```
 
-The build step emits the `transactionline` join on `transaction = txn.id AND mainline = 'F'`, then the `item` join from the line alias, and sublist update mappings for every writable line field keyed on `line`. Results nest as `order.lines[].item.itemType`; the runtime mapper already builds dotted paths under array items, so this is a collector change, not a runtime one.
+The build step emits the `transactionline` join on `transaction = transaction.id AND mainline = 'F'`, then the `item` join from the line alias (left outer, as every reference), and sublist update mappings for every writable line field keyed on `line`. Results nest as `order.lines[].item.itemType`. `TransactionLine` also gets a config and a record set of its own, so `context.transactionLines.query()` reads lines directly.
 
 ## Inheritance: table per hierarchy
 
@@ -164,13 +176,13 @@ export abstract class Transaction {                       // mapping base: no re
     tranId!: string;
     tranDate!: Date;
     @Field('entity') entityId!: number;
-    shippingAddress!: TransactionAddress;
+    @Subrecord('shippingaddress') shippingAddress!: TransactionAddress;
 }
 
 @RecordType('salesorder')
 export class SalesOrder extends Transaction {
     @Field('otherrefnum') poNumber!: string | null;
-    lines!: SalesOrderLine[];
+    @Sublist('item') lines!: TransactionLine[];
 }
 
 @RecordType('invoice')
@@ -187,11 +199,11 @@ Conventions:
 | Base class without `@RecordType` | A mapping base. It gets a type file (derived interfaces `extends` it) but no config and no record set. | Add `@RecordType` to make it queryable in its own right, for example `@RecordType('transaction')` for a read-only view over every transaction. |
 | Table | Inherited from the first decorated ancestor, else from the conventions table for the derived record type. | `@RecordType('x', { table })` |
 | Discriminator | The conventions table maps record type to the discriminator column and value (`salesorder` is `type = 'SalesOrd'`, `invoice` is `type = 'CustInvc'`, `inventoryitem` is `itemtype = 'InvtPart'`). The generated config carries it and every query on the set adds the predicate; a base set with no discriminator queries the whole table. | `@RecordType('x', { discriminator: { column, value } })` |
-| Sublist line classes | Inherit the same way (`SalesOrderLine extends TransactionLine`). The `@Sublist` decorator may sit on the base or the derived class. | |
+| Sublist line classes | Record types that inherit the same way (`SalesOrderLine extends TransactionLine`, both `@RecordType('transactionline')`). | |
 
 The record updater is unaffected: writes go through the concrete class's record type. Change tracking keys entities by record set, so a sales order and an invoice with the same internal id never collide.
 
-The generated config gains `discriminator?: { column: string; value: string }`, and the query builder adds `<alias>.<column> = ?` to every select, count, and exists built from that config.
+The generated config carries `discriminator?: { column: string; value: string }`, and the query builder adds `<alias>.<column> = ?` to every select, count, and exists built from that config.
 
 ### Type tables: table per type on top of the hierarchy
 
@@ -215,7 +227,7 @@ Writes are unaffected: the record field id is the same whichever table the colum
 
 ## Writes
 
-Rule 2 changes what the compiled `QueryField` carries:
+Rule 2 decides what the compiled `QueryField` carries:
 
 - body field: `recordFieldId = field id` unless `@ReadOnly` removes it
 - subrecord field: `recordAccess: 'subrecord'` with the subrecord field id from the property, field id from the line
@@ -228,23 +240,7 @@ Known field/column mismatches on standard records live in the conventions table 
 
 ## Built-in conventions table
 
-New module `src/model/netsuite-conventions.ts`, plain data, imported by the build step only:
-
-```ts
-{
-  tables: { salesorder: 'transaction', purchaseorder: 'transaction', invoice: 'transaction', customer: 'customer', ... },
-  fieldIdsByColumn: { transaction: { status: 'orderstatus' } },
-  subrecords: {
-    transaction: {
-      shippingaddress: { table: 'transactionshippingaddress', key: 'nkey', clearListField: 'shipaddresslist' },
-      billingaddress:  { table: 'transactionbillingaddress',  key: 'nkey', clearListField: 'billaddresslist' },
-    },
-  },
-  sublists: {
-    transaction: { item: { table: 'transactionline', parentSelectField: 'transaction', lineKey: { column: 'id', field: 'line' }, where: "mainline = 'F'" } },
-  },
-}
-```
+Module `tooling/collect/netsuite-conventions.ts`, plain data, imported by the build step only: record type to table, discriminator, and type tables; field ids that differ from their column; subrecord tables keyed by owner table and field id; sublists keyed by owner table, matched by sublist id or by line table.
 
 Anything missing from the table is a build diagnostic naming the decorator option that supplies it. The table is the only place the library infers a record-side id, and every entry is a documented NetSuite fact.
 
@@ -258,52 +254,36 @@ Anything missing from the table is a build diagnostic naming the decorator optio
 import type { Customer } from './Customer.types.gen';
 export interface SalesOrder {
     customer?: Pick<Customer, 'id' | 'companyName'>;
-    lines: SalesOrderLine[];
+    lines: TransactionLine[];
 }
 ```
 
-`context.gen.ts` is unchanged. `@Sublist` and `@Subrecord` classes get a type file but no config and no record set on the context.
+`context.gen.ts` wires every record type, sublist line classes included. Plain classes get a type file but no config and no record set on the context.
 
-## Implementation phases
+## Implementation phases (done)
 
-### Phase 1: conventions collector
+1. **Conventions collector.** `tooling/collect/property-type-reader.ts` reads every exported class with the type checker: declared type text, scalar field type, optional flag, and for object types the resolved target class, the projected property names, and array-ness. `tooling/collect/model-file-evaluator.ts` evaluates the files in a sandbox for decorator overrides and transform references. `tooling/collect/model-resolver.ts` applies the conventions and reports diagnostics: unmapped type, missing select field for a reference, unknown subrecord table, unknown line table or parent column, a relation decorator on the wrong shape, sublist inside a sublist, projected name not mapped on the target, cycles.
+2. **Decorators.** `src/model/decorators.ts` records overrides only; none is required for a property to exist. The fluent API is gone.
+3. **Compile.** `tooling/compile/compile-model.ts` resolves relations to `JoinDef`s (aliases from the property path), applies projections, and emits the write mappings from rule 2.
+4. **Runtime.** `QueryBuilder.include(name)` and `exclude(name)`; `select` accepts dotted paths; discriminators on every query.
+5. **Emitters, scaffold, docs.** Type emitter writes relation types as declared; the scaffold emits the surface above; README rewritten around the vocabulary table, the conventions table, and the three rules.
+6. **Validation on the test project.** `C:\src\order-processing-repository-test\api\models` migrated, regenerated, api and client tests rerun.
 
-- `tooling/collect/property-type-reader.ts` becomes the primary source. For each exported class it returns every instance property with: declared type text, scalar field type, optional flag, and for object types the resolved target class (file path plus class name), the projected property names, and array-ness.
-- `tooling/collect/model-file-evaluator.ts` keeps evaluating the files for decorator metadata and transform function references, but its output is treated as overrides merged onto the collected properties. Class identity between the two sources is matched on file path plus export name.
-- New `tooling/collect/conventions.ts` applies the table above and the naming rules, producing the existing `EntityModelMetadata` with references, subrecords, and sublists filled in. The metadata's navigation entry gains `kind: 'reference' | 'subrecord' | 'sublist'`, `target` (record class reference), `selectFieldProperty`, `projection` (property names or `all`), and nested entries.
-- Diagnostics: unmapped type, missing select field for a reference, unknown subrecord table, sublist inside a sublist, projected name not mapped on the target.
-
-### Phase 2: decorators
-
-- Rewrite `src/model/decorators.ts` to the tables above. Decorators only record overrides; none is required for a property to exist.
-- Delete `src/model/fluent.ts` and its tests; remove `modelFromEntity`, `extendModel`, `isEntityModelDefinition` from the runtime API and the evaluator.
-- `src/model/metadata.ts`: `recordFieldFollowsColumn` is removed; `readOnly` becomes the opt-out. Rename `owned`/`collection`/`related` kinds to `subrecord`/`sublist`/`reference`.
-
-### Phase 3: compile
-
-- `src/model/compile.ts` resolves references, subrecords, and sublists to `JoinDef`s (aliases generated from the property name with a numeric suffix on collision, chained through `fromTable` for nested ones), applies projections when selecting fields, and emits the write mappings from rule 2.
-- Move `compile.ts` and `metadata.ts` under `tooling/` if nothing in `src/` still needs them at runtime; the runtime bundle should carry only the generated config.
-
-### Phase 4: runtime
-
-- `QueryBuilder.include(name)` and `exclude(name)`; `select` accepts dotted paths. Anything excluded from the default select is joined only when included, so the SQL does not carry unused joins.
-- Verify the mapper on a reference nested under a sublist (`lines[].item`) and on a subrecord of a referenced record; add tests.
-
-### Phase 5: emitters, scaffold, docs
-
-- Type emitter writes reference, subrecord, and sublist types as declared and imports sibling generated types.
-- Scaffold (`tooling/scaffold`) emits the new surface: no `@Field` for conventional names, `@ReadOnly` for non-writable REST fields, `@Subrecord` and `@Sublist` classes from the REST metadata.
-- README rewritten around the vocabulary table, the conventions table, and the three rules.
-
-### Phase 6: validation on the test project
-
-- Migrate `C:\src\order-processing-repository-test\api\models` to the new surface, regenerate, and rerun its api and client tests. Expected changes there: `Location`, `SubLocation`, `ShipMode`, `PriceLevel`, `Item`, `Customer` become plain record classes used through projected references instead of `from`-aliased columns; `SalesOrderLine.itemName` becomes `line.item.itemId`; the SPS packing slip models lose their `@Join` declarations.
-- Update the direction memory: record-side ids come from the conventions table or an override, never guessed beyond that table.
-
-## Decisions taken in this plan
+## Decisions taken
 
 - References, subrecords, and sublists declared on a model load by default. Excluding one is a per-query `exclude()` or `@ExcludeFromDefaultSelect()` on the property. Entity Framework does the opposite (nothing loads without `Include`), but a SuiteQL join costs far less than a second round trip and the declared projection already bounds the width.
-- Every relation joins left outer, exactly like EF's Include. A required-means-inner rule was tried and dropped: `lines!: SalesOrderLine[]` silently hiding orders without lines is the wrong default. `@Join('inner')` opts in.
-- The fluent API is removed rather than rebuilt on the conventions. Say so if it should stay.
+- Sublists and subrecords join inner; references join left outer. A sublist or subrecord is part of its record the way an owned type is part of its entity, so the join needs no decorator of its own and `@Join` was dropped. A reference is another record that may be absent, hence left outer (EF Include). A relation nested under a left outer join stays left outer regardless of its kind, because an inner join after an outer join would filter the parent out. The `join` option on the relation decorator overrides any of this.
+- The fluent API is removed rather than rebuilt on the conventions.
 - Query-level typed narrowing (`select` returning a `Pick`) is deferred.
 - `@Field` carries both ids because they coincide almost everywhere in NetSuite; the `column` option is the escape hatch for the few standard mismatches the conventions table does not cover.
+
+## Revision: member decorators mirror NetSuite
+
+Applied 2026-09-03 after the first implementation. The first cut put `@Sublist` and `@Subrecord` on classes, next to `@RecordType`, and added `@Join` and `@UpdaterOptions` as further class-level and property-level decorators. That mixed two ideas: what a class is (a record type, full stop) and what a member is (a field, a subrecord, a sublist, a reference). The revision separates them:
+
+- The only class decorator is `@RecordType`. A sublist line class is a record type reading its line table (`transactionline`), so it also becomes queryable on its own. Subrecord shapes are plain classes, or record types when they have a table of their own.
+- `@Field`, `@Subrecord`, `@Sublist`, and `@Reference` are the member decorators, named after NetSuite's own terms. The sublist id and the subrecord field id are declared where NetSuite puts them: on the parent's member.
+- `@Join` is gone; the join type follows from the kind (see the decisions above) and the relation decorators accept `join` for the exceptions.
+- `@UpdaterOptions` and `@RestMetadata` folded into `@RecordType` as `updater` and `rest`.
+
+Runtime shapes (`QueryConfig`, the record updater, change tracking) did not change; only the registry, the resolver, the scaffold, and the fixtures did.

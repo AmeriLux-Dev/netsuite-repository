@@ -247,7 +247,7 @@ describe('scaffoldRecordModel()', () => {
         const scaffolded = await scaffoldRecordModel(provider, { recordType: 'SalesOrder', libraryModule: '@acme/orm', version: '1.0.0' });
 
         expect(scaffolded.modelName).toBe('SalesOrder');
-        expect(scaffolded.content).toContain("import { Field, ReadOnly, RecordType, Sublist } from '@acme/orm';");
+        expect(scaffolded.content).toContain("import { Field, ReadOnly, RecordType, Sublist, Subrecord } from '@acme/orm';");
         expect(scaffolded.content).toContain("@RecordType('salesorder')\nexport class SalesOrder {\n    id!: number;");
         expect(scaffolded.content).toContain("    @Field('custbody_approved') custbodyApproved!: boolean;");
         expect(scaffolded.content).toContain("    @Field({ type: 'key' }) entity!: number | null;");
@@ -255,12 +255,12 @@ describe('scaffoldRecordModel()', () => {
         expect(scaffolded.content).toContain('    memo!: string | null;\n    trandate!: Date | null;\n    @ReadOnly() tranid!: string | null;');
         expect(scaffolded.content).toContain("    // TODO(scaffold): 'shipmethod' is writable but has no SuiteQL column on 'transaction'; declare it with @Field('shipmethod', { column: '<column>' })");
         expect(scaffolded.content).toContain('export class SalesOrderShippingaddress {\n    addr1!: string | null;\n    city!: string | null;\n}');
-        expect(scaffolded.content).toContain('\n    shippingaddress!: SalesOrderShippingaddress;\n');
+        expect(scaffolded.content).toContain("\n    @Subrecord('shippingaddress') shippingaddress!: SalesOrderShippingaddress;\n");
         expect(scaffolded.content).toContain("    // TODO(scaffold): subrecord 'custombox' has no known SuiteQL table. Fill in the table and its key column, then uncomment.\n    // @Subrecord('custombox', { table: '<table>', key: '<key>', clearListField: 'boxlist' })\n    // custombox!: SalesOrderCustombox;");
-        expect(scaffolded.content).toContain("@Sublist('item')\nexport class SalesOrderItemLine {\n    id!: number;\n    @Field({ type: 'key' }) item!: number | null;\n    quantity!: number | null;\n    @Field({ type: 'currency' }) @ReadOnly() amount!: number | null;\n}");
-        expect(scaffolded.content).toContain('    item!: SalesOrderItemLine[];');
-        expect(scaffolded.content).toContain("// TODO(scaffold): sublist 'links' has no known SuiteQL line table. Fill in the line table and the column holding the parent id.\n@Sublist('links', { table: '<table>', parentColumn: '<column>' })\nexport class SalesOrderLinksLine {\n    id!: number;\n    @ReadOnly() linkurl!: string | null;\n}");
-        expect(scaffolded.content).toContain("    // TODO(scaffold): uncomment once 'SalesOrderLinksLine' names its line table.\n    // links!: SalesOrderLinksLine[];");
+        expect(scaffolded.content).toContain("@RecordType('transactionline')\nexport class SalesOrderItemLine {\n    id!: number;\n    @Field({ type: 'key' }) item!: number | null;\n    quantity!: number | null;\n    @Field({ type: 'currency' }) @ReadOnly() amount!: number | null;\n}");
+        expect(scaffolded.content).toContain("    @Sublist('item') item!: SalesOrderItemLine[];");
+        expect(scaffolded.content).toContain("// TODO(scaffold): sublist 'links' has no known SuiteQL line table. Name it with @RecordType('<table>') here or with @Sublist('links', { table }) on the property.\nexport class SalesOrderLinksLine {\n    id!: number;\n    @ReadOnly() linkurl!: string | null;\n}");
+        expect(scaffolded.content).toContain("    // TODO(scaffold): uncomment once the line table of 'links' and the column holding the parent id are known.\n    // @Sublist('links', { table: '<table>', parentColumn: '<column>' }) links!: SalesOrderLinksLine[];");
         expect(scaffolded.todos).toEqual([
             "writable field 'shipmethod' has no SuiteQL column",
             "subrecord 'custombox' has no known SuiteQL table; declare it to query it",
@@ -309,8 +309,8 @@ describe('scaffoldRecordModel()', () => {
 
         const scaffolded = await scaffoldRecordModel(taskProvider, { recordType: 'task', libraryModule: '@acme/orm' });
         expect(scaffolded.content).toContain("@RecordType('task')\nexport class Task {\n    id!: number;\n    startDate!: Date | null;\n    title!: string | null;");
-        expect(scaffolded.content).toContain("@Sublist('timeitem', { table: '<table>', parentColumn: '<column>' })\nexport class TaskTimeItemLine {\n    id!: number;\n    tranDate!: Date | null;\n}");
-        expect(scaffolded.content).toContain('    // timeItem!: TaskTimeItemLine[];');
+        expect(scaffolded.content).toContain("export class TaskTimeItemLine {\n    id!: number;\n    tranDate!: Date | null;\n}");
+        expect(scaffolded.content).toContain("    // @Sublist('timeitem', { table: '<table>', parentColumn: '<column>' }) timeItem!: TaskTimeItemLine[];");
         expect(scaffolded.content).toContain("export class TaskCustevent15 {\n    size!: string | null;\n}");
         expect(scaffolded.content).toContain("    // @Subrecord('custevent15', { table: '<table>', key: '<key>' })\n    // custevent15!: TaskCustevent15;");
     });

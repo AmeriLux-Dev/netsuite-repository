@@ -170,13 +170,13 @@ export function planGeneration(options: GenerateOptions): GenerationPlan {
                 baseClassName: model.base?.className,
                 members,
                 imports,
-                isRecordType: model.kind === 'recordType',
+                isRecordType: model.recordType !== undefined,
                 libraryModule: config.libraryModule,
                 version: options.version,
             }),
         });
 
-        if (model.kind !== 'recordType' || classesWithProblems.has(`${model.filePath}#${model.exportName}`)) {
+        if (model.recordType === undefined || classesWithProblems.has(`${model.filePath}#${model.exportName}`)) {
             continue;
         }
 

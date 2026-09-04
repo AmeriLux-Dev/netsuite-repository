@@ -4,14 +4,14 @@
 // </auto-generated>
 
 import type { RecordGraphPatch } from '@amerilux/netsuite-repository';
-import type { SalesOrderLine } from './SalesOrderLine.types.gen';
 import type { Transaction } from './Transaction.types.gen';
+import type { TransactionLine } from './TransactionLine.types.gen';
 
 export interface SalesOrder extends Transaction {
     total: number;
     autoApproved: boolean;
     shipMethodId: number | null;
-    lines: SalesOrderLine[];
+    lines: TransactionLine[];
 }
 
 export type SalesOrderPatch = RecordGraphPatch<SalesOrder>;

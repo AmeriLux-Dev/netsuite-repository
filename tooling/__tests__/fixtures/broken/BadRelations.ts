@@ -1,10 +1,10 @@
-import { Field, RecordType, Reference, Sublist } from '@amerilux/netsuite-repository';
+import { Field, RecordType, Reference, Sublist, Subrecord } from '@amerilux/netsuite-repository';
 
 export class Note {
     text!: string;
 }
 
-@Sublist('recmachcustrecord_child')
+@RecordType('customrecord_child')
 export class ChildLine {
     id!: number;
 }
@@ -12,11 +12,16 @@ export class ChildLine {
 @RecordType('customrecord_parent')
 export class BadRelations {
     id!: number;
+    /** A sublist of a plain class: no line table. */
     notes!: Note[];
+    /** The line table comes from the class, but nothing says which column holds the parent. */
     children!: ChildLine[];
+    /** A reference without a select field. */
     owner?: BadRelationsOwner;
+    /** A subrecord the conventions do not know. */
     detail!: Note;
-    line!: ChildLine;
+    @Sublist('item') line!: ChildLine;
+    @Subrecord() tags!: Note[];
 }
 
 @RecordType('employee')

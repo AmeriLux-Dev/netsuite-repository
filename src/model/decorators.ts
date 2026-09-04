@@ -1,6 +1,6 @@
 import type { Discriminator, FieldType, JoinType, QueryField, RecordUpdaterOptions, RestRecordMetadata } from '../types';
 import { createClassOverrides, getOrCreatePropertyOverrides, mergeClassOverrides } from './metadata';
-import type { ClassOverrides, LineKey, ModelClassKind, PropertyOverrides, TypeTableOptions } from './metadata';
+import type { ClassOverrides, LineKey, PropertyOverrides, TypeTableOptions } from './metadata';
 
 export type ModelClass<T = unknown> = new (...args: never[]) => T;
 
@@ -14,29 +14,10 @@ export interface RecordTypeOptions {
     discriminator?: Discriminator;
     /** Type tables fields may read from with @Field({ table }). */
     tables?: Record<string, TypeTableOptions>;
-}
-
-export interface SublistOptions {
-    /** Line table when the conventions do not know it. */
-    table?: string;
-    /** Extra predicate on the join; `{alias}` stands for the line table alias. */
-    where?: string;
-    /** Column on the line table holding the parent's internal id. */
-    parentColumn?: string;
-    /** Column read and sublist field matched to identify a line. */
-    lineKey?: LineKey;
-}
-
-export interface SubrecordClassOptions {
-    /** Queryable table and its key column when the conventions do not know them. */
-    table?: string;
-    key?: string;
-}
-
-export interface SubrecordPropertyOptions extends SubrecordClassOptions {
-    /** List field cleared before the subrecord can be edited (for example 'shipaddresslist'). */
-    clearListField?: string;
-    join?: JoinType;
+    /** Default record updater options for every write on this record type. */
+    updater?: RecordUpdaterOptions;
+    /** REST record metadata used by the scaffold and by runtime field lookups outside the model. */
+    rest?: RestRecordMetadata;
 }
 
 export interface FieldOptions {
@@ -50,10 +31,33 @@ export interface FieldOptions {
     coerce?: boolean;
 }
 
-export interface ReferenceOptions {
+export interface RelationOptions {
+    /** Forces the join type. Sublists and subrecords join inner by default; references join left outer. */
     join?: JoinType;
+}
+
+export interface ReferenceOptions extends RelationOptions {
     /** Property on the referenced class to join on when it is not its internal id, for example a code column. */
     targetKey?: string;
+}
+
+export interface SubrecordOptions extends RelationOptions {
+    /** Queryable table and its key column when the conventions and the subrecord class do not know them. */
+    table?: string;
+    key?: string;
+    /** List field cleared before the subrecord can be edited (for example 'shipaddresslist'). */
+    clearListField?: string;
+}
+
+export interface SublistOptions extends RelationOptions {
+    /** Line table when the line class does not name it. */
+    table?: string;
+    /** Extra predicate on the join; `{alias}` stands for the line table alias. */
+    where?: string;
+    /** Column on the line table holding the parent's internal id. */
+    parentColumn?: string;
+    /** Column read and sublist field matched to identify a line. */
+    lineKey?: LineKey;
 }
 
 type ClassDecoratorFunction = (target: Function) => void;
@@ -84,76 +88,28 @@ function propertyDecorator(apply: (property: PropertyOverrides, overrides: Class
     };
 }
 
-function classDecorator(apply: (overrides: ClassOverrides) => void): ClassDecoratorFunction {
-    return (target) => apply(getOrCreateRegistration(target));
+/** Splits the `(id?, options?)` and `(options)` call shapes the relation decorators share. */
+function splitIdAndOptions<TOptions extends object>(first: string | TOptions | undefined, second: TOptions | undefined): { id: string | undefined; options: TOptions } {
+    return typeof first === 'string'
+        ? { id: first, options: second ?? ({} as TOptions) }
+        : { id: undefined, options: first ?? ({} as TOptions) };
 }
 
-// ── class decorators ──────────────────────────────────────────────────────────
+// ── class decorator ───────────────────────────────────────────────────────────
 
-/** A queryable record type. The class becomes a record set on the context. */
+/** A queryable record type. The class becomes a record set on the context; sublist line classes name the line table they read from. */
 export function RecordType(recordType: string, options: RecordTypeOptions = {}): ClassDecoratorFunction {
-    return classDecorator((overrides) => {
-        overrides.kind = 'recordType';
+    return (target) => {
+        const overrides = getOrCreateRegistration(target);
         overrides.recordType = recordType;
         overrides.table = options.table;
         overrides.setName = options.setName;
         overrides.coerce = options.coerce;
         overrides.discriminator = options.discriminator;
         overrides.typeTables = options.tables;
-    });
-}
-
-/** A sublist line class. An array property typed with it becomes the sublist on the parent record. */
-export function Sublist(sublistId: string, options: SublistOptions = {}): ClassDecoratorFunction {
-    return classDecorator((overrides) => {
-        overrides.kind = 'sublist';
-        overrides.sublistId = sublistId;
-        overrides.sublistTable = options.table;
-        overrides.sublistWhere = options.where;
-        overrides.parentColumn = options.parentColumn;
-        overrides.lineKey = options.lineKey;
-    });
-}
-
-/**
- * On a class: a subrecord class (optional; any undecorated class used as an object property is one).
- * On a property: the subrecord field id and table when they cannot come from the property name and the conventions.
- */
-export function Subrecord(options?: SubrecordClassOptions): ClassDecoratorFunction;
-export function Subrecord(fieldId: string, options?: SubrecordPropertyOptions): PropertyDecoratorFunction;
-export function Subrecord(options: SubrecordPropertyOptions): PropertyDecoratorFunction;
-export function Subrecord(first?: string | SubrecordPropertyOptions, second: SubrecordPropertyOptions = {}): ClassDecoratorFunction | PropertyDecoratorFunction {
-    const fieldId = typeof first === 'string' ? first : undefined;
-    const options = typeof first === 'string' ? second : first ?? {};
-    return (target: object, propertyKey?: string | symbol) => {
-        if (propertyKey === undefined) {
-            const overrides = getOrCreateRegistration(target as Function);
-            overrides.kind = 'subrecord';
-            overrides.subrecordTable = options.table;
-            overrides.subrecordKey = options.key;
-            return;
-        }
-        const overrides = getOrCreateRegistration(target.constructor);
-        const property = getOrCreatePropertyOverrides(overrides, toPropertyName(target, propertyKey));
-        if (fieldId !== undefined) property.subrecordFieldId = fieldId;
-        if (options.table !== undefined) property.subrecordTable = options.table;
-        if (options.key !== undefined) property.subrecordKey = options.key;
-        if (options.clearListField !== undefined) property.clearListField = options.clearListField;
-        if (options.join !== undefined) property.joinType = options.join;
+        overrides.updaterOptions = options.updater;
+        overrides.restRecordMetadata = options.rest;
     };
-}
-
-export function UpdaterOptions(options: RecordUpdaterOptions): ClassDecoratorFunction {
-    return classDecorator((overrides) => {
-        overrides.updaterOptions = options;
-    });
-}
-
-/** REST record metadata used by the scaffold and by runtime field lookups outside the model. */
-export function RestMetadata(metadata: RestRecordMetadata): ClassDecoratorFunction {
-    return classDecorator((overrides) => {
-        overrides.restRecordMetadata = metadata;
-    });
 }
 
 // ── property decorators ───────────────────────────────────────────────────────
@@ -168,9 +124,8 @@ export function InternalId(): PropertyDecoratorFunction {
 /** Renames the field or overrides the inferred type. Never required: by convention the field id is the lowercased property name. */
 export function Field(fieldId?: string, options?: FieldOptions): PropertyDecoratorFunction;
 export function Field(options: FieldOptions): PropertyDecoratorFunction;
-export function Field(first?: string | FieldOptions, second: FieldOptions = {}): PropertyDecoratorFunction {
-    const fieldId = typeof first === 'string' ? first : undefined;
-    const options = typeof first === 'string' ? second : first ?? {};
+export function Field(first?: string | FieldOptions, second?: FieldOptions): PropertyDecoratorFunction {
+    const { id: fieldId, options } = splitIdAndOptions(first, second);
     return propertyDecorator((property) => {
         if (fieldId !== undefined) property.fieldId = fieldId;
         if (options.column !== undefined) property.column = options.column;
@@ -181,13 +136,6 @@ export function Field(first?: string | FieldOptions, second: FieldOptions = {}):
     });
 }
 
-/** Forces the join type of a reference, subrecord, or sublist. Every relation joins left outer by default, so it never filters the parent (EF Include). */
-export function Join(joinType: JoinType): PropertyDecoratorFunction {
-    return propertyDecorator((property) => {
-        property.joinType = joinType;
-    });
-}
-
 /** Excludes the property from writes. */
 export function ReadOnly(): PropertyDecoratorFunction {
     return propertyDecorator((property) => {
@@ -195,12 +143,47 @@ export function ReadOnly(): PropertyDecoratorFunction {
     });
 }
 
-/** On a reference: names the property holding the referenced internal id when it is not `<reference>Id`. */
-export function Reference(selectFieldProperty?: string, options: ReferenceOptions = {}): PropertyDecoratorFunction {
+/** A reference to another record: names the property holding the referenced internal id when it is not `<reference>Id`. */
+export function Reference(selectFieldProperty?: string, options?: ReferenceOptions): PropertyDecoratorFunction;
+export function Reference(options: ReferenceOptions): PropertyDecoratorFunction;
+export function Reference(first?: string | ReferenceOptions, second?: ReferenceOptions): PropertyDecoratorFunction {
+    const { id: selectFieldProperty, options } = splitIdAndOptions(first, second);
     return propertyDecorator((property) => {
+        property.relationKind = 'reference';
         if (selectFieldProperty !== undefined) property.selectFieldProperty = selectFieldProperty;
         if (options.join !== undefined) property.joinType = options.join;
         if (options.targetKey !== undefined) property.targetKeyProperty = options.targetKey;
+    });
+}
+
+/** A subrecord: the field id when it is not the lowercased property name, and the table facts the conventions do not know. */
+export function Subrecord(fieldId?: string, options?: SubrecordOptions): PropertyDecoratorFunction;
+export function Subrecord(options: SubrecordOptions): PropertyDecoratorFunction;
+export function Subrecord(first?: string | SubrecordOptions, second?: SubrecordOptions): PropertyDecoratorFunction {
+    const { id: fieldId, options } = splitIdAndOptions(first, second);
+    return propertyDecorator((property) => {
+        property.relationKind = 'subrecord';
+        if (fieldId !== undefined) property.subrecordFieldId = fieldId;
+        if (options.table !== undefined) property.subrecordTable = options.table;
+        if (options.key !== undefined) property.subrecordKey = options.key;
+        if (options.clearListField !== undefined) property.clearListField = options.clearListField;
+        if (options.join !== undefined) property.joinType = options.join;
+    });
+}
+
+/** A sublist: the sublist id when it is not known from the line table, and the line table facts the conventions do not know. */
+export function Sublist(sublistId?: string, options?: SublistOptions): PropertyDecoratorFunction;
+export function Sublist(options: SublistOptions): PropertyDecoratorFunction;
+export function Sublist(first?: string | SublistOptions, second?: SublistOptions): PropertyDecoratorFunction {
+    const { id: sublistId, options } = splitIdAndOptions(first, second);
+    return propertyDecorator((property) => {
+        property.relationKind = 'sublist';
+        if (sublistId !== undefined) property.sublistId = sublistId;
+        if (options.table !== undefined) property.sublistTable = options.table;
+        if (options.where !== undefined) property.sublistWhere = options.where;
+        if (options.parentColumn !== undefined) property.parentColumn = options.parentColumn;
+        if (options.lineKey !== undefined) property.lineKey = options.lineKey;
+        if (options.join !== undefined) property.joinType = options.join;
     });
 }
 
@@ -264,12 +247,7 @@ export function isModelClass(value: unknown): value is ModelClass {
     return typeof value === 'function' && collectPrototypeChain(value).some((constructor) => registry.has(constructor));
 }
 
-/** The kind declared on the class or inherited from a base; undefined for plain classes. */
-export function getClassKind(modelClass: Function): ModelClassKind | undefined {
-    return getClassOverrides(modelClass).kind;
-}
-
 /** True only for classes carrying @RecordType somewhere in their prototype chain. */
 export function isRecordTypeClass(value: unknown): value is ModelClass {
-    return typeof value === 'function' && getClassKind(value) === 'recordType';
+    return typeof value === 'function' && getClassOverrides(value).recordType !== undefined;
 }

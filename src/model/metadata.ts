@@ -1,8 +1,5 @@
 import type { Discriminator, FieldType, JoinType, QueryField, RecordUpdaterOptions, RestRecordMetadata } from '../types';
 
-/** What a decorated class is: a queryable record type, a sublist line, or a subrecord. */
-export type ModelClassKind = 'recordType' | 'sublist' | 'subrecord';
-
 /** A table-per-type table that shares the record's internal id (for example `salesorder` next to `transaction`). */
 export interface TypeTableOptions {
     /** Column on both sides of the join; defaults to 'id'. */
@@ -14,6 +11,9 @@ export interface LineKey {
     column: string;
     field: string;
 }
+
+/** What a property typed as another class is: a reference joined through a select field, a subrecord, or a sublist. */
+export type RelationKind = 'reference' | 'subrecord' | 'sublist';
 
 /** Everything the decorators can say about one property. Every member is an override; the build step fills the rest by convention. */
 export interface PropertyOverrides {
@@ -32,12 +32,14 @@ export interface PropertyOverrides {
     setFirst?: boolean;
     selectByDefault?: boolean;
     transform?: QueryField['transform'];
+    /** Which relation decorator the property carries (@Reference, @Subrecord, @Sublist); the build step checks it against the declared type. */
+    relationKind?: RelationKind;
+    /** Reference, subrecord, or sublist: forces the join type. */
+    joinType?: JoinType;
     /** Reference: property holding the internal id of the referenced record. */
     selectFieldProperty?: string;
     /** Reference: property on the referenced class to join on when it is not its internal id (EF principal key). */
     targetKeyProperty?: string;
-    /** Reference, subrecord, or sublist: forces the join type. */
-    joinType?: JoinType;
     /** Subrecord: field id when it is not the lowercased property name. */
     subrecordFieldId?: string;
     /** Subrecord: queryable table and its key column when the conventions do not know them. */
@@ -45,11 +47,19 @@ export interface PropertyOverrides {
     subrecordKey?: string;
     /** Subrecord: list field cleared before the subrecord can be edited. */
     clearListField?: string;
+    /** Sublist: id when it is not known from the line table or the lowercased property name. */
+    sublistId?: string;
+    /** Sublist: line table when the line class does not name it. */
+    sublistTable?: string;
+    /** Sublist: extra predicate on the join; `{alias}` stands for the line table alias. */
+    sublistWhere?: string;
+    /** Sublist: column on the line table holding the parent's internal id. */
+    parentColumn?: string;
+    lineKey?: LineKey;
 }
 
-/** Everything the decorators can say about one class, merged along the prototype chain by getClassOverrides(). */
+/** Everything @RecordType can say about one class, merged along the prototype chain by getClassOverrides(). */
 export interface ClassOverrides {
-    kind?: ModelClassKind;
     recordType?: string;
     /** Base SuiteQL table; defaults from the conventions for the record type. */
     table?: string;
@@ -58,15 +68,6 @@ export interface ClassOverrides {
     discriminator?: Discriminator;
     /** Type tables fields may read from with @Field({ table }). */
     typeTables?: Record<string, TypeTableOptions>;
-    sublistId?: string;
-    sublistTable?: string;
-    /** Extra predicate on the sublist join; `{alias}` stands for the line table alias. */
-    sublistWhere?: string;
-    /** Column on the line table holding the parent's internal id. */
-    parentColumn?: string;
-    lineKey?: LineKey;
-    subrecordTable?: string;
-    subrecordKey?: string;
     keyProperty?: string;
     updaterOptions?: RecordUpdaterOptions;
     restRecordMetadata?: RestRecordMetadata;
