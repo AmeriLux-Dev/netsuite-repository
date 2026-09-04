@@ -11,21 +11,36 @@ export interface NetSuiteContextOptions {
     tracking?: boolean;
 }
 
-/** A schema maps entity set names to anything a model can be resolved from: raw configs, decorated classes, or fluent definitions. */
+/** A schema maps record set names to anything a model can be resolved from: raw configs or generated configs. */
 export type ContextSchema = Record<string, QueryConfigSource<any, any>>;
 
-export interface EntitySetOptions {
+export interface RecordSetOptions {
     /** Name used by the change tracker; defaults to the record type. */
     name?: string;
     changeTracker?: ChangeTracker;
 }
 
-export class EntitySet<TResult, TUpdate extends Record<string, unknown> = Partial<TResult> & Record<string, unknown>> {
+/**
+ * A reusable, composable query predicate (the EF specification pattern): a function that narrows a query.
+ * Repositories accept any number of them, so `db.salesOrders.list(forCustomer(12), open())` reads as a sentence.
+ */
+export type Specification<TResult> = (query: QueryBuilder<TResult>) => QueryBuilder<TResult>;
+
+export function applySpecifications<TResult>(builder: QueryBuilder<TResult>, specifications: Specification<TResult>[]): QueryBuilder<TResult> {
+    return specifications.reduce((current, specification) => specification(current), builder);
+}
+
+/**
+ * The record set of one record type on a context: the repository (EF DbSet). Reads go through `query()` or the
+ * specification methods, writes through change tracking (`add`, `remove`, mutate, then `context.saveChanges()`)
+ * or the explicit updater methods. Generated `<Model>RepositoryBase` classes extend it; subclass those for domain queries.
+ */
+export class RecordSet<TResult, TUpdate extends Record<string, unknown> = Partial<TResult> & Record<string, unknown>> {
     private readonly config: QueryConfig<TResult>;
     readonly name: string;
     readonly changeTracker: ChangeTracker;
 
-    constructor(source: QueryConfigSource<TResult>, options: EntitySetOptions = {}) {
+    constructor(source: QueryConfigSource<TResult>, options: RecordSetOptions = {}) {
         this.config = resolveQueryConfig(source);
         this.name = options.name ?? this.config.recordType;
         this.changeTracker = options.changeTracker ?? new ChangeTracker(() => this.config as QueryConfig<unknown>);
@@ -49,12 +64,26 @@ export class EntitySet<TResult, TUpdate extends Record<string, unknown> = Partia
         return this.query().asNoTracking();
     }
 
-    all(): TResult[] {
-        return this.query().executeTyped();
+    /** Every record matching the specifications; every record of the set when there are none. */
+    list(...specifications: Specification<TResult>[]): TResult[] {
+        return applySpecifications(this.query(), specifications).executeTyped();
     }
 
-    first(): TResult | null {
-        return this.query().firstTyped();
+    all(): TResult[] {
+        return this.list();
+    }
+
+    /** The first record matching the specifications. On a model with a sublist every matching row is read so the record comes back whole. */
+    first(...specifications: Specification<TResult>[]): TResult | null {
+        return this.firstRecord(applySpecifications(this.query(), specifications));
+    }
+
+    count(...specifications: Specification<TResult>[]): number {
+        return applySpecifications(this.query(), specifications).count();
+    }
+
+    exists(...specifications: Specification<TResult>[]): boolean {
+        return applySpecifications(this.query(), specifications).exists();
     }
 
     where(field: keyof TResult | string, operator: QueryOperator, value?: QueryParamValue | QueryParamValue[]): QueryBuilder<TResult> {
@@ -67,7 +96,17 @@ export class EntitySet<TResult, TUpdate extends Record<string, unknown> = Partia
         if (tracked) {
             return tracked;
         }
-        return this.query().where(this.getPrimaryFieldKey(), '=', id).firstTyped();
+        return this.firstRecord(this.query().where(this.getPrimaryFieldKey(), '=', id));
+    }
+
+    /** A one-row SQL limit would cut a record with a sublist down to its first line, so those models read every row and keep the first record. */
+    private firstRecord(builder: QueryBuilder<TResult>): TResult | null {
+        return this.hasSublist() ? builder.executeTyped()[0] ?? null : builder.firstTyped();
+    }
+
+    private hasSublist(): boolean {
+        return Object.values(this.config.relationships ?? {}).some((relationship) => relationship.kind === 'sublist')
+            || Object.values(this.config.fields).some((field) => field.cardinality === 'many');
     }
 
     /** Starts tracking an existing entity as Unchanged. */
@@ -129,9 +168,32 @@ export class EntitySet<TResult, TUpdate extends Record<string, unknown> = Partia
     }
 }
 
-export type EntitySets<TSchema extends ContextSchema> = {
-    readonly [K in keyof TSchema]: EntitySet<QueryConfigSourceResult<TSchema[K]>>;
+/** A record set class the context can construct in place of the plain RecordSet: a generated base or a subclass of one. */
+export type RecordSetConstructor<TResult> = new (source: QueryConfigSource<TResult>, options?: RecordSetOptions) => RecordSet<TResult, any>;
+
+/** Repository classes per set name; any set left out is a plain RecordSet. */
+export type RepositoryMap<TSchema extends ContextSchema> = {
+    readonly [K in keyof TSchema]?: RecordSetConstructor<QueryConfigSourceResult<TSchema[K]>>;
 };
+
+/** Overrides layered over generated defaults: a registered subclass wins, every other set keeps its generated base. */
+export type MergeRepositories<TDefaults, TOverrides> = Omit<TDefaults, keyof TOverrides> & TOverrides;
+
+type ResolvedRecordSet<TSchema extends ContextSchema, TRepositories, K extends keyof TSchema> =
+    K extends keyof TRepositories
+        ? NonNullable<TRepositories[K]> extends new (...args: any[]) => infer TInstance
+            ? TInstance
+            : RecordSet<QueryConfigSourceResult<TSchema[K]>>
+        : RecordSet<QueryConfigSourceResult<TSchema[K]>>;
+
+export type RecordSets<TSchema extends ContextSchema, TRepositories extends RepositoryMap<TSchema> = {}> = {
+    readonly [K in keyof TSchema]: ResolvedRecordSet<TSchema, TRepositories, K>;
+};
+
+export interface ContextFactoryOptions<TRepositories> extends NetSuiteContextOptions {
+    /** Repository classes to construct for the named sets, typed so the context exposes the subclass. */
+    repositories?: TRepositories;
+}
 
 export interface SaveChangesOptions {
     /** Skip the remaining entities after the first failure. Defaults to true. */
@@ -163,30 +225,28 @@ export interface PlannedChange extends ChangeSetEntry {
 
 const saveOrder: EntityState[] = [EntityState.Added, EntityState.Modified, EntityState.Deleted];
 
-export class NetSuiteContext<TSchema extends ContextSchema> {
-    readonly entities: EntitySets<TSchema>;
+/** The unit of work (EF DbContext): one record set per schema entry, one change tracker, saveChanges(). */
+export class NetSuiteContext<TSchema extends ContextSchema, TRepositories extends RepositoryMap<TSchema> = {}> {
+    readonly entities: RecordSets<TSchema, TRepositories>;
     readonly options: NetSuiteContextOptions;
     readonly changeTracker: ChangeTracker;
 
-    constructor(private readonly schema: TSchema, options: NetSuiteContextOptions = {}) {
-        this.options = { tracking: true, ...options };
-        this.changeTracker = new ChangeTracker((setName) => this.set(setName as keyof TSchema & string).metadata as QueryConfig<unknown>, this.options.tracking !== false);
-        this.entities = this.createEntitySets(schema);
+    constructor(private readonly schema: TSchema, options: ContextFactoryOptions<TRepositories> = {}) {
+        const { repositories, ...contextOptions } = options;
+        this.options = { tracking: true, ...contextOptions };
+        this.changeTracker = new ChangeTracker((setName) => this.recordSet(setName).metadata as QueryConfig<unknown>, this.options.tracking !== false);
+        this.entities = this.createRecordSets(schema, repositories);
     }
 
-    set<K extends keyof TSchema & string>(name: K): EntitySet<QueryConfigSourceResult<TSchema[K]>> {
-        const entitySet = this.entities[name];
-        if (!entitySet) {
-            throw new Error(`Entity '${name}' is not registered in this NetSuiteContext.`);
-        }
-        return entitySet;
+    set<K extends keyof TSchema & string>(name: K): RecordSets<TSchema, TRepositories>[K] {
+        return this.recordSet(name) as RecordSets<TSchema, TRepositories>[K];
     }
 
     has(name: string): boolean {
         return Object.prototype.hasOwnProperty.call(this.schema, name);
     }
 
-    /** Returns the schema entry as registered: a raw config, a decorated class, or a fluent definition. */
+    /** Returns the schema entry as registered: a raw config or a generated config. */
     getConfig<K extends keyof TSchema & string>(name: K): TSchema[K] {
         const config = this.schema[name];
         if (!config) {
@@ -196,7 +256,7 @@ export class NetSuiteContext<TSchema extends ContextSchema> {
     }
 
     attach<K extends keyof TSchema & string>(setName: K, entity: QueryConfigSourceResult<TSchema[K]> & object): EntityEntry<QueryConfigSourceResult<TSchema[K]> & object> {
-        return this.set(setName).attach(entity);
+        return this.recordSet(setName).attach(entity) as EntityEntry<QueryConfigSourceResult<TSchema[K]> & object>;
     }
 
     entry<T extends object>(entity: T): EntityEntry<T> | undefined {
@@ -244,6 +304,15 @@ export class NetSuiteContext<TSchema extends ContextSchema> {
         return { success: !failed, savedCount, failedCount: results.length - savedCount - skippedCount, skippedCount, results };
     }
 
+    /** The set by name, untyped, for the tracker and the save loop. */
+    private recordSet(name: string): RecordSet<unknown> {
+        const recordSet = (this.entities as unknown as Record<string, RecordSet<unknown> | undefined>)[name];
+        if (!recordSet) {
+            throw new Error(`Entity '${name}' is not registered in this NetSuiteContext.`);
+        }
+        return recordSet;
+    }
+
     private orderedChanges(): ChangeSet {
         const changeSet = this.changeTracker.detectChanges();
         const entries = saveOrder.flatMap((state) => changeSet.entries.filter((entry) => entry.state === state));
@@ -251,7 +320,7 @@ export class NetSuiteContext<TSchema extends ContextSchema> {
     }
 
     private buildUpdater(entry: ChangeSetEntry): RecordUpdater<unknown, Record<string, unknown>> | undefined {
-        const config = this.set(entry.setName as keyof TSchema & string).metadata as QueryConfig<unknown>;
+        const config = this.recordSet(entry.setName).metadata as QueryConfig<unknown>;
         if (entry.state === EntityState.Added) {
             return createRecord<unknown, Record<string, unknown>>(config).patch(entry.patch ?? {});
         }
@@ -266,7 +335,7 @@ export class NetSuiteContext<TSchema extends ContextSchema> {
             if (entry.key === undefined) {
                 return { success: false, error: 'Cannot delete an entity without a key value.' };
             }
-            const deleted = deleteRecord(this.set(entry.setName as keyof TSchema & string).metadata, entry.key);
+            const deleted = deleteRecord(this.recordSet(entry.setName).metadata, entry.key);
             return { success: deleted.success, id: deleted.id, error: deleted.error };
         }
         if (entry.state === EntityState.Modified && entry.key === undefined) {
@@ -275,22 +344,25 @@ export class NetSuiteContext<TSchema extends ContextSchema> {
         return (this.buildUpdater(entry) as RecordUpdater<unknown, Record<string, unknown>>).submit();
     }
 
-    private createEntitySets(schema: TSchema): EntitySets<TSchema> {
-        const sets: Partial<EntitySets<TSchema>> = {};
+    private createRecordSets(schema: TSchema, repositories: TRepositories | undefined): RecordSets<TSchema, TRepositories> {
+        const sets: Record<string, RecordSet<unknown>> = {};
+        const constructors = (repositories ?? {}) as Record<string, RecordSetConstructor<unknown> | undefined>;
         for (const [name, source] of Object.entries(schema)) {
-            sets[name as keyof TSchema] = new EntitySet(source, { name, changeTracker: this.changeTracker }) as EntitySets<TSchema>[keyof TSchema];
+            const Repository = constructors[name] ?? RecordSet;
+            sets[name] = new Repository(source, { name, changeTracker: this.changeTracker });
         }
-        return sets as EntitySets<TSchema>;
+        return sets as unknown as RecordSets<TSchema, TRepositories>;
     }
 }
 
-export type NetSuiteContextInstance<TSchema extends ContextSchema> = NetSuiteContext<TSchema> & EntitySets<TSchema>;
+export type NetSuiteContextInstance<TSchema extends ContextSchema, TRepositories extends RepositoryMap<TSchema> = {}> = NetSuiteContext<TSchema, TRepositories> & RecordSets<TSchema, TRepositories>;
 
-export function createNetSuiteContext<TSchema extends ContextSchema>(schema: TSchema, options?: NetSuiteContextOptions): NetSuiteContextInstance<TSchema> {
-    const context = new NetSuiteContext(schema, options) as NetSuiteContextInstance<TSchema>;
-    for (const [name, entitySet] of Object.entries(context.entities)) {
+/** Builds a context whose record sets are also properties (`db.salesOrders`); `repositories` swaps in subclasses per set. */
+export function createNetSuiteContext<TSchema extends ContextSchema, TRepositories extends RepositoryMap<TSchema> = {}>(schema: TSchema, options?: ContextFactoryOptions<TRepositories>): NetSuiteContextInstance<TSchema, TRepositories> {
+    const context = new NetSuiteContext<TSchema, TRepositories>(schema, options) as NetSuiteContextInstance<TSchema, TRepositories>;
+    for (const [name, recordSet] of Object.entries(context.entities)) {
         Object.defineProperty(context, name, {
-            value: entitySet,
+            value: recordSet,
             enumerable: true,
             configurable: false,
             writable: false,

@@ -182,9 +182,9 @@ describe('NetSuiteContext.planChanges() and tracking options', () => {
         expect(db.salesOrders.attach(order).entity).toBe(order);
     });
 
-    it('gives a standalone EntitySet its own tracker', () => {
-        const { EntitySet } = jest.requireActual<typeof import('../context')>('../context');
-        const salesOrders = new EntitySet(salesOrderModelConfig);
+    it('gives a standalone RecordSet its own tracker', () => {
+        const { RecordSet } = jest.requireActual<typeof import('../context')>('../context');
+        const salesOrders = new RecordSet(salesOrderModelConfig);
         const order = salesOrders.find(1) as SalesOrderModel;
         expect(salesOrders.name).toBe('salesorder');
         expect(salesOrders.entry(order)?.state).toBe(EntityState.Unchanged);

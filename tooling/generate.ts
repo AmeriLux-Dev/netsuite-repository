@@ -12,6 +12,7 @@ import type { BuildConfig } from './config';
 import { emitConfigFile } from './emit/config-file-emitter';
 import type { FunctionImport } from './emit/config-file-emitter';
 import { emitContextFile } from './emit/context-file-emitter';
+import { emitRepositoryFile } from './emit/repository-file-emitter';
 import { emitTypeFile } from './emit/type-file-emitter';
 import type { TypeFileMember } from './emit/type-file-emitter';
 import { resolveGlobs, toPosixPath } from './file-system';
@@ -39,7 +40,7 @@ export interface GeneratedModelSummary {
 
 export interface GenerationPlan {
     files: PlannedFile[];
-    /** Record types, which own a config and a record set. Sublist, subrecord, and base classes only get a type file. */
+    /** Record types, which own a config, a base repository, and a record set. Plain classes only get a type file. */
     models: GeneratedModelSummary[];
     diagnostics: ModelFileDiagnostic[];
 }
@@ -54,7 +55,7 @@ export interface CheckResult extends GenerationPlan {
     missingFiles: string[];
 }
 
-export function toEntitySetName(modelName: string): string {
+export function toRecordSetName(modelName: string): string {
     const camel = modelName.charAt(0).toLowerCase() + modelName.slice(1);
     if (/[^aeiou]y$/i.test(camel)) return `${camel.slice(0, -1)}ies`;
     if (/(s|x|z|ch|sh)$/i.test(camel)) return `${camel}es`;
@@ -193,12 +194,22 @@ export function planGeneration(options: GenerateOptions): GenerationPlan {
                     version: options.version,
                 }),
             });
+            files.push({
+                path: nodePath.join(outDir, `${model.className}.repository.gen.ts`),
+                content: emitRepositoryFile({
+                    modelName: model.className,
+                    libraryModule: config.libraryModule,
+                    configImportPath: `./${model.className}.config.gen`,
+                    typesImportPath: `./${model.className}.types.gen`,
+                    version: options.version,
+                }),
+            });
         } catch (error) {
             diagnostics.push({ filePath: model.filePath, exportName: model.exportName, message: error instanceof Error ? error.message : String(error) });
             continue;
         }
 
-        models.push({ modelName: model.className, setName: model.setName ?? toEntitySetName(model.className), filePath: model.filePath });
+        models.push({ modelName: model.className, setName: model.setName ?? toRecordSetName(model.className), filePath: model.filePath });
     }
 
     if (models.length > 0) {
@@ -208,7 +219,7 @@ export function planGeneration(options: GenerateOptions): GenerationPlan {
                 contextName: config.context.name,
                 libraryModule: config.libraryModule,
                 version: options.version,
-                models: models.map((model) => ({ modelName: model.modelName, setName: model.setName, configImportPath: `./${model.modelName}.config.gen` })),
+                models: models.map((model) => ({ modelName: model.modelName, setName: model.setName, configImportPath: `./${model.modelName}.config.gen`, repositoryImportPath: `./${model.modelName}.repository.gen` })),
             }),
         });
     }

@@ -5,7 +5,7 @@ import * as ts from 'typescript';
 import { defaultBuildConfig } from '../config';
 import type { BuildConfig } from '../config';
 import { createNodeFileSystemAdapter, toPosixPath } from '../file-system';
-import { checkGenerated, planGeneration, runGenerate, toEntitySetName } from '../generate';
+import { checkGenerated, planGeneration, runGenerate, toRecordSetName } from '../generate';
 import { createModelTypeProgram, readCompilerOptionsFromTsconfig, readDeclaredClass } from '../collect/property-type-reader';
 
 const repositoryRoot = nodePath.resolve(__dirname, '..', '..');
@@ -32,13 +32,13 @@ afterAll(() => {
     }
 });
 
-describe('toEntitySetName()', () => {
+describe('toRecordSetName()', () => {
     it('camel-cases and pluralizes model names', () => {
-        expect(toEntitySetName('SalesOrder')).toBe('salesOrders');
-        expect(toEntitySetName('Category')).toBe('categories');
-        expect(toEntitySetName('Day')).toBe('days');
-        expect(toEntitySetName('Address')).toBe('addresses');
-        expect(toEntitySetName('Box')).toBe('boxes');
+        expect(toRecordSetName('SalesOrder')).toBe('salesOrders');
+        expect(toRecordSetName('Category')).toBe('categories');
+        expect(toRecordSetName('Day')).toBe('days');
+        expect(toRecordSetName('Address')).toBe('addresses');
+        expect(toRecordSetName('Box')).toBe('boxes');
     });
 });
 
@@ -64,11 +64,11 @@ describe('planGeneration() – convention-mapped fixtures', () => {
             expect.objectContaining({ modelName: 'TransactionLine', setName: 'transactionLines' }),
         ]);
         expect(Array.from(fileByName.keys()).sort()).toEqual([
-            'Customer.config.gen.ts', 'Customer.types.gen.ts',
-            'InventoryItem.config.gen.ts', 'InventoryItem.types.gen.ts',
-            'SalesOrder.config.gen.ts', 'SalesOrder.types.gen.ts',
+            'Customer.config.gen.ts', 'Customer.repository.gen.ts', 'Customer.types.gen.ts',
+            'InventoryItem.config.gen.ts', 'InventoryItem.repository.gen.ts', 'InventoryItem.types.gen.ts',
+            'SalesOrder.config.gen.ts', 'SalesOrder.repository.gen.ts', 'SalesOrder.types.gen.ts',
             'Transaction.types.gen.ts', 'TransactionAddress.types.gen.ts',
-            'TransactionLine.config.gen.ts', 'TransactionLine.types.gen.ts',
+            'TransactionLine.config.gen.ts', 'TransactionLine.repository.gen.ts', 'TransactionLine.types.gen.ts',
             'context.gen.ts',
         ]);
     });
@@ -182,7 +182,25 @@ describe('planGeneration() – convention-mapped fixtures', () => {
     it('emits the context wiring every record type', () => {
         const context = fileByName.get('context.gen.ts') as string;
         expect(context).toContain('export const AppSchema = {\n    customers: CustomerConfig,\n    inventoryItems: InventoryItemConfig,\n    salesOrders: SalesOrderConfig,\n    transactionLines: TransactionLineConfig,\n};');
-        expect(context).toContain('export function createAppContext(');
+        expect(context).toContain('export const AppRepositories = {\n    customers: CustomerRepositoryBase,\n    inventoryItems: InventoryItemRepositoryBase,\n    salesOrders: SalesOrderRepositoryBase,\n    transactionLines: TransactionLineRepositoryBase,\n};');
+        expect(context).toContain('export type AppContext<TRepositories extends AppRepositoryMap = {}> = NetSuiteContextInstance<typeof AppSchema, MergeRepositories<typeof AppRepositories, TRepositories>>;');
+        expect(context).toContain('export function createAppContext<TRepositories extends AppRepositoryMap = {}>(options: ContextFactoryOptions<TRepositories> = {}): AppContext<TRepositories> {');
+    });
+
+    it('emits a base repository per record type, bound to its config', () => {
+        expect(fileByName.get('SalesOrder.repository.gen.ts')).toContain([
+            "import { RecordSet } from '@amerilux/netsuite-repository';",
+            "import type { QueryConfigSource, RecordSetOptions } from '@amerilux/netsuite-repository';",
+            "import { SalesOrderConfig } from './SalesOrder.config.gen';",
+            "import type { SalesOrder } from './SalesOrder.types.gen';",
+            '',
+            'export class SalesOrderRepositoryBase extends RecordSet<SalesOrder> {',
+            '    constructor(source: QueryConfigSource<SalesOrder> = SalesOrderConfig, options?: RecordSetOptions) {',
+            '        super(source, options);',
+            '    }',
+            '}',
+        ].join('\n'));
+        expect(fileByName.has('Transaction.repository.gen.ts')).toBe(false);
     });
 });
 
@@ -193,13 +211,13 @@ describe('runGenerate() and checkGenerated()', () => {
 
     it('writes every file once and reports them unchanged on the second run', () => {
         const first = runGenerate(options);
-        expect(first.writtenFiles).toHaveLength(11);
+        expect(first.writtenFiles).toHaveLength(15);
         expect(first.unchangedFiles).toEqual([]);
         expect(nodeFileSystem.existsSync(nodePath.join(outDir, 'SalesOrder.config.gen.ts'))).toBe(true);
 
         const second = runGenerate(options);
         expect(second.writtenFiles).toEqual([]);
-        expect(second.unchangedFiles).toHaveLength(11);
+        expect(second.unchangedFiles).toHaveLength(15);
     });
 
     it('detects drift and missing files without writing', () => {

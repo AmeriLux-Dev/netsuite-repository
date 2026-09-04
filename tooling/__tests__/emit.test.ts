@@ -170,15 +170,18 @@ describe('emitContextFile()', () => {
             libraryModule: '@acme/orm',
             version: '1.0.0',
             models: [
-                { modelName: 'SalesOrder', setName: 'salesOrders', configImportPath: './SalesOrder.config.gen' },
-                { modelName: 'Customer', setName: 'customers', configImportPath: './Customer.config.gen' },
+                { modelName: 'SalesOrder', setName: 'salesOrders', configImportPath: './SalesOrder.config.gen', repositoryImportPath: './SalesOrder.repository.gen' },
+                { modelName: 'Customer', setName: 'customers', configImportPath: './Customer.config.gen', repositoryImportPath: './Customer.repository.gen' },
             ],
         });
 
         expect(output).toContain("import { createNetSuiteContext } from '@acme/orm';");
         expect(output).toContain("import { CustomerConfig } from './Customer.config.gen';\nimport { SalesOrderConfig } from './SalesOrder.config.gen';");
         expect(output).toContain('export const AppSchema = {\n    customers: CustomerConfig,\n    salesOrders: SalesOrderConfig,\n};');
-        expect(output).toContain('export type AppContext = NetSuiteContextInstance<typeof AppSchema>;');
-        expect(output).toContain('export function createAppContext(options?: NetSuiteContextOptions): AppContext {\n    return createNetSuiteContext(AppSchema, options);\n}');
+        expect(output).toContain("import { CustomerRepositoryBase } from './Customer.repository.gen';\nimport { SalesOrderRepositoryBase } from './SalesOrder.repository.gen';");
+        expect(output).toContain('export const AppRepositories = {\n    customers: CustomerRepositoryBase,\n    salesOrders: SalesOrderRepositoryBase,\n};');
+        expect(output).toContain('export type AppRepositoryMap = RepositoryMap<typeof AppSchema>;');
+        expect(output).toContain('export type AppContext<TRepositories extends AppRepositoryMap = {}> = NetSuiteContextInstance<typeof AppSchema, MergeRepositories<typeof AppRepositories, TRepositories>>;');
+        expect(output).toContain('export function createAppContext<TRepositories extends AppRepositoryMap = {}>(options: ContextFactoryOptions<TRepositories> = {}): AppContext<TRepositories> {\n    return createNetSuiteContext(AppSchema, { ...options, repositories: { ...AppRepositories, ...options.repositories } }) as unknown as AppContext<TRepositories>;\n}');
     });
 });

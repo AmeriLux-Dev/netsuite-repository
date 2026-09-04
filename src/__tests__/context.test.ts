@@ -1,4 +1,4 @@
-import { EntitySet, NetSuiteContext, createNetSuiteContext } from '../context';
+import { RecordSet, NetSuiteContext, createNetSuiteContext } from '../context';
 import { RecordUpdater } from '../record-updater';
 import { QueryBuilder } from '../query';
 import { customerConfig, salesOrderConfig } from './fixtures';
@@ -17,97 +17,97 @@ beforeEach(() => {
     jest.clearAllMocks();
 });
 
-// ── EntitySet ─────────────────────────────────────────────────────────────────
+// ── RecordSet ─────────────────────────────────────────────────────────────────
 
-describe('EntitySet.recordType', () => {
+describe('RecordSet.recordType', () => {
     it('returns the config record type', () => {
-        const set = new EntitySet(customerConfig);
+        const set = new RecordSet(customerConfig);
         expect(set.recordType).toBe('customer');
     });
 });
 
-describe('EntitySet.metadata', () => {
+describe('RecordSet.metadata', () => {
     it('returns the normalized query config', () => {
-        const set = new EntitySet(customerConfig);
+        const set = new RecordSet(customerConfig);
         expect(set.metadata.recordType).toBe('customer');
         expect(set.metadata.fields).toBeDefined();
     });
 });
 
-describe('EntitySet.query()', () => {
+describe('RecordSet.query()', () => {
     it('returns a QueryBuilder', () => {
-        expect(new EntitySet(customerConfig).query()).toBeInstanceOf(QueryBuilder);
+        expect(new RecordSet(customerConfig).query()).toBeInstanceOf(QueryBuilder);
     });
 });
 
-describe('EntitySet.all()', () => {
+describe('RecordSet.all()', () => {
     it('returns all typed results', () => {
         mockRows([{ id: 1, name: 'Acme', email: '', isactive: false, score: 0 }]);
-        const result = new EntitySet(customerConfig).all();
+        const result = new RecordSet(customerConfig).all();
         expect(result[0].name).toBe('Acme');
     });
 });
 
-describe('EntitySet.first()', () => {
+describe('RecordSet.first()', () => {
     it('returns first typed result', () => {
         mockRows([{ id: 2, name: 'Beta', email: '', isactive: false, score: 0 }]);
-        const result = new EntitySet(customerConfig).first();
+        const result = new RecordSet(customerConfig).first();
         expect(result?.name).toBe('Beta');
     });
 
     it('returns null when no results', () => {
         mockRows([]);
-        expect(new EntitySet(customerConfig).first()).toBeNull();
+        expect(new RecordSet(customerConfig).first()).toBeNull();
     });
 });
 
-describe('EntitySet.where()', () => {
+describe('RecordSet.where()', () => {
     it('returns a QueryBuilder with condition applied', () => {
-        const builder = new EntitySet(customerConfig).where('id', '=', 1);
+        const builder = new RecordSet(customerConfig).where('id', '=', 1);
         expect(builder).toBeInstanceOf(QueryBuilder);
         const { sql } = builder.build();
         expect(sql).toContain('WHERE');
     });
 });
 
-describe('EntitySet.find()', () => {
+describe('RecordSet.find()', () => {
     it('finds a record by primary key', () => {
         mockRows([{ id: 5, name: 'Found', email: '', isactive: false, score: 0 }]);
-        const result = new EntitySet(customerConfig).find(5);
+        const result = new RecordSet(customerConfig).find(5);
         expect(result?.name).toBe('Found');
     });
 
     it('returns null when not found', () => {
         mockRows([]);
-        expect(new EntitySet(customerConfig).find(999)).toBeNull();
+        expect(new RecordSet(customerConfig).find(999)).toBeNull();
     });
 
     it('throws when no primary field is configured', () => {
         const cfg = { ...customerConfig, fields: { name: customerConfig.fields.name } };
-        expect(() => new EntitySet(cfg).find(1)).toThrow("No primary field");
+        expect(() => new RecordSet(cfg).find(1)).toThrow("No primary field");
     });
 });
 
-describe('EntitySet.update()', () => {
+describe('RecordSet.update()', () => {
     it('returns a RecordUpdater for the given ID', () => {
-        const updater = new EntitySet(customerConfig).update(1);
+        const updater = new RecordSet(customerConfig).update(1);
         expect(updater).toBeInstanceOf(RecordUpdater);
     });
 });
 
-describe('EntitySet.submit()', () => {
+describe('RecordSet.submit()', () => {
     it('submits a patch and returns the result', () => {
         mockSubmitFields.mockReturnValue(1);
-        const result = new EntitySet(customerConfig).submit(1, { name: 'Acme' });
+        const result = new RecordSet(customerConfig).submit(1, { name: 'Acme' });
         expect(result.success).toBe(true);
         expect(mockSubmitFields).toHaveBeenCalled();
     });
 });
 
-describe('EntitySet.submitPatch()', () => {
+describe('RecordSet.submitPatch()', () => {
     it('submits a graph patch and returns the result', () => {
         mockSubmitFields.mockReturnValue(1);
-        const result = new EntitySet(customerConfig).submitPatch(1, { name: 'Acme' });
+        const result = new RecordSet(customerConfig).submitPatch(1, { name: 'Acme' });
         expect(result.success).toBe(true);
     });
 });
@@ -117,17 +117,17 @@ describe('EntitySet.submitPatch()', () => {
 const schema = { customers: customerConfig, orders: salesOrderConfig };
 
 describe('NetSuiteContext.entities', () => {
-    it('exposes EntitySet instances for each schema key', () => {
+    it('exposes RecordSet instances for each schema key', () => {
         const ctx = new NetSuiteContext(schema);
-        expect(ctx.entities.customers).toBeInstanceOf(EntitySet);
-        expect(ctx.entities.orders).toBeInstanceOf(EntitySet);
+        expect(ctx.entities.customers).toBeInstanceOf(RecordSet);
+        expect(ctx.entities.orders).toBeInstanceOf(RecordSet);
     });
 });
 
 describe('NetSuiteContext.set()', () => {
-    it('returns the correct EntitySet by name', () => {
+    it('returns the correct RecordSet by name', () => {
         const ctx = new NetSuiteContext(schema);
-        expect(ctx.set('customers')).toBeInstanceOf(EntitySet);
+        expect(ctx.set('customers')).toBeInstanceOf(RecordSet);
         expect(ctx.set('customers').recordType).toBe('customer');
     });
 
@@ -166,8 +166,8 @@ describe('NetSuiteContext.getConfig()', () => {
 describe('createNetSuiteContext()', () => {
     it('returns a context with entity properties directly accessible', () => {
         const ctx = createNetSuiteContext(schema);
-        expect((ctx as any).customers).toBeInstanceOf(EntitySet);
-        expect((ctx as any).orders).toBeInstanceOf(EntitySet);
+        expect((ctx as any).customers).toBeInstanceOf(RecordSet);
+        expect((ctx as any).orders).toBeInstanceOf(RecordSet);
     });
 
     it('entity properties are non-writable', () => {

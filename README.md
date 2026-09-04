@@ -170,7 +170,8 @@ It writes:
 
 - `generated/<Class>.types.gen.ts` for every exported class: one interface, extending the base class's interface, importing the referenced ones. Record types also get `<Class>Patch` and `<Class>Create`.
 - `generated/<RecordType>.config.gen.ts` with `<RecordType>Config: QueryConfig<...>`, a plain object literal. Sublist line classes are record types, so they get one too.
-- `generated/context.gen.ts` with `AppSchema`, the `AppContext` type, and `createAppContext()`.
+- `generated/<RecordType>.repository.gen.ts` with `<RecordType>RepositoryBase`, a `RecordSet` bound to the config, for you to extend with domain queries.
+- `generated/context.gen.ts` with `AppSchema`, `AppRepositories`, the `AppContext` type, and `createAppContext({ repositories? })`.
 
 The build step reads the classes with the TypeScript type checker, so it sees every property, its declared type, `Pick` projections, and inheritance. Model files are also evaluated in a sandbox to collect the decorators; they may import the library and other model files by relative path, and nothing else. Anything that cannot be mapped is reported with the file, class, and property.
 
@@ -233,6 +234,37 @@ db.salesOrders.delete(9876);
 Entities returned by `find()`, `executeTyped()`, `all()`, and `first()` are tracked. `saveChanges()` diffs each one against its snapshot and writes the difference through the record updater: body-only changes use `submitFields`, and anything touching a subrecord or sublist loads, mutates, and saves. Lines are matched by their line key. Added entities get their new id written back. `planChanges()` shows what would happen without calling NetSuite. Changes to a referenced record's fields are reported as ignored, never written.
 
 Use `asNoTracking()` for reporting reads, and `{ tracking: false }` on `createAppContext()` for contexts that never write. Contexts hold tracked entities strongly, so create one per script execution.
+
+## Repositories
+
+The record set on the context is the repository, the way a DbSet is in Entity Framework, and the context is the unit of work. The build step emits a base repository per record type. Extend it when a record type needs domain queries, and register the subclass when the context is created:
+
+```ts
+// repositories/SalesOrderRepository.ts
+import type { Specification } from '@amerilux/netsuite-repository';
+import { SalesOrderRepositoryBase } from '../models/generated/SalesOrder.repository.gen';
+import type { SalesOrder } from '../models/generated/SalesOrder.types.gen';
+
+export const forCustomer = (customerId: number): Specification<SalesOrder> => (query) => query.where('customerId', '=', customerId);
+export const pendingFulfillment = (): Specification<SalesOrder> => (query) => query.where('status', '=', 'SalesOrd:B');
+
+export class SalesOrderRepository extends SalesOrderRepositoryBase {
+    listPending(customerId: number): SalesOrder[] {
+        return this.list(forCustomer(customerId), pendingFulfillment(), (query) => query.orderByAsc('tranDate'));
+    }
+}
+
+// wherever the context is created
+const db = createAppContext({ repositories: { salesOrders: SalesOrderRepository } });
+db.salesOrders.listPending(12);      // typed as SalesOrderRepository
+db.customers.find(12);               // every other set is its generated base
+db.saveChanges();                    // the unit of work is unchanged
+```
+
+- A specification is a function over the query builder. `list`, `first`, `count`, and `exists` take any number of them and apply them in order, so predicates are reusable and testable through `toSQL()` without a context.
+- `first()` limits the SQL to one row. On a model with a sublist use `list(...)[0]`, so every line row comes back.
+- A registered repository is constructed by the context with the context's change tracker, so the entities it returns are tracked and `saveChanges()` writes them.
+- Repositories are plain classes with no Node dependencies. They bundle into SuiteScript like the rest of the runtime; only the build step runs in Node.
 
 ## Queries
 

@@ -1,4 +1,4 @@
-import { EntitySet, NetSuiteContext, createNetSuiteContext } from '../context';
+import { RecordSet, NetSuiteContext, createNetSuiteContext } from '../context';
 import { repository } from '../index';
 import * as NsRecord from 'N/record';
 import * as NsQuery from 'N/query';
@@ -15,18 +15,18 @@ beforeEach(() => {
     jest.clearAllMocks();
 });
 
-describe('EntitySet – config sources', () => {
+describe('RecordSet – config sources', () => {
     it('accepts a generated config and a sectioned hand-written config', () => {
-        expect(new EntitySet(salesOrderModelConfig).metadata.query.joins).toHaveLength(3);
-        expect(new EntitySet(vendorModelConfig).metadata.recordType).toBe('vendor');
-        expect(new EntitySet(customerConfig).recordType).toBe('customer');
+        expect(new RecordSet(salesOrderModelConfig).metadata.query.joins).toHaveLength(3);
+        expect(new RecordSet(vendorModelConfig).metadata.recordType).toBe('vendor');
+        expect(new RecordSet(customerConfig).recordType).toBe('customer');
     });
 
     it('creates and deletes records through the set', () => {
         const mockRecord = createMockRecord({ id: 77, save: jest.fn().mockReturnValue(77) });
         mockCreate.mockReturnValue(mockRecord);
         mockDelete.mockReturnValue(77);
-        const vendors = new EntitySet<VendorModel>(vendorModelConfig);
+        const vendors = new RecordSet<VendorModel>(vendorModelConfig);
 
         const created = vendors.createRecord({ companyName: 'Acme' }, { enableSourcing: true });
         const staged = vendors.create();
@@ -42,7 +42,7 @@ describe('EntitySet – config sources', () => {
     it('creates without options', () => {
         const mockRecord = createMockRecord({ id: 78, save: jest.fn().mockReturnValue(78) });
         mockCreate.mockReturnValue(mockRecord);
-        expect(new EntitySet<VendorModel>(vendorModelConfig).createRecord({ companyName: 'Acme' }).id).toBe(78);
+        expect(new RecordSet<VendorModel>(vendorModelConfig).createRecord({ companyName: 'Acme' }).id).toBe(78);
         expect(mockRecord.save).toHaveBeenCalledWith(expect.objectContaining({ enableSourcing: false }));
     });
 });
