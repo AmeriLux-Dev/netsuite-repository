@@ -1,9 +1,8 @@
 import * as nodePath from 'path';
-import { emitConfigFile } from '../emit/config-file-emitter';
 import { emitContextFile } from '../emit/context-file-emitter';
 import { LIBRARY_PACKAGE_NAME, buildGeneratedFileHeader, readGeneratorVersion } from '../emit/header';
+import { emitModelFile } from '../emit/model-file-emitter';
 import { SerializationError, serializeToTypeScriptLiteral } from '../emit/serialize';
-import { emitTypeFile } from '../emit/type-file-emitter';
 
 describe('serializeToTypeScriptLiteral()', () => {
     it('serializes primitives, arrays, nested objects, and quoted keys', () => {
@@ -85,118 +84,156 @@ describe('readGeneratorVersion() and buildGeneratedFileHeader()', () => {
     });
 });
 
-describe('emitConfigFile()', () => {
-    it('emits the config literal with type and function imports, aliasing renamed exports', () => {
-        const trim = () => undefined;
-        const unused = () => undefined;
-        const aliased = () => undefined;
-        const output = emitConfigFile({
-            modelName: 'Customer',
-            config: { recordType: 'customer', query: { from: { name: 'customer', alias: 'cust' } }, fields: { name: { queryFieldId: 'companyname', tableAlias: 'cust', transform: trim }, other: { queryFieldId: 'x', tableAlias: 'cust', transform: aliased } } },
-            libraryModule: '@acme/orm',
-            typesImportPath: './Customer.types.gen',
-            functionImports: [
-                { fn: trim, identifier: 'trim', exportName: 'trim', importPath: '../shared' },
-                { fn: unused, identifier: 'unused', exportName: 'unused', importPath: '../shared' },
-                { fn: aliased, identifier: 'trim_2', exportName: 'trim', importPath: '../other' },
-            ],
-            version: '1.0.0',
-        });
+describe('emitModelFile()', () => {
+    const trim = () => undefined;
+    const unused = () => undefined;
+    const aliased = () => undefined;
+    const recordOptions = {
+        config: { recordType: 'salesorder', query: { from: { name: 'transaction', alias: 'transaction' } }, fields: { poNumber: { queryFieldId: 'otherrefnum', tableAlias: 'transaction', transform: trim }, memo: { queryFieldId: 'memo', tableAlias: 'transaction', transform: aliased } } },
+        functionImports: [
+            { fn: trim, identifier: 'trim', exportName: 'trim', importPath: '../shared' },
+            { fn: unused, identifier: 'unused', exportName: 'unused', importPath: '../shared' },
+            { fn: aliased, identifier: 'trim_2', exportName: 'trim', importPath: '../other' },
+        ],
+        fields: { poNumber: 'poNumber', memo: 'memo', customer: { id: 'customer.id', companyName: 'customer.companyName' }, lines: { item: { type: 'lines.item.type' } } },
+    };
+    const members = [
+        { name: 'poNumber', optional: false, typeText: 'string | null' },
+        { name: 'memo', optional: true, typeText: 'string | null' },
+        { name: 'customer', optional: true, typeText: "Pick<Customer, 'id' | 'companyName'>" },
+        { name: 'lines', optional: false, typeText: 'TransactionLine[]' },
+    ];
 
-        expect(output).toContain("import type { QueryConfig } from '@acme/orm';");
-        expect(output).toContain("import type { Customer } from './Customer.types.gen';");
-        expect(output).toContain("import { trim as trim_2 } from '../other';");
-        expect(output).toContain("import { trim } from '../shared';");
-        expect(output).not.toContain('unused');
-        expect(output).toContain('export const CustomerConfig: QueryConfig<Customer> = {');
-        expect(output).toContain('transform: trim,');
-        expect(output).toContain('transform: trim_2,');
-        expect(output.endsWith('};\n')).toBe(true);
-    });
-});
-
-describe('emitTypeFile()', () => {
-    it('emits the interface with its base, imports for referenced types, and helper types for record types', () => {
-        const output = emitTypeFile({
+    it('emits the interface, helper types, config, and field paths of a record type as named exports of one file', () => {
+        const output = emitModelFile({
             className: 'SalesOrder',
             baseClassName: 'Transaction',
-            members: [
-                { name: 'poNumber', optional: false, typeText: 'string | null' },
-                { name: 'memo', optional: true, typeText: 'string | null' },
-                { name: 'customer', optional: true, typeText: "Pick<Customer, 'id' | 'companyName'>" },
-                { name: 'lines', optional: false, typeText: 'SalesOrderLine[]' },
-            ],
-            imports: ['Transaction', 'SalesOrderLine', 'Customer', 'SalesOrder', 'Customer'],
-            isRecordType: true,
+            members,
+            imports: ['Transaction', 'TransactionLine', 'Customer', 'SalesOrder', 'Customer'],
             libraryModule: '@acme/orm',
+            record: { ...recordOptions, repository: false },
             version: '1.0.0',
         });
 
         expect(output).toBe([
             '// <auto-generated>',
-            '//   Plain type for the SalesOrder model.',
+            '//   Generated type, config, field paths for the SalesOrder model.',
             `//   Generated by ${LIBRARY_PACKAGE_NAME} 1.0.0. Do not edit; rerun the build step instead.`,
             '// </auto-generated>',
             '',
-            "import type { RecordGraphPatch } from '@acme/orm';",
-            "import type { Customer } from './Customer.types.gen';",
-            "import type { SalesOrderLine } from './SalesOrderLine.types.gen';",
-            "import type { Transaction } from './Transaction.types.gen';",
+            "import type { QueryConfig, RecordGraphPatch } from '@acme/orm';",
+            "import type { Customer } from './Customer.gen';",
+            "import type { Transaction } from './Transaction.gen';",
+            "import type { TransactionLine } from './TransactionLine.gen';",
+            "import { trim as trim_2 } from '../other';",
+            "import { trim } from '../shared';",
             '',
             'export interface SalesOrder extends Transaction {',
             '    poNumber: string | null;',
             '    memo?: string | null;',
             "    customer?: Pick<Customer, 'id' | 'companyName'>;",
-            '    lines: SalesOrderLine[];',
+            '    lines: TransactionLine[];',
             '}',
             '',
             'export type SalesOrderPatch = RecordGraphPatch<SalesOrder>;',
             'export type SalesOrderCreate = Partial<SalesOrder>;',
             '',
+            'export const SalesOrderConfig: QueryConfig<SalesOrder> = {',
+            "    recordType: 'salesorder',",
+            '    query: {',
+            '        from: {',
+            "            name: 'transaction',",
+            "            alias: 'transaction',",
+            '        },',
+            '    },',
+            '    fields: {',
+            '        poNumber: {',
+            "            queryFieldId: 'otherrefnum',",
+            "            tableAlias: 'transaction',",
+            '            transform: trim,',
+            '        },',
+            '        memo: {',
+            "            queryFieldId: 'memo',",
+            "            tableAlias: 'transaction',",
+            '            transform: trim_2,',
+            '        },',
+            '    },',
+            '};',
+            '',
+            '/** Field paths of SalesOrder, for where(), orderBy(), and select(): `SalesOrderFields.<property>` at any depth. */',
+            'export const SalesOrderFields = {',
+            "    poNumber: 'poNumber',",
+            "    memo: 'memo',",
+            '    customer: {',
+            "        id: 'customer.id',",
+            "        companyName: 'customer.companyName',",
+            '    },',
+            '    lines: {',
+            '        item: {',
+            "            type: 'lines.item.type',",
+            '        },',
+            '    },',
+            '} as const;',
+            '',
         ].join('\n'));
+        expect(output).not.toContain('unused');
     });
 
-    it('emits a bare interface for subrecord, sublist, and base classes', () => {
-        const output = emitTypeFile({ className: 'Address', members: [{ name: 'city', optional: false, typeText: 'string | null' }], imports: [], isRecordType: false, libraryModule: '@acme/orm', version: '1.0.0' });
+    it('adds the base repository and its runtime imports when asked', () => {
+        const output = emitModelFile({ className: 'SalesOrder', members, imports: [], libraryModule: '@acme/orm', record: { ...recordOptions, repository: true }, version: '1.0.0' });
+
+        expect(output).toContain('//   Generated type, config, field paths, base repository for the SalesOrder model.');
+        expect(output).toContain("import { RecordSet } from '@acme/orm';\nimport type { QueryConfig, QueryConfigSource, RecordGraphPatch, RecordSetOptions } from '@acme/orm';");
+        expect(output.endsWith([
+            'export class SalesOrderRepositoryBase extends RecordSet<SalesOrder> {',
+            '    constructor(source: QueryConfigSource<SalesOrder> = SalesOrderConfig, options?: RecordSetOptions) {',
+            '        super(source, options);',
+            '    }',
+            '}',
+            '',
+        ].join('\n'))).toBe(true);
+    });
+
+    it('emits a bare interface for a plain class', () => {
+        const output = emitModelFile({ className: 'Address', members: [{ name: 'city', optional: false, typeText: 'string | null' }], imports: [], libraryModule: '@acme/orm', version: '1.0.0' });
         expect(output.endsWith('// </auto-generated>\n\nexport interface Address {\n    city: string | null;\n}\n')).toBe(true);
         expect(output).not.toContain('import');
+        expect(output).toContain('//   Generated type for the Address model.');
     });
 });
 
 describe('emitContextFile()', () => {
-    it('emits the schema, context type, and factory sorted by set name', () => {
+    it('emits the schema, repositories, context type, and factory sorted by set name', () => {
         const output = emitContextFile({
             contextName: 'App',
             libraryModule: '@acme/orm',
             version: '1.0.0',
             repositories: true,
             models: [
-                { modelName: 'SalesOrder', setName: 'salesOrders', configImportPath: './SalesOrder.config.gen', repositoryImportPath: './SalesOrder.repository.gen' },
-                { modelName: 'Customer', setName: 'customers', configImportPath: './Customer.config.gen', repositoryImportPath: './Customer.repository.gen' },
+                { modelName: 'SalesOrder', setName: 'salesOrders', importPath: './SalesOrder.gen' },
+                { modelName: 'Customer', setName: 'customers', importPath: './Customer.gen' },
             ],
         });
 
         expect(output).toContain("import { createNetSuiteContext } from '@acme/orm';");
-        expect(output).toContain("import { CustomerConfig } from './Customer.config.gen';\nimport { SalesOrderConfig } from './SalesOrder.config.gen';");
+        expect(output).toContain("import { CustomerConfig, CustomerRepositoryBase } from './Customer.gen';\nimport { SalesOrderConfig, SalesOrderRepositoryBase } from './SalesOrder.gen';");
         expect(output).toContain('export const AppSchema = {\n    customers: CustomerConfig,\n    salesOrders: SalesOrderConfig,\n};');
-        expect(output).toContain("import { CustomerRepositoryBase } from './Customer.repository.gen';\nimport { SalesOrderRepositoryBase } from './SalesOrder.repository.gen';");
         expect(output).toContain('export const AppRepositories = {\n    customers: CustomerRepositoryBase,\n    salesOrders: SalesOrderRepositoryBase,\n};');
         expect(output).toContain('export type AppRepositoryMap = RepositoryMap<typeof AppSchema>;');
         expect(output).toContain('export type AppContext<TRepositories extends AppRepositoryMap = {}> = NetSuiteContextInstance<typeof AppSchema, MergeRepositories<typeof AppRepositories, TRepositories>>;');
         expect(output).toContain('export function createAppContext<TRepositories extends AppRepositoryMap = {}>(options: ContextFactoryOptions<TRepositories> = {}): AppContext<TRepositories> {\n    return createNetSuiteContext(AppSchema, { ...options, repositories: { ...AppRepositories, ...options.repositories } }) as unknown as AppContext<TRepositories>;\n}');
     });
-});
 
-describe('emitContextFile() without repositories', () => {
-    it('emits the plain schema, context type, and factory', () => {
+    it('emits the plain schema, context type, and factory without repositories', () => {
         const output = emitContextFile({
             contextName: 'App',
             libraryModule: '@acme/orm',
             repositories: false,
-            models: [{ modelName: 'Customer', setName: 'customers', configImportPath: './Customer.config.gen', repositoryImportPath: './Customer.repository.gen' }],
+            models: [{ modelName: 'Customer', setName: 'customers', importPath: './Customer.gen' }],
         });
 
         expect(output).toContain("import type { NetSuiteContextInstance, NetSuiteContextOptions } from '@acme/orm';");
+        expect(output).toContain("import { CustomerConfig } from './Customer.gen';");
         expect(output).not.toContain('RepositoryBase');
         expect(output).toContain('export type AppContext = NetSuiteContextInstance<typeof AppSchema>;');
         expect(output).toContain('export function createAppContext(options?: NetSuiteContextOptions): AppContext {\n    return createNetSuiteContext(AppSchema, options);\n}');

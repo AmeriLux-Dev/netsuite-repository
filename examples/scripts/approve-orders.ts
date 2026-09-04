@@ -6,7 +6,7 @@
  * Everything below runs through the generated context; the only NetSuite specifics live in the models.
  */
 import { createErpContext } from '../models/generated/context.gen';
-import type { SalesOrder } from '../models/generated/SalesOrder.types.gen';
+import type { SalesOrder } from '../models/generated/SalesOrder.gen';
 
 const AUTO_APPROVAL_LIMIT = 5000;
 

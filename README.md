@@ -171,11 +171,9 @@ npx netsuite-repository watch        # regenerate whenever a model file changes
 
 It writes:
 
-- `generated/<Class>.types.gen.ts` for every exported class: one interface, extending the base class's interface, importing the referenced ones. Record types also get `<Class>Patch` and `<Class>Create`.
-- `generated/<RecordType>.config.gen.ts` with `<RecordType>Config: QueryConfig<...>`, a plain object literal. Sublist line classes are record types, so they get one too.
-- `generated/<RecordType>.fields.gen.ts` with `<RecordType>Fields`, a constant whose properties mirror the model and hold its field paths (`SalesOrderFields.lines.item.type` is `'lines.item.type'`), for `where()`, `orderBy()`, and `select()`.
+- `generated/<Class>.gen.ts` for every exported class, with everything for that class as named exports: the interface, extending the base class's interface and importing the referenced ones; and for record types also `<Class>Patch`, `<Class>Create`, the `<Class>Config` literal the runtime reads, and `<Class>Fields`, a constant whose properties mirror the model and hold its field paths (`SalesOrderFields.lines.item.type` is `'lines.item.type'`) for `where()`, `orderBy()`, and `select()`.
 - `generated/context.gen.ts` with `AppSchema`, the `AppContext` type, and `createAppContext()`.
-- With `"repositories": "classes"`: `generated/<RecordType>.repository.gen.ts` with `<RecordType>RepositoryBase`, a `RecordSet` bound to the config, and a context factory that accepts subclasses through `createAppContext({ repositories })`.
+- With `"repositories": "classes"`, each record type's file also exports `<Class>RepositoryBase`, a `RecordSet` bound to the config, and the context factory accepts subclasses through `createAppContext({ repositories })`.
 
 The build step reads the classes with the TypeScript type checker, so it sees every property, its declared type, `Pick` projections, and inheritance. Model files are also evaluated in a sandbox to collect the decorators; they may import the library and other model files by relative path, and nothing else. Anything that cannot be mapped is reported with the file, class, and property.
 
@@ -249,9 +247,9 @@ The simplest home for them is a module of functions that take the context:
 // queries/salesOrders.ts
 import type { Specification } from '@amerilux/netsuite-repository';
 import type { AppContext } from '../models/generated/context.gen';
-import type { SalesOrder } from '../models/generated/SalesOrder.types.gen';
+import type { SalesOrder } from '../models/generated/SalesOrder.gen';
 
-import { SalesOrderFields as so } from '../models/generated/SalesOrder.fields.gen';
+import { SalesOrderFields as so } from '../models/generated/SalesOrder.gen';
 
 export const forCustomer = (customerId: number): Specification<SalesOrder> => (query) => query.where(so.customerId, '=', customerId);
 export const pendingFulfillment = (): Specification<SalesOrder> => (query) => query.where(so.status, '=', 'SalesOrd:B');

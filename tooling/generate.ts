@@ -9,14 +9,9 @@ import { classKeyOf, createModelTypeProgram, readCompilerOptionsFromTsconfig, re
 import type { DeclaredClass } from './collect/property-type-reader';
 import { compileModel } from './compile/compile-model';
 import type { BuildConfig } from './config';
-import { emitConfigFile } from './emit/config-file-emitter';
-import type { FunctionImport } from './emit/config-file-emitter';
 import { emitContextFile } from './emit/context-file-emitter';
-import { emitRepositoryFile } from './emit/repository-file-emitter';
-import { emitFieldsFile } from './emit/fields-file-emitter';
-import type { FieldPathTree } from './emit/fields-file-emitter';
-import { emitTypeFile } from './emit/type-file-emitter';
-import type { TypeFileMember } from './emit/type-file-emitter';
+import { emitModelFile } from './emit/model-file-emitter';
+import type { FieldPathTree, FunctionImport, RecordTypeEmitOptions, TypeFileMember } from './emit/model-file-emitter';
 import { resolveGlobs, toPosixPath } from './file-system';
 import type { FileSystemAdapter } from './file-system';
 
@@ -42,7 +37,7 @@ export interface GeneratedModelSummary {
 
 export interface GenerationPlan {
     files: PlannedFile[];
-    /** Record types, which own a config, a base repository, and a record set. Plain classes only get a type file. */
+    /** Record types, which own a config, field paths, and a record set. Plain classes only get their interface. */
     models: GeneratedModelSummary[];
     diagnostics: ModelFileDiagnostic[];
 }
@@ -176,58 +171,44 @@ export function planGeneration(options: GenerateOptions): GenerationPlan {
     }
 
     for (const model of classesByName.values()) {
-        const typesFilePath = nodePath.join(outDir, `${model.className}.types.gen.ts`);
         const { members, imports } = buildTypeFileMembers(model, classesByName);
-        files.push({
-            path: typesFilePath,
-            content: emitTypeFile({
-                className: model.className,
-                baseClassName: model.base?.className,
-                members,
-                imports,
-                isRecordType: model.recordType !== undefined,
-                libraryModule: config.libraryModule,
-                version: options.version,
-            }),
-        });
+        let record: RecordTypeEmitOptions | undefined;
 
-        if (model.recordType === undefined || classesWithProblems.has(`${model.filePath}#${model.exportName}`)) {
-            continue;
-        }
-
-        try {
-            const compiledConfig = compileModel(model);
-            files.push({
-                path: nodePath.join(outDir, `${model.className}.config.gen.ts`),
-                content: emitConfigFile({
-                    modelName: model.className,
-                    config: compiledConfig,
-                    libraryModule: config.libraryModule,
-                    typesImportPath: toImportPath(outDir, typesFilePath),
+        if (model.recordType !== undefined && !classesWithProblems.has(`${model.filePath}#${model.exportName}`)) {
+            try {
+                record = {
+                    config: compileModel(model),
                     functionImports,
-                    version: options.version,
-                }),
-            });
-            files.push({
-                path: nodePath.join(outDir, `${model.className}.fields.gen.ts`),
-                content: emitFieldsFile({ modelName: model.className, tree: buildFieldPathTree(model.fields, model.relations), version: options.version }),
-            });
-            if (config.repositories === 'classes') files.push({
-                path: nodePath.join(outDir, `${model.className}.repository.gen.ts`),
-                content: emitRepositoryFile({
-                    modelName: model.className,
-                    libraryModule: config.libraryModule,
-                    configImportPath: `./${model.className}.config.gen`,
-                    typesImportPath: `./${model.className}.types.gen`,
-                    version: options.version,
-                }),
-            });
-        } catch (error) {
-            diagnostics.push({ filePath: model.filePath, exportName: model.exportName, message: error instanceof Error ? error.message : String(error) });
-            continue;
+                    fields: buildFieldPathTree(model.fields, model.relations),
+                    repository: config.repositories === 'classes',
+                };
+            } catch (error) {
+                diagnostics.push({ filePath: model.filePath, exportName: model.exportName, message: error instanceof Error ? error.message : String(error) });
+            }
         }
 
-        models.push({ modelName: model.className, setName: model.setName ?? toRecordSetName(model.className), filePath: model.filePath });
+        // One file per class: the interface always, and for a record type its config, field paths, and optional base repository.
+        const emit = (recordPart: RecordTypeEmitOptions | undefined) => emitModelFile({
+            className: model.className,
+            baseClassName: model.base?.className,
+            members,
+            imports,
+            libraryModule: config.libraryModule,
+            record: recordPart,
+            version: options.version,
+        });
+        let content: string;
+        try {
+            content = emit(record);
+            if (record) {
+                models.push({ modelName: model.className, setName: model.setName ?? toRecordSetName(model.className), filePath: model.filePath });
+            }
+        } catch (error) {
+            // The config could not be serialized (an unexported transform, say): report it and still emit the type.
+            diagnostics.push({ filePath: model.filePath, exportName: model.exportName, message: error instanceof Error ? error.message : String(error) });
+            content = emit(undefined);
+        }
+        files.push({ path: nodePath.join(outDir, `${model.className}.gen.ts`), content });
     }
 
     if (models.length > 0) {
@@ -238,7 +219,7 @@ export function planGeneration(options: GenerateOptions): GenerationPlan {
                 libraryModule: config.libraryModule,
                 repositories: config.repositories === 'classes',
                 version: options.version,
-                models: models.map((model) => ({ modelName: model.modelName, setName: model.setName, configImportPath: `./${model.modelName}.config.gen`, repositoryImportPath: `./${model.modelName}.repository.gen` })),
+                models: models.map((model) => ({ modelName: model.modelName, setName: model.setName, importPath: `./${model.modelName}.gen` })),
             }),
         });
     }

@@ -3,9 +3,8 @@ import { buildGeneratedFileHeader } from './header';
 export interface ContextModelReference {
     modelName: string;
     setName: string;
-    /** Import paths (extension-less, relative) of the generated config and repository files. */
-    configImportPath: string;
-    repositoryImportPath: string;
+    /** Import path (extension-less, relative) of the model's generated file. */
+    importPath: string;
 }
 
 export interface ContextFileEmitOptions {
@@ -33,7 +32,7 @@ export function emitContextFile(options: ContextFileEmitOptions): string {
             header,
             `import { createNetSuiteContext } from '${libraryModule}';`,
             `import type { NetSuiteContextInstance, NetSuiteContextOptions } from '${libraryModule}';`,
-            ...sortedModels.map((model) => `import { ${model.modelName}Config } from '${model.configImportPath}';`),
+            ...sortedModels.map((model) => `import { ${model.modelName}Config } from '${model.importPath}';`),
             '',
             ...schema,
             '',
@@ -50,8 +49,7 @@ export function emitContextFile(options: ContextFileEmitOptions): string {
         header,
         `import { createNetSuiteContext } from '${libraryModule}';`,
         `import type { ContextFactoryOptions, MergeRepositories, NetSuiteContextInstance, RepositoryMap } from '${libraryModule}';`,
-        ...sortedModels.map((model) => `import { ${model.modelName}Config } from '${model.configImportPath}';`),
-        ...sortedModels.map((model) => `import { ${model.modelName}RepositoryBase } from '${model.repositoryImportPath}';`),
+        ...sortedModels.map((model) => `import { ${model.modelName}Config, ${model.modelName}RepositoryBase } from '${model.importPath}';`),
         '',
         ...schema,
         '',

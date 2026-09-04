@@ -246,12 +246,12 @@ Anything missing from the table is a build diagnostic naming the decorator optio
 
 ## Generated output
 
-`<Model>.config.gen.ts` keeps the `QueryConfig` shape, so the runtime, context, and change tracker are untouched except for `include`/`exclude` on the query builder.
+`<Model>.gen.ts` keeps the `QueryConfig` shape, so the runtime, context, and change tracker are untouched except for `include`/`exclude` on the query builder.
 
-`<Model>.types.gen.ts` emits reference, subrecord, and sublist types as declared, importing the target's generated type:
+`<Model>.gen.ts` emits reference, subrecord, and sublist types as declared, importing the target's generated type:
 
 ```ts
-import type { Customer } from './Customer.types.gen';
+import type { Customer } from './Customer.gen';
 export interface SalesOrder {
     customer?: Pick<Customer, 'id' | 'companyName'>;
     lines: TransactionLine[];
@@ -294,7 +294,7 @@ Runtime shapes (`QueryConfig`, the record updater, change tracking) did not chan
 Added 2026-09-03. Entity Framework's DbSet is already a repository and the DbContext is the unit of work. A second layer of functions that each open a context and run a query, which is where the test project started, hides the unit of work and scatters the predicates. So:
 
 - `RecordSet` (formerly `EntitySet`) is the repository. It gained the specification methods `list(...specs)`, `first(...specs)`, `count(...specs)`, and `exists(...specs)`. A `Specification<T>` is `(query: QueryBuilder<T>) => QueryBuilder<T>`; specifications compose by being passed together.
-- The build step emits `<Model>.repository.gen.ts` with `<Model>RepositoryBase extends RecordSet<Model>`, bound to the generated config. Nothing else is generated: the developer inherits from the base when a record type needs domain queries. No scaffolding of the subclass, no discovery by file name.
+- The build step emits `<Model>.gen.ts` with `<Model>RepositoryBase extends RecordSet<Model>`, bound to the generated config. Nothing else is generated: the developer inherits from the base when a record type needs domain queries. No scaffolding of the subclass, no discovery by file name.
 - The generated context exports `<Name>Repositories` (the bases) and `create<Name>Context({ repositories })` accepts a subclass per set. The return type carries the subclass for that set and the base for every other (`MergeRepositories`).
 - The context constructs a registered repository with its own change tracker, so a repository is part of the unit of work; `saveChanges()` writes what it returned.
 

@@ -5,10 +5,10 @@
 
 import { createNetSuiteContext } from '@amerilux/netsuite-repository';
 import type { NetSuiteContextInstance, NetSuiteContextOptions } from '@amerilux/netsuite-repository';
-import { CustomerConfig } from './Customer.config.gen';
-import { SalesOrderConfig } from './SalesOrder.config.gen';
-import { TaskConfig } from './Task.config.gen';
-import { TransactionLineConfig } from './TransactionLine.config.gen';
+import { CustomerConfig } from './Customer.gen';
+import { SalesOrderConfig } from './SalesOrder.gen';
+import { TaskConfig } from './Task.gen';
+import { TransactionLineConfig } from './TransactionLine.gen';
 
 export const ErpSchema = {
     customers: CustomerConfig,
