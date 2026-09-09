@@ -28,7 +28,7 @@ describe('specifications', () => {
     it('apply in order and compose on one query', () => {
         const set = new RecordSet<Customer>(customerConfig);
         const text = applySpecifications(set.query(), [named('Acme'), withEmail()]).describeText();
-        expect(text).toContain("WHERE companyname EQUAL ['Acme'] AND email EMPTY_NOT");
+        expect(text).toContain("WHERE companyname IS ['Acme'] AND email EMPTY_NOT");
     });
 
     it('drive list(), first(), count(), and exists() on a record set', () => {
@@ -46,7 +46,7 @@ describe('specifications', () => {
         fakeNQuery.queueRows('customer', [{ count: '3' }]);
         expect(set.count(named('Acme'))).toBe(3);
         expect(fakeNQuery.calls[2].text).toContain('SELECT COUNT(id) AS count');
-        expect(fakeNQuery.calls[2].text).toContain("WHERE companyname EQUAL ['Acme']");
+        expect(fakeNQuery.calls[2].text).toContain("WHERE companyname IS ['Acme']");
 
         fakeNQuery.queueRows('customer', [{ id: 1 }]);
         expect(set.exists(named('Acme'), withEmail())).toBe(true);

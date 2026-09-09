@@ -5,7 +5,7 @@
  * Three queries, each rendered with toSuiteQL first and then run through runPaged with a small page:
  *   1. an order header with its item lines (joinFrom with the model-declared `mainline IS false` filter), both
  *      address subrecords (autoJoin), the line's item (joinTo), DISPLAY-context text columns, the customer
- *      condition, and the raw status EQUAL to either search-style value, sorted by date: what `SalesOrderConfig`
+ *      condition, and the raw status IS either search-style value (IS is text equality; EQUAL is numeric), sorted by date: what `SalesOrderConfig`
  *      compiles to;
  *   2. the separate load of a reference matched on a code column: the OP SCAC rows whose carrier code is one of the
  *      codes on a batch of orders, with their carrier and SCAC references joined and the code aliased `__parentKey`;
@@ -82,12 +82,12 @@ require(['N/query', 'N/log'], function (query, log) {
             q.createCondition({ fieldId: 'entity', operator: query.Operator.ANY_OF, values: [CUSTOMER_ID] }),
             lines.createCondition({ fieldId: 'iscogs', operator: query.Operator.IS, values: [false] }),
             q.or(
-                q.or.apply(q, ['InvtPart', 'Assembly', 'Kit', 'NonInvtPart'].map(function (type) { return item.createCondition({ fieldId: 'itemtype', operator: query.Operator.EQUAL, values: [type] }); })),
+                q.or.apply(q, ['InvtPart', 'Assembly', 'Kit', 'NonInvtPart'].map(function (type) { return item.createCondition({ fieldId: 'itemtype', operator: query.Operator.IS, values: [type] }); })),
                 item.createCondition({ fieldId: 'itemid', operator: query.Operator.START_WITH, values: ['SPS Error Item'] })
             ),
             q.or(
-                q.createCondition({ fieldId: 'status', operator: query.Operator.EQUAL, values: ['SalesOrd:A'] }),
-                q.createCondition({ fieldId: 'status', operator: query.Operator.EQUAL, values: ['SalesOrd:B'] })
+                q.createCondition({ fieldId: 'status', operator: query.Operator.IS, values: ['SalesOrd:A'] }),
+                q.createCondition({ fieldId: 'status', operator: query.Operator.IS, values: ['SalesOrd:B'] })
             )
         );
         q.sort = [q.createSort({ column: column(q, 'trandate', 'sort_trandate'), ascending: true })];
@@ -108,8 +108,8 @@ require(['N/query', 'N/log'], function (query, log) {
             column(scac, 'name', 'carrierScac_scac_name'),
             column(q, 'custrecord_op_scac_sps_carrier_code', '__parentKey'),
         ];
-        // A text key has no list operator: one EQUAL per code, which is how the runtime batches a separate load on text.
-        q.condition = q.or.apply(q, CARRIER_CODES.map(function (code) { return q.createCondition({ fieldId: 'custrecord_op_scac_sps_carrier_code', operator: query.Operator.EQUAL, values: [code] }); }));
+        // A text key has no list operator: one IS per code, which is how the runtime batches a separate load on text.
+        q.condition = q.or.apply(q, CARRIER_CODES.map(function (code) { return q.createCondition({ fieldId: 'custrecord_op_scac_sps_carrier_code', operator: query.Operator.IS, values: [code] }); }));
         return renderAndRun(q);
     });
 

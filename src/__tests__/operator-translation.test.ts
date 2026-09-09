@@ -2,12 +2,14 @@ import { isNQueryOperatorName, normalizeConditionValue, translateConditionOperat
 
 describe('translateConditionOperator', () => {
     it('translates equality by field type', () => {
-        expect(translateConditionOperator('=', 'string', 'a')).toEqual({ operator: 'EQUAL', values: ['a'] });
+        expect(translateConditionOperator('=', 'string', 'a')).toEqual({ operator: 'IS', values: ['a'] });
+        expect(translateConditionOperator('=', 'integer', 1)).toEqual({ operator: 'EQUAL', values: [1] });
         expect(translateConditionOperator('=', 'boolean', true)).toEqual({ operator: 'IS', values: [true] });
         expect(translateConditionOperator('=', 'checkbox', 'F')).toEqual({ operator: 'IS', values: [false] });
         const day = new Date(2026, 0, 5);
         expect(translateConditionOperator('=', 'date', day)).toEqual({ operator: 'ON', values: [day] });
-        expect(translateConditionOperator('!=', 'string', 'a')).toEqual({ operator: 'EQUAL_NOT', values: ['a'] });
+        expect(translateConditionOperator('!=', 'string', 'a')).toEqual({ operator: 'IS_NOT', values: ['a'] });
+        expect(translateConditionOperator('!=', 'float', 1)).toEqual({ operator: 'EQUAL_NOT', values: [1] });
         expect(translateConditionOperator('<>', 'boolean', 'T')).toEqual({ operator: 'IS_NOT', values: [true] });
         expect(translateConditionOperator('!=', 'datetime', day)).toEqual({ operator: 'ON_NOT', values: [day] });
     });
@@ -34,7 +36,7 @@ describe('translateConditionOperator', () => {
     it('translates membership, null checks, and ranges', () => {
         // N/query has no list operator for text, numbers, dates, or checkboxes: one equality per value, combined.
         expect(translateConditionOperator('IN', 'integer', [1, 2])).toEqual({ operator: 'EQUAL', values: [1, 2], combine: 'or' });
-        expect(translateConditionOperator('NOT IN', 'string', ['a'])).toEqual({ operator: 'EQUAL_NOT', values: ['a'], combine: 'and' });
+        expect(translateConditionOperator('NOT IN', 'string', ['a'])).toEqual({ operator: 'IS_NOT', values: ['a'], combine: 'and' });
         const day = new Date(2026, 0, 5);
         expect(translateConditionOperator('IN', 'date', [day])).toEqual({ operator: 'ON', values: [day], combine: 'or' });
         expect(translateConditionOperator('NOT IN', 'checkbox', ['T'])).toEqual({ operator: 'IS_NOT', values: [true], combine: 'and' });
@@ -47,7 +49,7 @@ describe('translateConditionOperator', () => {
         expect(translateConditionOperator('LIKE', 'string', 'Ac%')).toEqual({ operator: 'START_WITH', values: ['Ac'] });
         expect(translateConditionOperator('LIKE', 'string', '%me')).toEqual({ operator: 'ENDWITH', values: ['me'] });
         expect(translateConditionOperator('LIKE', 'string', '%cm%')).toEqual({ operator: 'CONTAIN', values: ['cm'] });
-        expect(translateConditionOperator('LIKE', 'string', 'Acme')).toEqual({ operator: 'EQUAL', values: ['Acme'] });
+        expect(translateConditionOperator('LIKE', 'string', 'Acme')).toEqual({ operator: 'IS', values: ['Acme'] });
         expect(translateConditionOperator('NOT LIKE', 'string', '%spam%')).toEqual({ operator: 'CONTAIN_NOT', values: ['spam'] });
         expect(translateLikePatternToQueryOperator('%', false)).toEqual({ operator: 'ENDWITH', values: [''] });
     });

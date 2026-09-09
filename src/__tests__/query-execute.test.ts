@@ -18,7 +18,7 @@ describe('QueryBuilder – N/query errors', () => {
         } catch (error) {
             caught = error as Error & { cause?: unknown };
         }
-        expect(caught?.message).toBe("SSS_SEARCH_ERROR_OCCURRED: Search error occurred: Operator EQUAL is not valid for given search filter.\nQuery:\nFROM customer\nSELECT id AS id, companyname AS name, email AS email, isinactive AS isActive, custentity_score AS score\nWHERE companyname EQUAL ['Acme']");
+        expect(caught?.message).toBe("SSS_SEARCH_ERROR_OCCURRED: Search error occurred: Operator EQUAL is not valid for given search filter.\nQuery:\nFROM customer\nSELECT id AS id, companyname AS name, email AS email, isinactive AS isActive, custentity_score AS score\nWHERE companyname IS ['Acme']");
         expect(caught?.cause).toBe(failure);
     });
 
@@ -170,7 +170,7 @@ describe('QueryBuilder.exists()', () => {
 describe('QueryBuilder.toSQL()', () => {
     it('renders through N/query without executing', () => {
         const sql = QueryBuilder.from(customerConfig).where('name', '=', "O'Brien").toSQL();
-        expect(sql).toContain("companyname EQUAL ['O'Brien']");
+        expect(sql).toContain("companyname IS ['O'Brien']");
         expect(fakeNQuery.calls[0].execution).toBe('toSuiteQL');
     });
 });

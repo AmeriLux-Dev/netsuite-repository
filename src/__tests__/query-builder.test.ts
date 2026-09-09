@@ -70,8 +70,8 @@ describe('QueryBuilder.describe() – conditions', () => {
     const condition = (builder: QueryBuilder<any, any>) => builder.describe().condition;
 
     it('translates SQL-style operators', () => {
-        expect(condition(QueryBuilder.from(customerConfig).where('name', '=', 'Acme'))).toEqual({ kind: 'field', fieldId: 'companyname', operator: 'EQUAL', values: ['Acme'] });
-        expect(condition(QueryBuilder.from(customerConfig).where('name', '!=', 'Acme'))).toEqual({ kind: 'field', fieldId: 'companyname', operator: 'EQUAL_NOT', values: ['Acme'] });
+        expect(condition(QueryBuilder.from(customerConfig).where('name', '=', 'Acme'))).toEqual({ kind: 'field', fieldId: 'companyname', operator: 'IS', values: ['Acme'] });
+        expect(condition(QueryBuilder.from(customerConfig).where('name', '!=', 'Acme'))).toEqual({ kind: 'field', fieldId: 'companyname', operator: 'IS_NOT', values: ['Acme'] });
         expect(condition(QueryBuilder.from(customerConfig).where('score', '>', 50).where('score', '<', 100).where('score', '>=', 10).where('score', '<=', 90))).toEqual({
             kind: 'and',
             nodes: [
@@ -110,20 +110,20 @@ describe('QueryBuilder.describe() – conditions', () => {
         expect(condition(QueryBuilder.from(customerConfig).where('name', '=', 'a').orWhere('name', '=', 'b').where('email', 'IS NULL'))).toEqual({
             kind: 'or',
             nodes: [
-                { kind: 'field', fieldId: 'companyname', operator: 'EQUAL', values: ['a'] },
-                { kind: 'and', nodes: [{ kind: 'field', fieldId: 'companyname', operator: 'EQUAL', values: ['b'] }, { kind: 'field', fieldId: 'email', operator: 'EMPTY' }] },
+                { kind: 'field', fieldId: 'companyname', operator: 'IS', values: ['a'] },
+                { kind: 'and', nodes: [{ kind: 'field', fieldId: 'companyname', operator: 'IS', values: ['b'] }, { kind: 'field', fieldId: 'email', operator: 'EMPTY' }] },
             ],
         });
         expect(condition(QueryBuilder.from(customerConfig).where('isActive', '=', true).whereGroup((builder) => builder.where('name', '=', 'Acme').orWhere('name', '=', 'Ajax')))).toEqual({
             kind: 'and',
             nodes: [
                 { kind: 'field', fieldId: 'isinactive', operator: 'IS', values: [true] },
-                { kind: 'or', nodes: [{ kind: 'field', fieldId: 'companyname', operator: 'EQUAL', values: ['Acme'] }, { kind: 'field', fieldId: 'companyname', operator: 'EQUAL', values: ['Ajax'] }] },
+                { kind: 'or', nodes: [{ kind: 'field', fieldId: 'companyname', operator: 'IS', values: ['Acme'] }, { kind: 'field', fieldId: 'companyname', operator: 'IS', values: ['Ajax'] }] },
             ],
         });
         expect(condition(QueryBuilder.from(customerConfig).where('isActive', '=', true).orWhereGroup((builder) => builder.where('name', '=', 'Acme')))).toEqual({
             kind: 'or',
-            nodes: [{ kind: 'field', fieldId: 'isinactive', operator: 'IS', values: [true] }, { kind: 'field', fieldId: 'companyname', operator: 'EQUAL', values: ['Acme'] }],
+            nodes: [{ kind: 'field', fieldId: 'isinactive', operator: 'IS', values: [true] }, { kind: 'field', fieldId: 'companyname', operator: 'IS', values: ['Acme'] }],
         });
     });
 
@@ -137,8 +137,8 @@ describe('QueryBuilder.describe() – conditions', () => {
     });
 
     it('compares display text through a DISPLAY formula', () => {
-        expect(condition(QueryBuilder.from(employeeConfig).where('deptName', '=', 'Sales'))).toEqual({ kind: 'formula', formula: '{department#DISPLAY}', type: 'STRING', operator: 'EQUAL', values: ['Sales'] });
-        expect(condition(QueryBuilder.from(employeeConfig).where('department.name', '=', 'Sales', true))).toEqual({ kind: 'formula', formula: '{department.name#DISPLAY}', type: 'STRING', operator: 'EQUAL', values: ['Sales'] });
+        expect(condition(QueryBuilder.from(employeeConfig).where('deptName', '=', 'Sales'))).toEqual({ kind: 'formula', formula: '{department#DISPLAY}', type: 'STRING', operator: 'IS', values: ['Sales'] });
+        expect(condition(QueryBuilder.from(employeeConfig).where('department.name', '=', 'Sales', true))).toEqual({ kind: 'formula', formula: '{department.name#DISPLAY}', type: 'STRING', operator: 'IS', values: ['Sales'] });
     });
 
     it('throws when a condition references an unknown field', () => {

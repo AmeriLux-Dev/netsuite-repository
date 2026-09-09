@@ -84,7 +84,7 @@ describe('QueryBuilder – root conditions', () => {
             kind: 'and',
             nodes: [
                 { kind: 'field', fieldId: 'type', operator: 'ANY_OF', values: ['SalesOrd'] },
-                { kind: 'or', nodes: [{ kind: 'field', fieldId: 'memo', operator: 'EQUAL', values: ['a'] }, { kind: 'field', fieldId: 'memo', operator: 'EQUAL', values: ['b'] }] },
+                { kind: 'or', nodes: [{ kind: 'field', fieldId: 'memo', operator: 'IS', values: ['a'] }, { kind: 'field', fieldId: 'memo', operator: 'IS', values: ['b'] }] },
             ],
         });
         fakeNQuery.queueRows('transaction', [{ count: 3 }]);
@@ -213,8 +213,8 @@ describe('QueryBuilder – separately loaded references', () => {
             { id: 2, carrierCode: 'UPS', carrier: null },
             { id: 3, carrierCode: null, carrier: null },
         ]);
-        // The carrier code is text, which has no list operator: one EQUAL per code.
-        expect(fakeNQuery.calls[1].text).toContain("WHERE custrecord_carrier_code EQUAL ['FDX'] OR custrecord_carrier_code EQUAL ['UPS']");
+        // The carrier code is text, which has no list operator: one IS (text equality) per code.
+        expect(fakeNQuery.calls[1].text).toContain("WHERE custrecord_carrier_code IS ['FDX'] OR custrecord_carrier_code IS ['UPS']");
     });
 
     it('refuses a separate reference without separate load facts', () => {

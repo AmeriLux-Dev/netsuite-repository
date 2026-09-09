@@ -52,8 +52,8 @@ function toValueList(value: ConditionParamValue | ConditionParamValue[] | undefi
 
 /**
  * Turns a `LIKE` pattern into the N/query operator that expresses it: a trailing `%` is START_WITH, a leading `%`
- * is ENDWITH, both is CONTAIN, none is EQUAL. Patterns N/query cannot express (`_`, a `%` in the middle) are
- * rejected; a formula condition is the way to write those.
+ * is ENDWITH, both is CONTAIN, none is IS (text equality). Patterns N/query cannot express (`_`, a `%` in the
+ * middle) are rejected; a formula condition is the way to write those.
  */
 export function translateLikePatternToQueryOperator(pattern: string, negated: boolean): TranslatedCondition {
     const startsWithWildcard = pattern.startsWith('%');
@@ -62,7 +62,7 @@ export function translateLikePatternToQueryOperator(pattern: string, negated: bo
     if (inner.includes('%') || inner.includes('_')) {
         throw new Error(`LIKE pattern '${pattern}' has no N/query operator; use whereFormula() for it.`);
     }
-    const operator: NQueryOperatorName = startsWithWildcard && endsWithWildcard ? 'CONTAIN' : endsWithWildcard ? 'START_WITH' : startsWithWildcard ? 'ENDWITH' : 'EQUAL';
+    const operator: NQueryOperatorName = startsWithWildcard && endsWithWildcard ? 'CONTAIN' : endsWithWildcard ? 'START_WITH' : startsWithWildcard ? 'ENDWITH' : 'IS';
     return { operator: negated ? `${operator}_NOT` : operator, values: [inner] };
 }
 
@@ -74,8 +74,8 @@ function requireSingleValue(operator: string, values: ConditionParamValue[] | un
 }
 
 /**
- * Translates a SQL-style operator and its value into the N/query operator for the field's type: `=` is IS on a
- * checkbox, ON on a date, ANY_OF on a select or key field, and EQUAL otherwise; the order comparisons become
+ * Translates a SQL-style operator and its value into the N/query operator for the field's type: `=` is IS on text
+ * and checkboxes, ON on a date, ANY_OF on a select or key field, and EQUAL on numbers; the order comparisons become
  * BEFORE/AFTER on dates and LESS/GREATER otherwise; `IN` is ANY_OF on a select or key field and one equality per
  * value combined with `or` elsewhere; `IS NULL` is EMPTY; `LIKE` follows its wildcards. An N/query operator name
  * passes through with its values normalized.
@@ -89,9 +89,12 @@ export function translateConditionOperator(operator: QueryOperator, fieldType: F
     return translateSqlStyleOperator(operator, fieldType, toValueList(value, fieldType));
 }
 
-/** The N/query operator behind `=` for a field type; `IN` on a field with no list operator applies it per value. */
+/**
+ * The N/query operator behind `=` for a field type. The names follow N/search: IS is text and checkbox equality,
+ * EQUAL is numeric, ON is a date, ANY_OF a select or key. `IN` on a field with no list operator applies it per value.
+ */
 function equalityOperator(fieldType: FieldType | undefined): 'IS' | 'ON' | 'ANY_OF' | 'EQUAL' {
-    if (isBooleanField(fieldType)) return 'IS';
+    if (isBooleanField(fieldType) || fieldType === 'string') return 'IS';
     if (isDateField(fieldType)) return 'ON';
     return isSelectLikeField(fieldType) ? 'ANY_OF' : 'EQUAL';
 }

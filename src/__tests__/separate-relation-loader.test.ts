@@ -65,7 +65,7 @@ describe('loadSeparateRelationsIntoResults', () => {
         expect(executed[1].condition).toEqual({ kind: 'field', fieldId: 'address', operator: 'ANY_OF', values: [40] });
     });
 
-    it('batches a text key as one EQUAL per value, since ANY_OF applies to select and key fields only', () => {
+    it('batches a text key as one IS per value, since ANY_OF applies to select and key fields only', () => {
         const executed: QueryDescription[] = [];
         const load = sublistLoad({ relationship: 'carrier', kind: 'reference', parentKeyPath: 'code', batchFieldId: 'custrecord_code', batchFieldType: 'string' });
         loadSeparateRelationsIntoResults([{ id: 1, code: 'FDX' }, { id: 2, code: 'UPS' }], [load], {
@@ -78,7 +78,7 @@ describe('loadSeparateRelationsIntoResults', () => {
         });
         expect(executed[0].condition).toEqual({
             kind: 'or',
-            nodes: [{ kind: 'field', fieldId: 'custrecord_code', operator: 'EQUAL', values: ['FDX'] }, { kind: 'field', fieldId: 'custrecord_code', operator: 'EQUAL', values: ['UPS'] }],
+            nodes: [{ kind: 'field', fieldId: 'custrecord_code', operator: 'IS', values: ['FDX'] }, { kind: 'field', fieldId: 'custrecord_code', operator: 'IS', values: ['UPS'] }],
         });
     });
 

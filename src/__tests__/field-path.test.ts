@@ -19,9 +19,9 @@ describe('typed field paths', () => {
         expect(description.condition).toEqual({
             kind: 'and',
             nodes: [
-                { kind: 'field', fieldId: 'memo', operator: 'EQUAL', values: ['x'] },
+                { kind: 'field', fieldId: 'memo', operator: 'IS', values: ['x'] },
                 { kind: 'field', component: 'lines', fieldId: 'item', operator: 'ANY_OF', values: [1] },
-                { kind: 'field', component: 'shippingAddress', fieldId: 'city', operator: 'EQUAL', values: ['Dallas'] },
+                { kind: 'field', component: 'shippingAddress', fieldId: 'city', operator: 'IS', values: ['Dallas'] },
                 { kind: 'formula', formula: '{lines.quantity} * 2', type: 'FLOAT', operator: 'GREATER', values: [1] },
             ],
         });
