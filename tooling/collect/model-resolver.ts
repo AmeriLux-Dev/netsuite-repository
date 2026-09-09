@@ -92,7 +92,8 @@ interface ClassEntry {
 }
 
 function toShallowField(property: DeclaredProperty, overrides: PropertyOverrides | undefined, isKey: boolean, isSelectField: boolean): ResolvedField | undefined {
-    const inferredType = overrides?.type ?? (isKey || isSelectField ? 'integer' : property.scalarType);
+    // The internal id is a key and a reference's select field a select: both compare through ANY_OF in N/query.
+    const inferredType = overrides?.type ?? (isKey ? 'key' : isSelectField && property.scalarType ? 'select' : property.scalarType);
     if (!inferredType) {
         return undefined;
     }
@@ -184,7 +185,7 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
             if (property.target) {
                 continue;
             }
-            const field = toShallowField(property, overrides.properties.get(property.name), property.name === keyProperty, selectFieldProperties.has(property.name));
+            const field = toShallowField(property, overrides.properties.get(property.name), property.name === keyProperty, selectFieldProperties.has(property.name) || property.name === overrides.parentKeyProperty);
             if (!field) {
                 report(entry, `Property '${entry.declared.className}.${property.name}' has type '${property.typeText}', which does not map to a NetSuite field type. Declare it with @Field({ type }), type it as a model class, or mark it @NotMapped().`);
                 continue;
@@ -300,7 +301,7 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
                 if (targetKeyProperty === undefined) {
                     // A reference loaded separately by internal id: the second query matches the target's key against the select field values.
                     const targetKeyQueryFieldId = target.fields.find((field) => field.name === target.keyProperty)?.queryFieldId ?? target.keyProperty.toLowerCase();
-                    const separate = load === 'separate' ? { queryType: target.queryType as string, parentKeyField: selectFieldProperty, targetKeyFieldId: targetKeyQueryFieldId } : undefined;
+                    const separate = load === 'separate' ? { queryType: target.queryType as string, parentKeyField: selectFieldProperty, targetKeyFieldId: targetKeyQueryFieldId, targetKeyFieldType: 'key' as const } : undefined;
                     relations.push({ ...toRelation('reference', join, load), ...(separate ? { separate } : {}), relations: nested() });
                     continue;
                 }
@@ -315,7 +316,7 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
                 }
                 relations.push({
                     ...toRelation('reference', join, 'separate'),
-                    separate: { queryType: target.queryType as string, parentKeyField: selectFieldProperty, targetKeyFieldId: targetKeyField.queryFieldId },
+                    separate: { queryType: target.queryType as string, parentKeyField: selectFieldProperty, targetKeyFieldId: targetKeyField.queryFieldId, targetKeyFieldType: targetKeyField.type },
                     relations: nested(),
                 });
                 continue;

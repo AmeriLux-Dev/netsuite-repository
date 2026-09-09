@@ -161,7 +161,7 @@ export const shipmentConfig = defineQueryConfig<Shipment>({
         carrier: {
             path: 'carrier', relationship: 'carrier', load: 'separate',
             join: { kind: 'to', fieldId: 'custrecord_carrier_code', target: 'customrecord_carrier' },
-            separate: { queryType: 'customrecord_carrier', parentKeyField: 'carrierCode', targetKeyFieldId: 'custrecord_carrier_code' },
+            separate: { queryType: 'customrecord_carrier', parentKeyField: 'carrierCode', targetKeyFieldId: 'custrecord_carrier_code', targetKeyFieldType: 'string' },
         },
         'carrier.scac': { path: 'carrier.scac', parent: 'carrier', relationship: 'carrier', load: 'join', join: { kind: 'auto', fieldId: 'custrecord_carrier_scac' } },
     },

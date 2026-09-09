@@ -3,6 +3,11 @@ import type { ConditionParamValue, FieldType, NQueryOperatorName, QueryOperator,
 export interface TranslatedCondition {
     operator: NQueryOperatorName;
     values?: ConditionParamValue[];
+    /**
+     * Set when N/query has no list operator for the field type: the operator applies to each value on its own and
+     * the conditions are combined with `or` (IN) or `and` (NOT IN).
+     */
+    combine?: 'or' | 'and';
 }
 
 const nQueryOperatorNames = new Set<string>([
@@ -23,6 +28,11 @@ function isDateField(fieldType: FieldType | undefined): boolean {
 
 function isBooleanField(fieldType: FieldType | undefined): boolean {
     return fieldType === 'boolean' || fieldType === 'checkbox';
+}
+
+/** Select, multiselect, and key fields compare through ANY_OF in N/query; EQUAL is not valid on them. */
+export function isSelectLikeField(fieldType: FieldType | undefined): boolean {
+    return fieldType === 'select' || fieldType === 'multiselect' || fieldType === 'key';
 }
 
 /** A checkbox compares as a boolean; NetSuite's own 'T'/'F' spellings are accepted for it. Everything else binds as given. */
@@ -65,9 +75,10 @@ function requireSingleValue(operator: string, values: ConditionParamValue[] | un
 
 /**
  * Translates a SQL-style operator and its value into the N/query operator for the field's type: `=` is IS on a
- * checkbox, ON on a date, and EQUAL otherwise; the order comparisons become BEFORE/AFTER on dates and
- * LESS/GREATER otherwise; `IN` is ANY_OF; `IS NULL` is EMPTY; `LIKE` follows its wildcards. An N/query operator
- * name passes through with its values normalized.
+ * checkbox, ON on a date, ANY_OF on a select or key field, and EQUAL otherwise; the order comparisons become
+ * BEFORE/AFTER on dates and LESS/GREATER otherwise; `IN` is ANY_OF on a select or key field and one equality per
+ * value combined with `or` elsewhere; `IS NULL` is EMPTY; `LIKE` follows its wildcards. An N/query operator name
+ * passes through with its values normalized.
  */
 export function translateConditionOperator(operator: QueryOperator, fieldType: FieldType | undefined, value: ConditionParamValue | ConditionParamValue[] | undefined): TranslatedCondition {
     // BETWEEN is spelled the same in both vocabularies; the SQL-style path checks it takes exactly two values.
@@ -78,6 +89,13 @@ export function translateConditionOperator(operator: QueryOperator, fieldType: F
     return translateSqlStyleOperator(operator, fieldType, toValueList(value, fieldType));
 }
 
+/** The N/query operator behind `=` for a field type; `IN` on a field with no list operator applies it per value. */
+function equalityOperator(fieldType: FieldType | undefined): 'IS' | 'ON' | 'ANY_OF' | 'EQUAL' {
+    if (isBooleanField(fieldType)) return 'IS';
+    if (isDateField(fieldType)) return 'ON';
+    return isSelectLikeField(fieldType) ? 'ANY_OF' : 'EQUAL';
+}
+
 function translateSqlStyleOperator(operator: SqlStyleOperator, fieldType: FieldType | undefined, values: ConditionParamValue[] | undefined): TranslatedCondition {
     const dates = isDateField(fieldType);
     switch (operator) {
@@ -86,11 +104,16 @@ function translateSqlStyleOperator(operator: SqlStyleOperator, fieldType: FieldT
         case 'IS NOT NULL':
             return { operator: 'EMPTY_NOT' };
         case 'IN':
-        case 'NOT IN':
+        case 'NOT IN': {
             if (!values || values.length === 0) {
                 throw new Error(`${operator} requires at least one value.`);
             }
-            return { operator: operator === 'IN' ? 'ANY_OF' : 'ANY_OF_NOT', values };
+            const base = equalityOperator(fieldType);
+            if (base === 'ANY_OF') {
+                return { operator: operator === 'IN' ? 'ANY_OF' : 'ANY_OF_NOT', values };
+            }
+            return operator === 'IN' ? { operator: base, values, combine: 'or' } : { operator: `${base}_NOT`, values, combine: 'and' };
+        }
         case 'BETWEEN':
             if (!values || values.length !== 2) {
                 throw new Error('BETWEEN requires exactly two values.');
@@ -103,7 +126,7 @@ function translateSqlStyleOperator(operator: SqlStyleOperator, fieldType: FieldT
         case '!=':
         case '<>': {
             const single = requireSingleValue(operator, values);
-            const base: NQueryOperatorName = isBooleanField(fieldType) ? 'IS' : dates ? 'ON' : 'EQUAL';
+            const base = equalityOperator(fieldType);
             return { operator: operator === '=' ? base : `${base}_NOT`, values: single };
         }
         case '>':

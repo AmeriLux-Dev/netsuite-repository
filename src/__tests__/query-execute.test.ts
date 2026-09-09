@@ -8,14 +8,36 @@ beforeEach(() => {
     fakeNQuery.reset();
 });
 
+describe('QueryBuilder – N/query errors', () => {
+    it('rethrows an N/query failure with the rendered query appended, keeping the original as the cause', () => {
+        const failure = Object.assign(new Error('Search error occurred: Operator EQUAL is not valid for given search filter.'), { name: 'SSS_SEARCH_ERROR_OCCURRED' });
+        jest.spyOn(fakeNQuery, 'create').mockImplementationOnce(() => { throw failure; });
+        let caught: (Error & { cause?: unknown }) | undefined;
+        try {
+            QueryBuilder.from(customerConfig).where('name', '=', 'Acme').executeTyped();
+        } catch (error) {
+            caught = error as Error & { cause?: unknown };
+        }
+        expect(caught?.message).toBe("SSS_SEARCH_ERROR_OCCURRED: Search error occurred: Operator EQUAL is not valid for given search filter.\nQuery:\nFROM customer\nSELECT id AS id, companyname AS name, email AS email, isinactive AS isActive, custentity_score AS score\nWHERE companyname EQUAL ['Acme']");
+        expect(caught?.cause).toBe(failure);
+    });
+
+    it('reports a plain failure as it is, including one that is not an Error', () => {
+        jest.spyOn(fakeNQuery, 'create').mockImplementationOnce(() => { throw new Error('boom'); });
+        expect(() => QueryBuilder.from(customerConfig).toSQL()).toThrow('boom\nQuery:\nFROM customer');
+        jest.spyOn(fakeNQuery, 'create').mockImplementationOnce(() => { throw 'text failure'; });
+        expect(() => QueryBuilder.from(customerConfig).count()).toThrow('text failure\nQuery:\nFROM customer');
+    });
+});
+
 describe('QueryBuilder.execute()', () => {
     it('runs the query and returns the rows with the description', () => {
         fakeNQuery.queueRows('customer', customers.slice(0, 2));
         const result = QueryBuilder.from(customerConfig).where('id', '=', 1).execute();
         expect(result.data).toHaveLength(2);
-        expect(result.query.condition).toEqual({ kind: 'field', fieldId: 'id', operator: 'EQUAL', values: [1] });
+        expect(result.query.condition).toEqual({ kind: 'field', fieldId: 'id', operator: 'ANY_OF', values: [1] });
         expect(fakeNQuery.calls[0]).toEqual(expect.objectContaining({ type: 'customer', execution: 'run' }));
-        expect(fakeNQuery.calls[0].text).toContain('WHERE id EQUAL [1]');
+        expect(fakeNQuery.calls[0].text).toContain('WHERE id ANY_OF [1]');
     });
 
     it('reads a row window through runPaged with pages sized to the window', () => {
@@ -122,7 +144,7 @@ describe('QueryBuilder.count()', () => {
         fakeNQuery.queueRows('customer', [{ count: 42 }]);
         expect(QueryBuilder.from(customerConfig).where('id', '=', 1).count()).toBe(42);
         expect(fakeNQuery.calls[0].text).toContain('SELECT COUNT(id) AS count');
-        expect(fakeNQuery.calls[0].text).toContain('WHERE id EQUAL [1]');
+        expect(fakeNQuery.calls[0].text).toContain('WHERE id ANY_OF [1]');
 
         fakeNQuery.queueRows('salesorder', [{ count: '3' }]);
         expect(QueryBuilder.from(orderConfig).count()).toBe(3);
@@ -140,7 +162,7 @@ describe('QueryBuilder.exists()', () => {
         fakeNQuery.queueRows('customer', [{ id: 1 }]);
         expect(QueryBuilder.from(customerConfig).where('id', '=', 99).exists()).toBe(true);
         expect(fakeNQuery.calls[0]).toEqual(expect.objectContaining({ execution: 'runPaged', pageSize: 5 }));
-        expect(fakeNQuery.calls[0].text).toContain('WHERE id EQUAL [99]');
+        expect(fakeNQuery.calls[0].text).toContain('WHERE id ANY_OF [99]');
         expect(QueryBuilder.from(customerConfig).exists()).toBe(false);
     });
 });

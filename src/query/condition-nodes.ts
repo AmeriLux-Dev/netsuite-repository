@@ -1,4 +1,17 @@
-import type { ConditionNode } from '../types';
+import type { ConditionNode, ConditionParamValue, NQueryOperatorName } from '../types';
+import type { TranslatedCondition } from './operator-translation';
+
+/**
+ * Builds the condition node for a translated operator: one node, or, when the translation applies its operator per
+ * value, one node per value combined the way the translation says.
+ */
+export function conditionNodeForTranslation(translated: TranslatedCondition, makeNode: (operator: NQueryOperatorName, values: ConditionParamValue[] | undefined) => ConditionNode): ConditionNode {
+    if (!translated.combine || !translated.values) {
+        return makeNode(translated.operator, translated.values);
+    }
+    const nodes = translated.values.map((value) => makeNode(translated.operator, [value]));
+    return nodes.length === 1 ? nodes[0] : { kind: translated.combine, nodes };
+}
 
 /** A condition and how it links to the one before it. */
 export interface LinkedCondition {

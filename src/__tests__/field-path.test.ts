@@ -20,7 +20,7 @@ describe('typed field paths', () => {
             kind: 'and',
             nodes: [
                 { kind: 'field', fieldId: 'memo', operator: 'EQUAL', values: ['x'] },
-                { kind: 'field', component: 'lines', fieldId: 'item', operator: 'EQUAL', values: [1] },
+                { kind: 'field', component: 'lines', fieldId: 'item', operator: 'ANY_OF', values: [1] },
                 { kind: 'field', component: 'shippingAddress', fieldId: 'city', operator: 'EQUAL', values: ['Dallas'] },
                 { kind: 'formula', formula: '{lines.quantity} * 2', type: 'FLOAT', operator: 'GREATER', values: [1] },
             ],

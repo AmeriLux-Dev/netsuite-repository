@@ -104,7 +104,8 @@ The class decorator is only ever `@RecordType`. A sublist line class is a record
 | Parent of a line | | `@ParentId()` on the line class's property holding the parent's internal id |
 | Field id | lowercased property name | `@Field('x')` |
 | N/query field id | the field id | `@Field('x', { queryFieldId: 'y' })` |
-| Field type | `string`, `number` (float; integer for internal ids and select fields), `boolean`, `Date`, `string[]` / `number[]` (multiselect) | `@Field({ type })` |
+| Field type | `string`, `number` (float), `boolean`, `Date`, `string[]` / `number[]` (multiselect); the internal id is a `key`, the select field behind a reference and a `@ParentId()` field a `select` | `@Field({ type })` |
+| Select field with no reference | a number or string like any other | `@Field('location', { type: 'select' })`: N/query compares select and key fields through `ANY_OF`, not `EQUAL` |
 | Read-only | the internal id, `text: true` fields, fields of a referenced record | `@ReadOnly()` |
 | Text of a select field | | `@Field({ queryFieldId: 'status', text: true })`, read in DISPLAY context |
 | Query type | the record type | `@RecordType('x', { queryType })` |
@@ -305,7 +306,7 @@ db.salesOrders.query()
 
 - A query only joins the components its selected fields, conditions, and sorts touch; `exclude()` drops a relation's fields, and a relation marked `@ExcludeFromDefaultSelect()` waits for `include()`.
 - `where()`, `orderBy()`, and `select()` are typed against the model: properties and dotted paths into relations (`customer.companyName`, `lines.item.type`) are checked, so a misspelled path is a compile error, inside specifications too. The generated `<Model>Fields` constant spells them for you (`so.lines.item.type`), with completion on every level. An alias declared on the same query by `selectFormula()` is accepted as well.
-- The operators and the value follow the property's declared type, and are translated to N/query's operators. Text takes `=`, `!=`, `LIKE`, `NOT LIKE`, `IN`, and `NOT IN`; a number adds `<`, `<=`, `>`, `>=`, and `BETWEEN`; a `Date` takes the comparisons and `BETWEEN` with `Date` values; a checkbox takes `=` and `!=` with a boolean or NetSuite's `'T'`/`'F'`. Every field takes `IS NULL` and `IS NOT NULL`; `null` is not a comparison value. `=` becomes `IS` on a checkbox, `ON` on a date, and `EQUAL` otherwise; `>=` on a date becomes `ON_OR_AFTER`; `LIKE 'Acme%'` becomes `START_WITH`, `'%Acme'` `ENDWITH`, `'%Acme%'` `CONTAIN`; `IN` becomes `ANY_OF`; `IS NULL` becomes `EMPTY`. Any N/query operator name is accepted directly on any field (`where(so.tranDate, 'WITHIN', [from, to])`). A `LIKE` pattern with `_` or a `%` in the middle has no N/query operator and is rejected; write it as a formula.
+- The operators and the value follow the property's declared type, and are translated to N/query's operators. Text takes `=`, `!=`, `LIKE`, `NOT LIKE`, `IN`, and `NOT IN`; a number adds `<`, `<=`, `>`, `>=`, and `BETWEEN`; a `Date` takes the comparisons and `BETWEEN` with `Date` values; a checkbox takes `=` and `!=` with a boolean or NetSuite's `'T'`/`'F'`. Every field takes `IS NULL` and `IS NOT NULL`; `null` is not a comparison value. `=` becomes `IS` on a checkbox, `ON` on a date, `ANY_OF` on a select, multiselect, or key field (the internal id, a reference's select field, anything declared `type: 'select'`), and `EQUAL` otherwise; `>=` on a date becomes `ON_OR_AFTER`; `LIKE 'Acme%'` becomes `START_WITH`, `'%Acme'` `ENDWITH`, `'%Acme%'` `CONTAIN`; `IS NULL` becomes `EMPTY`. `IN` becomes `ANY_OF` on a select or key field; on text, numbers, dates, and checkboxes, which have no list operator in N/query, it becomes one equality per value joined with `OR` (`NOT IN`: one negated equality per value joined with `AND`). A select field the model does not mark as one fails at run time with "Operator EQUAL is not valid"; declare it with `@Field({ type: 'select' })`. Any N/query operator name is accepted directly on any field (`where(so.tranDate, 'WITHIN', [from, to])`). A `LIKE` pattern with `_` or a `%` in the middle has no N/query operator and is rejected; write it as a formula.
 - With `useText`, and for a `text: true` field, the comparison is against the display text through a `{field#DISPLAY}` formula, so the text operators and string values apply whatever the field.
 - `selectFormula()` and `whereFormula()` are the escape hatch for anything the model does not declare. Formulas use N/query's `{fieldid}` and `{relation.fieldid}` syntax and are sent as written; values in them are part of the text, so never build a formula from untrusted input.
 - `limit()`, `offset()`, and `page()` read a row window through `runPaged`; N/query pages are five to a thousand rows, so a window smaller than five still fetches five and slices. Add an `orderBy` for deterministic pages. With a joined sublist the rows fan out, so the window applies to mapped records and the query reads every row.
@@ -349,7 +350,7 @@ it('lists open orders for a customer', () => {
     const orders = listOpenSalesOrders(db, 12);
 
     expect(orders[0].lines).toHaveLength(1);
-    expect(fakeNQuery.calls[0].text).toContain("WHERE entity EQUAL [12]");
+    expect(fakeNQuery.calls[0].text).toContain("WHERE entity ANY_OF [12]");
 });
 ```
 

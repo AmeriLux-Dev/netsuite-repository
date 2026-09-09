@@ -98,13 +98,14 @@ describe('QueryBuilder – separately loaded sublists', () => {
         const description = query(separateOrderConfig).where('entityId', '=', 7).where('lines.qty', '>', 1).orderByAsc('lines.amount').describe();
         expect(description.components).toEqual([]);
         expect(description.columns.map((column) => column.alias)).toEqual(['id', 'entityId']);
-        expect(description.condition).toEqual({ kind: 'field', fieldId: 'entity', operator: 'EQUAL', values: [7] });
+        expect(description.condition).toEqual({ kind: 'field', fieldId: 'entity', operator: 'ANY_OF', values: [7] });
         expect(description.sort).toEqual([]);
         expect(description.separateLoads).toEqual([{
             relationship: 'lines',
             kind: 'sublist',
             parentKeyPath: 'id',
             batchFieldId: 'id',
+            batchFieldType: 'key',
             parentKeyAlias: '__parentKey',
             description: {
                 queryType: 'salesorder',
@@ -187,6 +188,7 @@ describe('QueryBuilder – separately loaded references', () => {
             kind: 'reference',
             parentKeyPath: 'carrierCode',
             batchFieldId: 'custrecord_carrier_code',
+            batchFieldType: 'string',
             parentKeyAlias: '__parentKey',
             description: {
                 queryType: 'customrecord_carrier',
@@ -211,7 +213,8 @@ describe('QueryBuilder – separately loaded references', () => {
             { id: 2, carrierCode: 'UPS', carrier: null },
             { id: 3, carrierCode: null, carrier: null },
         ]);
-        expect(fakeNQuery.calls[1].text).toContain("custrecord_carrier_code ANY_OF ['FDX', 'UPS']");
+        // The carrier code is text, which has no list operator: one EQUAL per code.
+        expect(fakeNQuery.calls[1].text).toContain("WHERE custrecord_carrier_code EQUAL ['FDX'] OR custrecord_carrier_code EQUAL ['UPS']");
     });
 
     it('refuses a separate reference without separate load facts', () => {

@@ -25,7 +25,7 @@ import type {
     SeparateLoadDescription,
     SortDirection,
 } from '../types';
-import { collectConditionComponents, combineConditions, rerootConditionNode } from './condition-nodes';
+import { collectConditionComponents, combineConditions, conditionNodeForTranslation, rerootConditionNode } from './condition-nodes';
 import type { LinkedCondition } from './condition-nodes';
 import { compileQueryDescriptionToNQuery } from './n-query-compiler';
 import { translateConditionOperator } from './operator-translation';
@@ -81,6 +81,23 @@ interface QueryPlan {
     description: QueryDescription;
     mapping: ResultMappingOptions;
     separateMappings: Map<string, ResultMappingOptions>;
+}
+
+/**
+ * Runs a step against N/query and, when it fails, rethrows with the rendered query appended: NetSuite's message
+ * names the problem ("Operator EQUAL is not valid for given search filter") but never the query.
+ */
+function withQueryInError<T>(description: QueryDescription, step: () => T): T {
+    try {
+        return step();
+    } catch (error) {
+        const failure = error as { name?: string; message?: string } | undefined;
+        const message = failure && typeof failure.message === 'string' ? failure.message : String(error);
+        const named = failure && typeof failure.name === 'string' && failure.name !== 'Error' ? `${failure.name}: ${message}` : message;
+        const wrapped = new Error(`${named}\nQuery:\n${renderQueryDescription(description)}`);
+        (wrapped as Error & { cause?: unknown }).cause = error;
+        throw wrapped;
+    }
 }
 
 function omitUndefined<T extends object>(value: T): T {
@@ -360,7 +377,8 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
 
     /** The SuiteQL NetSuite renders for this query, for debugging. Costs nothing; nothing executes. */
     toSQL(): string {
-        return compileQueryDescriptionToNQuery(this.plan(true).description, getNsQuery()).toSuiteQL().query;
+        const description = this.plan(true).description;
+        return withQueryInError(description, () => compileQueryDescriptionToNQuery(description, getNsQuery()).toSuiteQL().query);
     }
 
     // ── planning ──────────────────────────────────────────────────────────────
@@ -437,7 +455,7 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
                 sort: sorts.map((sort) => omitUndefined({ ...sort, component: reroot(sort.component) })),
             });
             return {
-                load: { relationship, kind, description, parentKeyPath: parentKeyField.nestPath ?? separate.parentKeyField, batchFieldId: separate.targetKeyFieldId, parentKeyAlias },
+                load: { relationship, kind, description, parentKeyPath: parentKeyField.nestPath ?? separate.parentKeyField, batchFieldId: separate.targetKeyFieldId, batchFieldType: separate.targetKeyFieldType ?? 'key', parentKeyAlias },
                 mapping: this.relationMappingOptions(relationship, relationFields, kind),
             };
         }
@@ -456,7 +474,7 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
             sort: sorts.length > 0 ? sorts : defaultSort,
         });
         return {
-            load: { relationship, kind, description, parentKeyPath: primary.field.nestPath ?? primary.key, batchFieldId: primary.field.queryFieldId, parentKeyAlias },
+            load: { relationship, kind, description, parentKeyPath: primary.field.nestPath ?? primary.key, batchFieldId: primary.field.queryFieldId, batchFieldType: 'key', parentKeyAlias },
             mapping: this.relationMappingOptions(relationship, relationFields, kind),
         };
     }
@@ -550,11 +568,13 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
     // ── running ───────────────────────────────────────────────────────────────
 
     private executeDescription(description: QueryDescription): ResultRow[] {
-        const query = compileQueryDescriptionToNQuery(description, getNsQuery());
-        if (!description.page) {
-            return query.run().asMappedResults() as ResultRow[];
-        }
-        return this.runPageWindow(query, description.page);
+        return withQueryInError(description, () => {
+            const query = compileQueryDescriptionToNQuery(description, getNsQuery());
+            if (!description.page) {
+                return query.run().asMappedResults() as ResultRow[];
+            }
+            return this.runPageWindow(query, description.page);
+        });
     }
 
     /** Reads a row window through runPaged: pages are sized to the window, fetched from the first page that overlaps it, and sliced. */
@@ -593,12 +613,14 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
             return this;
         }
         const { key, field } = this.resolveField(rawField);
-        const translated = translateConditionOperator(operator, useText ? 'string' : field.type, value);
-        const node: ConditionNode = field.formula !== undefined
-            ? omitUndefined({ kind: 'formula' as const, formula: field.formula, type: field.formulaType, operator: translated.operator, values: translated.values })
+        // The internal id is a key whatever the model types it as; display text compares as a string.
+        const fieldType = useText || field.fieldContext === 'DISPLAY' ? 'string' : field.isPrimary ? 'key' : field.type;
+        const translated = translateConditionOperator(operator, fieldType, value);
+        const node = conditionNodeForTranslation(translated, (translatedOperator, values) => (field.formula !== undefined
+            ? omitUndefined({ kind: 'formula' as const, formula: field.formula, type: field.formulaType, operator: translatedOperator, values })
             : useText || field.fieldContext === 'DISPLAY'
-                ? this.createDisplayTextConditionNode(field, translated.operator, translated.values)
-                : omitUndefined({ kind: 'field' as const, component: field.component, fieldId: field.queryFieldId, operator: translated.operator, values: translated.values });
+                ? this.createDisplayTextConditionNode(field, translatedOperator, values)
+                : omitUndefined({ kind: 'field' as const, component: field.component, fieldId: field.queryFieldId, operator: translatedOperator, values })));
         this.conditions.push(omitUndefined({ node, link, relationship: this.separateRelationshipOf(key, field) }));
         return this;
     }

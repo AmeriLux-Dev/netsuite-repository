@@ -168,6 +168,8 @@ export interface SeparateLoad {
     parentKeyField: string;
     /** N/query field id on the target compared with the collected values. */
     targetKeyFieldId: string;
+    /** Type of that field; a select or key field takes ANY_OF, anything else one EQUAL per value. Defaults to `key`. */
+    targetKeyFieldType?: FieldType;
 }
 
 /** One joined component of a query, keyed by its dotted property path (`lines`, `lines.item`, `customer`). */
@@ -378,6 +380,8 @@ export interface SeparateLoadDescription {
     parentKeyPath: string;
     /** Root field id of the separate query compared with the collected values. */
     batchFieldId: string;
+    /** Type of that field: select and key fields take the batch as ANY_OF, other types as one EQUAL per value. */
+    batchFieldType?: FieldType;
     /** Alias of the column in the separate query that carries the value matched back to the parent. */
     parentKeyAlias: string;
 }

@@ -19,6 +19,10 @@ export interface RecordTypeOptions {
 export interface FieldOptions {
     /** N/query field id when it differs from the record field id. */
     queryFieldId?: string;
+    /**
+     * Overrides the type inferred from the property. Declare `select` on a list/record field with no reference: N/query
+     * compares select and key fields through ANY_OF and rejects EQUAL on them.
+     */
     type?: FieldType;
     /** Read the display text of a select field. Text fields are read-only; declare a second property to write the select field itself. */
     text?: boolean;

@@ -24,9 +24,20 @@ describe('translateConditionOperator', () => {
         expect(translateConditionOperator('<=', 'datetime', day)).toEqual({ operator: 'ON_OR_BEFORE', values: [day] });
     });
 
+    it('compares select, multiselect, and key fields through ANY_OF', () => {
+        expect(translateConditionOperator('=', 'select', 7)).toEqual({ operator: 'ANY_OF', values: [7] });
+        expect(translateConditionOperator('!=', 'key', 7)).toEqual({ operator: 'ANY_OF_NOT', values: [7] });
+        expect(translateConditionOperator('IN', 'multiselect', [1, 2])).toEqual({ operator: 'ANY_OF', values: [1, 2] });
+        expect(translateConditionOperator('NOT IN', 'select', ['A', 'B'])).toEqual({ operator: 'ANY_OF_NOT', values: ['A', 'B'] });
+    });
+
     it('translates membership, null checks, and ranges', () => {
-        expect(translateConditionOperator('IN', 'integer', [1, 2])).toEqual({ operator: 'ANY_OF', values: [1, 2] });
-        expect(translateConditionOperator('NOT IN', 'string', ['a'])).toEqual({ operator: 'ANY_OF_NOT', values: ['a'] });
+        // N/query has no list operator for text, numbers, dates, or checkboxes: one equality per value, combined.
+        expect(translateConditionOperator('IN', 'integer', [1, 2])).toEqual({ operator: 'EQUAL', values: [1, 2], combine: 'or' });
+        expect(translateConditionOperator('NOT IN', 'string', ['a'])).toEqual({ operator: 'EQUAL_NOT', values: ['a'], combine: 'and' });
+        const day = new Date(2026, 0, 5);
+        expect(translateConditionOperator('IN', 'date', [day])).toEqual({ operator: 'ON', values: [day], combine: 'or' });
+        expect(translateConditionOperator('NOT IN', 'checkbox', ['T'])).toEqual({ operator: 'IS_NOT', values: [true], combine: 'and' });
         expect(translateConditionOperator('IS NULL', 'string', undefined)).toEqual({ operator: 'EMPTY' });
         expect(translateConditionOperator('IS NOT NULL', 'string', undefined)).toEqual({ operator: 'EMPTY_NOT' });
         expect(translateConditionOperator('BETWEEN', 'float', [1, 9])).toEqual({ operator: 'BETWEEN', values: [1, 9] });

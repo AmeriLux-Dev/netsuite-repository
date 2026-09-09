@@ -64,7 +64,7 @@ describe('RecordSet.where()', () => {
     it('returns a QueryBuilder with condition applied', () => {
         const builder = new RecordSet(customerConfig).where('id', '=', 1);
         expect(builder).toBeInstanceOf(QueryBuilder);
-        expect(builder.describeText()).toContain('WHERE id EQUAL [1]');
+        expect(builder.describeText()).toContain('WHERE id ANY_OF [1]');
     });
 });
 
@@ -73,7 +73,7 @@ describe('RecordSet.find()', () => {
         queueCustomers([{ id: 5, name: 'Found', email: '', isactive: false, score: 0 }]);
         const result = new RecordSet(customerConfig).find(5);
         expect(result?.name).toBe('Found');
-        expect(fakeNQuery.calls[0].text).toContain('WHERE id EQUAL [5]');
+        expect(fakeNQuery.calls[0].text).toContain('WHERE id ANY_OF [5]');
     });
 
     it('returns null when not found', () => {

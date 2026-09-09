@@ -1,5 +1,19 @@
-import { collectConditionComponents, combineConditions, rerootConditionNode } from '../query';
-import type { ConditionNode } from '../types';
+import { collectConditionComponents, combineConditions, conditionNodeForTranslation, rerootConditionNode } from '../query';
+import type { ConditionNode, ConditionParamValue, NQueryOperatorName } from '../types';
+
+describe('conditionNodeForTranslation', () => {
+    const fieldNode = (operator: NQueryOperatorName, values: ConditionParamValue[] | undefined): ConditionNode => ({ kind: 'field', fieldId: 'x', operator, values });
+
+    it('builds one node for a plain translation and one per value for a combined one', () => {
+        expect(conditionNodeForTranslation({ operator: 'ANY_OF', values: [1, 2] }, fieldNode)).toEqual({ kind: 'field', fieldId: 'x', operator: 'ANY_OF', values: [1, 2] });
+        expect(conditionNodeForTranslation({ operator: 'EMPTY' }, fieldNode)).toEqual({ kind: 'field', fieldId: 'x', operator: 'EMPTY', values: undefined });
+        expect(conditionNodeForTranslation({ operator: 'EQUAL', values: ['a'], combine: 'or' }, fieldNode)).toEqual({ kind: 'field', fieldId: 'x', operator: 'EQUAL', values: ['a'] });
+        expect(conditionNodeForTranslation({ operator: 'EQUAL_NOT', values: ['a', 'b'], combine: 'and' }, fieldNode)).toEqual({
+            kind: 'and',
+            nodes: [{ kind: 'field', fieldId: 'x', operator: 'EQUAL_NOT', values: ['a'] }, { kind: 'field', fieldId: 'x', operator: 'EQUAL_NOT', values: ['b'] }],
+        });
+    });
+});
 
 const a: ConditionNode = { kind: 'field', fieldId: 'a', operator: 'EMPTY' };
 const b: ConditionNode = { kind: 'field', component: 'lines', fieldId: 'b', operator: 'EMPTY' };

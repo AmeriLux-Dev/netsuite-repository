@@ -53,7 +53,7 @@ describe('condition operators translated from the field type', () => {
     it('compares against display text with useText, and always for a DISPLAY field', () => {
         expect(conditionOf(QueryBuilder.from(activityConfig).where('id', 'LIKE', 'Ship%', true))).toEqual({ kind: 'formula', formula: '{id#DISPLAY}', type: 'STRING', operator: 'START_WITH', values: ['Ship'] });
         expect(conditionOf(QueryBuilder.from(activityConfig).where('kind', '=', 'order'))).toEqual({ kind: 'formula', formula: '{custrecord_kind#DISPLAY}', type: 'STRING', operator: 'EQUAL', values: ['order'] });
-        expect(conditionOf(QueryBuilder.from(activityConfig).where('name', 'IN', ['a', 'b']))).toEqual({ kind: 'field', fieldId: 'name', operator: 'ANY_OF', values: ['a', 'b'] });
+        expect(conditionOf(QueryBuilder.from(activityConfig).where('name', 'IN', ['a', 'b']))).toEqual({ kind: 'or', nodes: [{ kind: 'field', fieldId: 'name', operator: 'EQUAL', values: ['a'] }, { kind: 'field', fieldId: 'name', operator: 'EQUAL', values: ['b'] }] });
     });
 
     it('accepts N/query operator names directly', () => {

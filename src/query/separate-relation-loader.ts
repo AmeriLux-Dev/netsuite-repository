@@ -1,4 +1,6 @@
 import type { ConditionNode, ConditionParamValue, QueryDescription, QueryResultValue, SeparateLoadDescription } from '../types';
+import { conditionNodeForTranslation } from './condition-nodes';
+import { translateConditionOperator } from './operator-translation';
 import { getValueAtPath, mapRowsToResults, normalizeMappedResultKey } from './result-mapper';
 import type { ResultMappingOptions, ResultRow } from './result-mapper';
 
@@ -39,7 +41,8 @@ export function batchValues<T>(values: T[], batchSize: number): T[][] {
 }
 
 function withBatchCondition(load: SeparateLoadDescription, batch: ConditionParamValue[]): QueryDescription {
-    const batchNode: ConditionNode = { kind: 'field', fieldId: load.batchFieldId, operator: 'ANY_OF', values: batch };
+    const translated = translateConditionOperator('IN', load.batchFieldType ?? 'key', batch);
+    const batchNode = conditionNodeForTranslation(translated, (operator, values) => ({ kind: 'field', fieldId: load.batchFieldId, operator, values }));
     const condition: ConditionNode = load.description.condition ? { kind: 'and', nodes: [batchNode, load.description.condition] } : batchNode;
     return { ...load.description, condition };
 }

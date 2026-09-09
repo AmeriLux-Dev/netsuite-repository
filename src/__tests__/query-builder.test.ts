@@ -57,7 +57,7 @@ describe('QueryBuilder.describe() – columns', () => {
 
     it('lets a group condition use a formula alias declared outside the group', () => {
         const description = QueryBuilder.from(customerConfig).selectFormula('{custentity_score} * 2', 'doubled', { fieldType: 'float' }).whereGroup((builder) => builder.where('doubled', '>', 1).orWhere('id', '=', 3)).describe();
-        expect(description.condition).toEqual({ kind: 'or', nodes: [{ kind: 'formula', formula: '{custentity_score} * 2', operator: 'GREATER', values: [1] }, { kind: 'field', fieldId: 'id', operator: 'EQUAL', values: [3] }] });
+        expect(description.condition).toEqual({ kind: 'or', nodes: [{ kind: 'formula', formula: '{custentity_score} * 2', operator: 'GREATER', values: [1] }, { kind: 'field', fieldId: 'id', operator: 'ANY_OF', values: [3] }] });
     });
 
     it('rejects a formula alias that clashes with a field or another formula', () => {
@@ -131,7 +131,7 @@ describe('QueryBuilder.describe() – conditions', () => {
         expect(condition(QueryBuilder.from(customerConfig).whereFormula('{datecreated} > SYSDATE - 30'))).toEqual({ kind: 'formula', formula: '{datecreated} > SYSDATE - 30', type: 'BOOLEAN' });
         expect(condition(QueryBuilder.from(customerConfig).where('id', '=', 1).orWhereFormula('{score}', 'FLOAT', 'GREATER', 5))).toEqual({
             kind: 'or',
-            nodes: [{ kind: 'field', fieldId: 'id', operator: 'EQUAL', values: [1] }, { kind: 'formula', formula: '{score}', type: 'FLOAT', operator: 'GREATER', values: [5] }],
+            nodes: [{ kind: 'field', fieldId: 'id', operator: 'ANY_OF', values: [1] }, { kind: 'formula', formula: '{score}', type: 'FLOAT', operator: 'GREATER', values: [5] }],
         });
         expect(condition(QueryBuilder.from(customerConfig).whereFormula('{tags}', 'STRING', 'ANY_OF', ['a', 'b']))).toEqual({ kind: 'formula', formula: '{tags}', type: 'STRING', operator: 'ANY_OF', values: ['a', 'b'] });
     });
@@ -178,7 +178,7 @@ describe('QueryBuilder.describeText()', () => {
             'FROM salesorder',
             'JOIN from transactionline.transaction AS lines WHERE lines.mainline IS [false]',
             'SELECT id AS id, entity AS entityId, lines.item AS lines_itemId, lines.quantity AS lines_qty, lines.amount AS lines_amount',
-            'WHERE entity EQUAL [7] AND lines.item ANY_OF [1, 2]',
+            'WHERE entity ANY_OF [7] AND lines.item ANY_OF [1, 2]',
             'ORDER BY lines.quantity DESC',
             'PAGE offset 25 limit 25',
         ].join('\n'));
