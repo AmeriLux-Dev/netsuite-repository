@@ -133,6 +133,8 @@ describe('planGeneration() – model fixtures', () => {
         expect(invoiceConfig).toContain("        'lines.location.mainAddress': {\n            path: 'lines.location.mainAddress',\n            parent: 'lines.location',\n            relationship: 'lines',\n            load: 'separate',\n            join: {\n                kind: 'auto',\n                fieldId: 'mainaddress',\n            },\n        },");
         expect(invoiceConfig).toMatch(/billingAddress: \{\n\s+path: 'billingAddress',\n\s+relationship: 'billingAddress',\n\s+load: 'separate',/);
         expect(invoiceConfig).toMatch(/carrier: \{\n\s+kind: 'reference',[\s\S]*?load: 'separate',/);
+        // A reference by internal id that asks to load separately matches the target's id against the select field values.
+        expect(invoiceConfig).toContain("        location: {\n            path: 'location',\n            relationship: 'location',\n            load: 'separate',\n            join: {\n                kind: 'to',\n                fieldId: 'location',\n                target: 'location',\n            },\n            separate: {\n                queryType: 'location',\n                parentKeyField: 'locationId',\n                targetKeyFieldId: 'id',\n            },\n        },");
         expect(warehouseConfig).toContain("        mainAddress: {\n            path: 'mainAddress',\n            relationship: 'mainAddress',\n            load: 'join',\n            join: {\n                kind: 'auto',\n                fieldId: 'mainaddress',\n            },\n        },");
     });
 

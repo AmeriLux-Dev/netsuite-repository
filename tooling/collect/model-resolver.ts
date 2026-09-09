@@ -298,7 +298,10 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
                     ? { kind: 'auto', fieldId: selectField.queryFieldId }
                     : { kind: 'to', fieldId: selectField.queryFieldId, target: target.queryType as string };
                 if (targetKeyProperty === undefined) {
-                    relations.push({ ...toRelation('reference', join, load), relations: nested() });
+                    // A reference loaded separately by internal id: the second query matches the target's key against the select field values.
+                    const targetKeyQueryFieldId = target.fields.find((field) => field.name === target.keyProperty)?.queryFieldId ?? target.keyProperty.toLowerCase();
+                    const separate = load === 'separate' ? { queryType: target.queryType as string, parentKeyField: selectFieldProperty, targetKeyFieldId: targetKeyQueryFieldId } : undefined;
+                    relations.push({ ...toRelation('reference', join, load), ...(separate ? { separate } : {}), relations: nested() });
                     continue;
                 }
                 const targetKeyField = target.fields.find((field) => field.name === targetKeyProperty);

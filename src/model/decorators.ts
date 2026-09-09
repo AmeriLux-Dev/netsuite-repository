@@ -31,7 +31,10 @@ export interface RelationOptions {
 }
 
 export interface ReferenceOptions extends RelationOptions {
-    /** Property on the referenced class to match when it is not its internal id. Such a reference always loads separately. */
+    /**
+     * Property on the referenced class to match when it is not its internal id. Such a reference always loads separately.
+     * Without it, `load: 'separate'` matches the target's internal id by a second query, for references N/query has no join for.
+     */
     targetKey?: string;
     /** How the reference is joined: `auto` (autoJoin on the select field) or `to` (joinTo with the target's query type). */
     join?: ReferenceJoinKind;

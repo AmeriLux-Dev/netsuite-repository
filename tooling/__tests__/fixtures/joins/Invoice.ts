@@ -31,6 +31,9 @@ export class InvoiceLine {
 @RecordType('invoice')
 export class Invoice {
     id!: number;
+    @Field('location') locationId!: number | null;
+    /** A reference by internal id that N/query has no join for: loaded by a second query matching the target's id. */
+    @Reference('locationId', { load: 'separate' }) location?: Pick<Warehouse, 'id' | 'name'>;
     @Field('custbody_carrier_code') carrierCode!: string | null;
     /** Matched on the carrier's code rather than its internal id, so it loads by a query of its own. */
     @Reference('carrierCode', { targetKey: 'code' }) carrier?: Pick<Carrier, 'id' | 'name'>;

@@ -113,6 +113,7 @@ The class decorator is only ever `@RecordType`. A sublist line class is a record
 | Select field of a reference | `<reference>Id` on the same class | `@Reference('entityId')` |
 | Reference join | `joinTo` through the select field and the target's record type | `@Reference({ join: 'auto' })` |
 | Reference matched on another field | | `@Reference('code', { targetKey: 'code' })`; always loaded separately |
+| Reference N/query has no join for | | `@Reference('parentId', { load: 'separate' })`: a second query matches the target's internal id against the select field values |
 | Subrecord field id | lowercased property name | `@Subrecord('x')` |
 | Subrecord list field to clear | none | `@Subrecord({ clearListField: 'shipaddresslist' })` |
 | Sublist id | lowercased property name | `@Sublist('x')` |
