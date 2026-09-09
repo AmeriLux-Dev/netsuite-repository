@@ -85,6 +85,38 @@ describe('compileQueryDescriptionToNQuery', () => {
         });
     });
 
+    it('sorts on the selected column object when the sorted field is selected, and on its own column otherwise', () => {
+        const { query } = compile({
+            queryType: 'salesorder',
+            components: [{ path: 'lines', join: { kind: 'auto', fieldId: 'transactionlines' }, conditions: [] }],
+            columns: [
+                { alias: 'id', fieldId: 'id' },
+                { alias: 'trandate', fieldId: 'trandate' },
+                { alias: 'status', fieldId: 'status', context: 'DISPLAY' },
+                { alias: 'lines_id', component: 'lines', fieldId: 'id' },
+                { alias: 'total', formula: '{quantity} * {rate}', formulaType: 'FLOAT' },
+                { alias: 'count', fieldId: 'id', aggregate: 'COUNT' },
+            ],
+            sort: [
+                { fieldId: 'trandate', ascending: true },
+                { fieldId: 'status', context: 'DISPLAY', ascending: true },
+                { fieldId: 'status', ascending: true },
+                { component: 'lines', fieldId: 'id', ascending: true },
+                { fieldId: 'id', ascending: false },
+                { formula: '{quantity} * {rate}', formulaType: 'FLOAT', ascending: true },
+                { fieldId: 'tranid', ascending: true },
+            ],
+        });
+        const sortColumns = query.sort.map((sort) => sort.column);
+        expect(sortColumns[0]).toBe(query.columns[1]);
+        expect(sortColumns[1]).toBe(query.columns[2]);
+        expect(query.columns).not.toContain(sortColumns[2]); // the raw status is not selected, only its display text
+        expect(sortColumns[3]).toBe(query.columns[3]);
+        expect(sortColumns[4]).toBe(query.columns[0]); // the plain id, never the COUNT aggregate
+        expect(sortColumns[5]).toBe(query.columns[4]);
+        expect(query.columns).not.toContain(sortColumns[6]);
+    });
+
     it('leaves the condition empty when nothing filters', () => {
         const { query } = compile({ queryType: 'customer', components: [], columns: [{ alias: 'id', fieldId: 'id' }], sort: [] });
         expect(query.condition).toBeUndefined();

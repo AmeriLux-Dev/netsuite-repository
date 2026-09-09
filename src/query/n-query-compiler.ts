@@ -45,6 +45,20 @@ function createColumn(component: NsQuery.Component, column: DescribedColumn, nsQ
     return component.createColumn(omitUndefined({ fieldId: column.fieldId, alias: column.alias, aggregate, context }) as ColumnOptions);
 }
 
+/**
+ * The selected column a sort can reuse: same component, field or formula, and context, and no aggregate. N/query
+ * documents sorting on one of the query's own columns; a column object created only for the sort is the fallback
+ * when the sorted field is not selected.
+ */
+function selectedColumnForSort(sort: DescribedSort, columns: DescribedColumn[], created: NsQuery.Column[]): NsQuery.Column | undefined {
+    const index = columns.findIndex((column) =>
+        column.component === sort.component && column.aggregate === undefined && column.context === sort.context
+        && (sort.formula !== undefined
+            ? column.formula === sort.formula && column.formulaType === sort.formulaType
+            : column.formula === undefined && column.fieldId === sort.fieldId));
+    return index === -1 ? undefined : created[index];
+}
+
 function createSortColumn(component: NsQuery.Component, sort: DescribedSort, nsQuery: NQueryModule): NsQuery.Column {
     const context = sort.context === undefined ? undefined : resolveNQueryEnumValue(nsQuery.FieldContext, sort.context, 'FieldContext');
     if (sort.formula !== undefined) {
@@ -88,7 +102,8 @@ export function compileQueryDescriptionToNQuery(description: QueryDescription, n
         components.set(component.path, joinComponent(componentAt(component.parent), component.join));
     }
 
-    query.columns = description.columns.map((column) => createColumn(componentAt(column.component), column, nsQuery));
+    const columns = description.columns.map((column) => createColumn(componentAt(column.component), column, nsQuery));
+    query.columns = columns;
 
     const compileConditionNode = (node: ConditionNode): NsQuery.Condition => {
         switch (node.kind) {
@@ -121,7 +136,8 @@ export function compileQueryDescriptionToNQuery(description: QueryDescription, n
 
     query.sort = description.sort.map((sort) => {
         const component = componentAt(sort.component);
-        return component.createSort(omitUndefined({ column: createSortColumn(component, sort, nsQuery), ascending: sort.ascending, nullsLast: sort.nullsLast }));
+        const column = selectedColumnForSort(sort, description.columns, columns) ?? createSortColumn(component, sort, nsQuery);
+        return component.createSort(omitUndefined({ column, ascending: sort.ascending, nullsLast: sort.nullsLast }));
     });
 
     return query;
