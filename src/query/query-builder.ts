@@ -464,17 +464,21 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
         if (!primary) {
             throw new Error(`A primary key field is required to load '${relationship}' separately on '${this.config.recordType}'.`);
         }
-        const columns = [...relationFields.map(([key, field]) => this.toColumn(key, field)), { alias: parentKeyAlias, fieldId: primary.field.queryFieldId }];
+        // A sublist may run its own query on another root (a sales order's lines hang off `transaction`); it then matches
+        // the owner by internal id and the owner's root conditions do not apply.
+        const ownRoot = component.separate;
+        const batchFieldId = ownRoot?.targetKeyFieldId ?? primary.field.queryFieldId;
+        const columns = [...relationFields.map(([key, field]) => this.toColumn(key, field)), { alias: parentKeyAlias, fieldId: batchFieldId }];
         const defaultSort: DescribedSort[] = component.lineOrderFieldId ? [{ component: relationship, fieldId: component.lineOrderFieldId, ascending: true }] : [];
         const description: QueryDescription = omitUndefined({
-            queryType: this.config.queryType ?? this.config.recordType,
+            queryType: ownRoot?.queryType ?? this.config.queryType ?? this.config.recordType,
             components: this.orderComponents(relationComponents).map((candidate) => this.toDescribedComponent(candidate)),
             columns,
-            condition: this.combineWithRootConditions(combineConditions(conditions)),
+            condition: ownRoot ? combineConditions(conditions) : this.combineWithRootConditions(combineConditions(conditions)),
             sort: sorts.length > 0 ? sorts : defaultSort,
         });
         return {
-            load: { relationship, kind, description, parentKeyPath: primary.field.nestPath ?? primary.key, batchFieldId: primary.field.queryFieldId, batchFieldType: 'key', parentKeyAlias },
+            load: { relationship, kind, description, parentKeyPath: primary.field.nestPath ?? primary.key, batchFieldId, batchFieldType: ownRoot?.targetKeyFieldType ?? 'key', parentKeyAlias },
             mapping: this.relationMappingOptions(relationship, relationFields, kind),
         };
     }

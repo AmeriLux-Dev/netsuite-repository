@@ -45,6 +45,8 @@ export interface PropertyOverrides {
     relationshipFieldId?: string;
     /** Sublist: conditions on the line component that pick the sublist's rows out of the line type. */
     filter?: ComponentCondition[];
+    /** Sublist loaded separately: root type of the line query when it is not the owner's query type. */
+    separateQueryType?: string;
 }
 
 /** Everything the class decorators say about one class, merged along the prototype chain by getClassOverrides(). */

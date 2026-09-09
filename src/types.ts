@@ -160,7 +160,10 @@ export interface ComponentCondition {
     values?: ConditionParamValue[];
 }
 
-/** Facts the separate loader needs for a reference loaded outside the parent query. */
+/**
+ * Facts the separate loader needs for a relation loaded outside the parent query: a reference matched on a target
+ * field, or a sublist whose lines are queried from another root than the owner's and matched by internal id.
+ */
 export interface SeparateLoad {
     /** Root type of the second query. */
     queryType: string;

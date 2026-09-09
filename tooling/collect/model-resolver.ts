@@ -264,8 +264,17 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
                     join = { kind: 'from', fieldId: parentKeyField.queryFieldId, source: target.queryType as string };
                 }
                 const lineKeyField = target.fields.find((field) => field.name === target.keyProperty);
+                const separateQueryType = propertyOverrides?.separateQueryType;
+                if (separateQueryType !== undefined && load !== 'separate') {
+                    report(entry, `Sublist '${qualifiedName}' ('${sublistId}') names a query type ('${separateQueryType}') for its own query, so it must load separately; add load: 'separate'.`);
+                    continue;
+                }
+                // Lines reached from another root than the owner's are matched to the owner by internal id.
+                const ownerKeyQueryFieldId = resolved.fields.find((field) => field.name === resolved.keyProperty)?.queryFieldId ?? resolved.keyProperty.toLowerCase();
+                const separate = separateQueryType === undefined ? undefined : { queryType: separateQueryType, parentKeyField: resolved.keyProperty, targetKeyFieldId: ownerKeyQueryFieldId, targetKeyFieldType: 'key' as const };
                 relations.push({
                     ...toRelation('sublist', join, load),
+                    ...(separate ? { separate } : {}),
                     sublistId,
                     filter: propertyOverrides?.filter,
                     lineKeyProperty: target.keyProperty,

@@ -63,6 +63,19 @@ export const separateOrderConfig = defineQueryConfig<Order>({
     },
 });
 
+/** Lines queried from another root than the owner's (`transaction`), matched to the order by internal id. */
+export const ownRootLinesOrderConfig = defineQueryConfig<Order>({
+    ...separateOrderConfig,
+    rootConditions: [{ fieldId: 'type', operator: 'ANY_OF', values: ['SalesOrd'] }],
+    components: {
+        lines: {
+            ...separateOrderConfig.components!.lines,
+            join: { kind: 'auto', fieldId: 'transactionlines' },
+            separate: { queryType: 'transaction', parentKeyField: 'id', targetKeyFieldId: 'id', targetKeyFieldType: 'key' },
+        },
+    },
+});
+
 // ── Vendor bill with an owned subrecord relationship ──────────────────────────
 
 export interface VendorBill {

@@ -49,6 +49,9 @@ export class SalesOrder extends Transaction {
     @Field('foreigntotal') @ReadOnly() total!: number;
     @Field('custbody_auto_approved') autoApproved!: boolean;
     @Field('shipmethod') shipMethodId!: number | null;
-    /** The item lines: the order's `transactionlines` relationship (a sales order root has no reverse join from the line's `transaction` field), without the header line. */
-    @Sublist('item', { relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }) lines!: TransactionLine[];
+    /**
+     * The item lines. A `salesorder` root has no join to its lines in N/query; the `transaction` root reaches them through
+     * `transactionlines`, so the lines run as their own query on that root, matched to the order by id.
+     */
+    @Sublist('item', { load: 'separate', queryType: 'transaction', relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }) lines!: TransactionLine[];
 }

@@ -44,7 +44,7 @@ export const SalesOrderConfig: QueryConfig<SalesOrder> = {
         lines: {
             path: 'lines',
             relationship: 'lines',
-            load: 'join',
+            load: 'separate',
             join: {
                 kind: 'auto',
                 fieldId: 'transactionlines',
@@ -58,6 +58,12 @@ export const SalesOrderConfig: QueryConfig<SalesOrder> = {
                     ],
                 },
             ],
+            separate: {
+                queryType: 'transaction',
+                parentKeyField: 'id',
+                targetKeyFieldId: 'id',
+                targetKeyFieldType: 'key',
+            },
             lineOrderFieldId: 'id',
         },
     },
@@ -334,7 +340,7 @@ export const SalesOrderConfig: QueryConfig<SalesOrder> = {
             components: [
                 'lines',
             ],
-            load: 'join',
+            load: 'separate',
             matchField: 'id',
         },
     },

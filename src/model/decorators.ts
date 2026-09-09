@@ -54,6 +54,12 @@ export interface SublistOptions extends RelationOptions {
     filter?: ComponentCondition[];
     /** Relationship field for autoJoin, instead of joinFrom through the line class's @ParentId() field. */
     relationship?: string;
+    /**
+     * Root type of the separate line query when the lines are reached from another record than the owner's query
+     * type: a sales order's lines hang off `transaction`, not `salesorder`. The lines are matched to the owner by
+     * internal id. Requires `load: 'separate'`.
+     */
+    queryType?: string;
 }
 
 type ClassDecoratorFunction = (target: Function) => void;
@@ -184,6 +190,7 @@ export function Sublist(first?: string | SublistOptions, second?: SublistOptions
         if (sublistId !== undefined) property.sublistId = sublistId;
         if (options.filter !== undefined) property.filter = options.filter;
         if (options.relationship !== undefined) property.relationshipFieldId = options.relationship;
+        if (options.queryType !== undefined) property.separateQueryType = options.queryType;
         applyRelationOptions(property, options);
     });
 }

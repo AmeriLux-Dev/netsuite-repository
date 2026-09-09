@@ -8,11 +8,10 @@ N/query and carries no NetSuite schema of its own.
 |---|---|---|
 | `n-query-join-probe.js` | Does `autoJoin` accept subrecord, sublist, and select fields? Does `Component.target` name the table? | `n-query-join-probe.results-run1.json`. Every join was accepted; `target` is null; a formula column does not make the join render. |
 | `n-query-join-probe-2.js` | Does a real field on the joined side render the join, and what does the predicate look like? | `n-query-join-probe.results-run2.json`. Yes: `"TRANSACTION".shippingaddress = transactionShippingAddress.nkey(+)`; sublist joins render inner without a main-line filter; `autoJoin` on select fields such as `entity` fails at render. |
+| `sublist-join-probe.js`, `transaction-root-probe.js` | Which join forms reach a sales order's lines, the line's item and location, and a custom record's lookups; what the `transaction` root exposes. | Run 2026-09-09; results pasted in the session, summarized in the design notes below. |
 | `n-query-object-model-probe-3.js` | Everything the 1.0.0 runtime assumes: the record type as query type, `joinFrom` for sublists, `joinTo` for references, DISPLAY columns, text conditions, operators per field type, paging and key casing, and/or/not, root types, aggregates, `ANY_OF` list sizes, sorts, datetime operators. | Pending. Fill in the ids at the top, run it, and save the returned JSON as `n-query-object-model-probe-3.results.json`. |
-
 | `smoke-test-1.0.0.js` | Do the three query shapes the consumer's generated configs compile to run in an account: the order header with `joinFrom` lines, `autoJoin` addresses, `joinTo` items, DISPLAY columns, and text conditions; the separate load of a reference matched on a code column; a datetime condition on a custom record. | Pending. Fill in the ids at the top, run, and compare row counts and keys with the previous build. |
-
-| `bisect-render-failure.js` | Which column, join, or condition of the open-orders query makes `toSuiteQL` fail with `UNEXPECTED_ERROR`? Renders each piece alone, then everything together. | Pending. |
+| `bisect-render-failure.js` | Which column, join, or condition of the open-orders query makes `toSuiteQL` fail with `UNEXPECTED_ERROR`? Renders each piece alone, then everything together. | Run 2026-09-09: the `joinFrom` line join was the only failing piece. |
 
 The probes contain no account data; the results files record field ids and rendered SQL only.
 
@@ -22,6 +21,10 @@ The probes contain no account data; the results files record field ids and rende
 - **NetSuite picks inner or outer.** There is no join-type option in N/query. `load: 'separate'` on a relation decorator runs a second query keyed by the parent ids when parents must come back regardless.
 - **A joined component renders only when a column or condition references it.** The runtime only joins the components its selected fields, conditions, and sorts touch.
 - **`createColumn` does not validate field ids; `toSuiteQL` and `run` do.** Errors surface at execution, which is why the probes run their queries.
+- **Operator names follow N/search (sandbox, 2026-09-09).** `IS` is text and checkbox equality, `EQUAL` numeric, `ANY_OF` select and key fields; `EQUAL` on a text or select field is rejected. A folder's `name` takes only the text-search operators.
+- **A `salesorder` root has no join to its lines; `joinFrom` renders on no root.** `transaction` reaches the lines through `autoJoin('transactionlines')` (inner join on the line's `transaction` field) but lacks `location`. Hence `@Sublist('item', { load: 'separate', queryType: 'transaction', relationship: 'transactionlines' })`.
+- **Below the line:** `joinTo(item, item)` works, `autoJoin(item)` does not; `autoJoin(location)` works, `joinTo(location, location)` does not; `mainaddress` hangs off the location by `autoJoin`.
+- **Custom record lookups:** `joinTo` to `transaction` works and renders outer; `autoJoin` works for a list/record field to a custom list; a custom list is not a root type. A folder's parent has no join at all (`load: 'separate'`).
 
 ## Open items probe 3 settles
 

@@ -39,6 +39,8 @@ export class Invoice {
     @Reference('carrierCode', { targetKey: 'code' }) carrier?: Pick<Carrier, 'id' | 'name'>;
     /** Loaded by a second query so an invoice with no lines still comes back. */
     @Sublist('item', { load: 'separate', filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }) lines!: InvoiceLine[];
+    /** Lines queried from the `transaction` root through its relationship field, matched to the invoice by id. */
+    @Sublist('expense', { load: 'separate', queryType: 'transaction', relationship: 'transactionlines' }) expenses!: InvoiceLine[];
     /** A subrecord loaded separately too. */
     @Subrecord('billingaddress', { load: 'separate' }) billingAddress?: Address;
 }

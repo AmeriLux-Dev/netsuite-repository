@@ -2,7 +2,7 @@ import { query } from '../query';
 import type { QueryBuilder } from '../query';
 import type { QueryConfig } from '../types';
 import { fakeNQuery } from '../testing';
-import { separateOrderConfig, shipmentConfig } from './fixtures';
+import { ownRootLinesOrderConfig, separateOrderConfig, shipmentConfig } from './fixtures';
 import { salesOrderModelConfig, separateLinesSalesOrderModelConfig } from './model-fixtures';
 import type { SalesOrderModel } from './model-fixtures';
 
@@ -215,6 +215,22 @@ describe('QueryBuilder – separately loaded references', () => {
         ]);
         // The carrier code is text, which has no list operator: one IS (text equality) per code.
         expect(fakeNQuery.calls[1].text).toContain("WHERE custrecord_carrier_code IS ['FDX'] OR custrecord_carrier_code IS ['UPS']");
+    });
+
+    it('runs a sublist with a query type of its own on that root, matched by id, without the owner root conditions', () => {
+        const description = query(ownRootLinesOrderConfig).where('entityId', '=', 7).where('lines.qty', '>', 1).describe();
+        expect(description.condition).toEqual({ kind: 'and', nodes: [{ kind: 'field', fieldId: 'type', operator: 'ANY_OF', values: ['SalesOrd'] }, { kind: 'field', fieldId: 'entity', operator: 'ANY_OF', values: [7] }] });
+        expect(description.separateLoads?.[0]).toEqual(expect.objectContaining({ relationship: 'lines', batchFieldId: 'id', batchFieldType: 'key', parentKeyPath: 'id' }));
+        expect(description.separateLoads?.[0].description).toEqual(expect.objectContaining({
+            queryType: 'transaction',
+            components: [{ path: 'lines', join: { kind: 'auto', fieldId: 'transactionlines' }, conditions: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }],
+            condition: { kind: 'field', component: 'lines', fieldId: 'quantity', operator: 'GREATER', values: [1] },
+        }));
+
+        fakeNQuery.queueRows('salesorder', [{ id: 1, entityid: 7 }]);
+        fakeNQuery.queueRows('transaction', [{ __parentkey: 1, lines_itemid: 5, lines_qty: 2, lines_amount: 9 }]);
+        expect(query(ownRootLinesOrderConfig).executeTyped()).toEqual([{ id: 1, entityId: 7, lines: [{ itemId: 5, qty: 2, amount: 9 }] }]);
+        expect(fakeNQuery.calls[1].text).toBe('FROM transaction\nJOIN auto transactionlines AS transactionlines\nSELECT transactionlines.item AS lines_itemId, transactionlines.quantity AS lines_qty, transactionlines.amount AS lines_amount, id AS __parentKey\nWHERE transactionlines.mainline IS [false] AND id ANY_OF [1]\nORDER BY transactionlines.linesequencenumber ASC');
     });
 
     it('refuses a separate reference without separate load facts', () => {
