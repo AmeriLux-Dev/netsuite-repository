@@ -46,9 +46,8 @@ export const SalesOrderConfig: QueryConfig<SalesOrder> = {
             relationship: 'lines',
             load: 'join',
             join: {
-                kind: 'from',
-                fieldId: 'transaction',
-                source: 'transactionline',
+                kind: 'auto',
+                fieldId: 'transactionlines',
             },
             conditions: [
                 {
@@ -65,7 +64,7 @@ export const SalesOrderConfig: QueryConfig<SalesOrder> = {
     fields: {
         id: {
             queryFieldId: 'id',
-            type: 'integer',
+            type: 'key',
             isPrimary: true,
             readonly: true,
         },
@@ -97,7 +96,7 @@ export const SalesOrderConfig: QueryConfig<SalesOrder> = {
         },
         customerId: {
             queryFieldId: 'entity',
-            type: 'integer',
+            type: 'select',
             setFirst: true,
             recordFieldId: 'entity',
         },
@@ -119,7 +118,7 @@ export const SalesOrderConfig: QueryConfig<SalesOrder> = {
         customer_id: {
             queryFieldId: 'id',
             component: 'customer',
-            type: 'integer',
+            type: 'key',
             nestPath: 'customer.id',
             readonly: true,
         },
@@ -196,7 +195,7 @@ export const SalesOrderConfig: QueryConfig<SalesOrder> = {
         lines_id: {
             queryFieldId: 'id',
             component: 'lines',
-            type: 'integer',
+            type: 'key',
             nestPath: 'lines.id',
             cardinality: 'many',
             recordFieldId: 'line',
@@ -212,7 +211,7 @@ export const SalesOrderConfig: QueryConfig<SalesOrder> = {
         lines_transactionId: {
             queryFieldId: 'transaction',
             component: 'lines',
-            type: 'float',
+            type: 'select',
             nestPath: 'lines.transactionId',
             cardinality: 'many',
             readonly: true,

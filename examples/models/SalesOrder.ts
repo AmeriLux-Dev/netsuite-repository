@@ -49,6 +49,6 @@ export class SalesOrder extends Transaction {
     @Field('foreigntotal') @ReadOnly() total!: number;
     @Field('custbody_auto_approved') autoApproved!: boolean;
     @Field('shipmethod') shipMethodId!: number | null;
-    /** The item lines are the transaction lines that are not the header line. */
-    @Sublist('item', { filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }) lines!: TransactionLine[];
+    /** The item lines: the order's `transactionlines` relationship (a sales order root has no reverse join from the line's `transaction` field), without the header line. */
+    @Sublist('item', { relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }) lines!: TransactionLine[];
 }

@@ -83,8 +83,8 @@ export class SalesOrder extends Transaction {
     @Field('otherrefnum') poNumber!: string | null;
     @Field('shipmethod') shipMethodId!: number | null;
     @Field('foreigntotal') @ReadOnly() total!: number;
-    /** The item lines are the transaction lines that are not the header line. */
-    @Sublist('item', { filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }) lines!: TransactionLine[];
+    /** The item lines: the order's `transactionlines` relationship, without the header line. */
+    @Sublist('item', { relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }) lines!: TransactionLine[];
 }
 ```
 
@@ -118,7 +118,7 @@ The class decorator is only ever `@RecordType`. A sublist line class is a record
 | Subrecord field id | lowercased property name | `@Subrecord('x')` |
 | Subrecord list field to clear | none | `@Subrecord({ clearListField: 'shipaddresslist' })` |
 | Sublist id | lowercased property name | `@Sublist('x')` |
-| Sublist join | `joinFrom` through the line class's `@ParentId()` field | `@Sublist('x', { relationship })` for `autoJoin` on a relationship field |
+| Sublist join | `joinFrom` through the line class's `@ParentId()` field | `@Sublist('x', { relationship })` for `autoJoin` on a relationship field; needed when the root has no reverse join for the line's field (a `salesorder` root reaches its lines through `transactionlines`, not through `transactionline.transaction`) |
 | Sublist rows | every row of the line type | `@Sublist('x', { filter: [...] })` |
 | Loading | `join`: read in the parent's query; NetSuite decides inner or outer | `load: 'separate'` on `@Sublist`, `@Subrecord`, `@Reference` |
 | Record set name | pluralized camel-case class name | `@RecordType('x', { setName })` |
@@ -143,7 +143,7 @@ References are read-only; write the select field (`customerId`) instead. A refer
 N/query has no join-type option: NetSuite decides whether a relationship joins inner or outer. Subrecords come back outer; the line join of a sublist is inner, so a query that reads lines returns only the parents that have matching lines. When parents must come back regardless, load the relation with a query of its own:
 
 ```ts
-@Sublist('item', { load: 'separate', filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }) lines!: TransactionLine[];
+@Sublist('item', { relationship: 'transactionlines', load: 'separate', filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }) lines!: TransactionLine[];
 ```
 
 `separate` runs one query for the parents and one per batch of parent ids for the relation, then stitches the lines in (`[]` when there are none, `null` for a subrecord or reference). Rows never fan out, `limit()` and `page()` count records, and a `where` on a field of the relation narrows the relation's rows rather than the parents. It costs one extra `run` per batch. A reference matched on a field other than the target's internal id (`targetKey`) always loads this way, because N/query joins only through internal ids.

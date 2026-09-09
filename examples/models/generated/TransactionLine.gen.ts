@@ -26,13 +26,13 @@ export const TransactionLineConfig: QueryConfig<TransactionLine> = {
     fields: {
         id: {
             queryFieldId: 'id',
-            type: 'integer',
+            type: 'key',
             isPrimary: true,
             readonly: true,
         },
         transactionId: {
             queryFieldId: 'transaction',
-            type: 'float',
+            type: 'select',
             readonly: true,
         },
         line: {

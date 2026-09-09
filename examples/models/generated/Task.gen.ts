@@ -24,7 +24,7 @@ export const TaskConfig: QueryConfig<Task> = {
     fields: {
         id: {
             queryFieldId: 'id',
-            type: 'integer',
+            type: 'key',
             isPrimary: true,
             readonly: true,
         },

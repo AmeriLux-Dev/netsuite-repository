@@ -12,6 +12,8 @@ N/query and carries no NetSuite schema of its own.
 
 | `smoke-test-1.0.0.js` | Do the three query shapes the consumer's generated configs compile to run in an account: the order header with `joinFrom` lines, `autoJoin` addresses, `joinTo` items, DISPLAY columns, and text conditions; the separate load of a reference matched on a code column; a datetime condition on a custom record. | Pending. Fill in the ids at the top, run, and compare row counts and keys with the previous build. |
 
+| `bisect-render-failure.js` | Which column, join, or condition of the open-orders query makes `toSuiteQL` fail with `UNEXPECTED_ERROR`? Renders each piece alone, then everything together. | Pending. |
+
 The probes contain no account data; the results files record field ids and rendered SQL only.
 
 ## What the results decided
