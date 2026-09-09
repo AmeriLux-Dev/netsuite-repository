@@ -83,11 +83,10 @@ describe('RecordUpdater.submit() – submitFields path', () => {
     it('respects setFirst ordering (setFirst fields come last in sorted order)', () => {
         const cfg = defineQueryConfig<{ id: number; trigger: string; value: string }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:      { queryFieldId: 'id',      tableAlias: 't', isPrimary: true, recordFieldId: 'id' },
-                trigger: { queryFieldId: 'trigger', tableAlias: 't', recordFieldId: 'trigger', setFirst: true },
-                value:   { queryFieldId: 'value',   tableAlias: 't', recordFieldId: 'value' },
+                id:      { queryFieldId: 'id',      isPrimary: true, recordFieldId: 'id' },
+                trigger: { queryFieldId: 'trigger', recordFieldId: 'trigger', setFirst: true },
+                value:   { queryFieldId: 'value',   recordFieldId: 'value' },
             },
         });
         mockSubmitFields.mockReturnValue(1);
@@ -254,10 +253,9 @@ describe('RecordUpdater.submit() – subrecord reload', () => {
     it('clears list field and reloads record when list field has value', () => {
         const cfg = defineQueryConfig<{ id: number; addr1: string }>({
             recordType: 'vendorbill',
-            query: { from: { name: 'transaction', alias: 'txn' } },
             fields: {
-                id:    { queryFieldId: 'id',    tableAlias: 'txn', isPrimary: true, recordFieldId: 'id' },
-                addr1: { queryFieldId: 'addr1', tableAlias: 'txn', recordAccess: 'subrecord', recordAccessId: 'billingaddress',
+                id:    { queryFieldId: 'id',    isPrimary: true, recordFieldId: 'id' },
+                addr1: { queryFieldId: 'addr1', recordAccess: 'subrecord', recordAccessId: 'billingaddress',
                     subrecordNeedsReload: true, subrecordListFieldToClear: 'billaddrlist', recordFieldId: 'addr1' },
             },
         });
@@ -297,10 +295,9 @@ describe('RecordUpdater.submit() – subrecord reload', () => {
     it('skips reload when list field is empty', () => {
         const cfg = defineQueryConfig<{ id: number; addr1: string }>({
             recordType: 'vendorbill',
-            query: { from: { name: 'transaction', alias: 'txn' } },
             fields: {
-                id:    { queryFieldId: 'id',    tableAlias: 'txn', isPrimary: true, recordFieldId: 'id' },
-                addr1: { queryFieldId: 'addr1', tableAlias: 'txn', recordAccess: 'subrecord', recordAccessId: 'billingaddress',
+                id:    { queryFieldId: 'id',    isPrimary: true, recordFieldId: 'id' },
+                addr1: { queryFieldId: 'addr1', recordAccess: 'subrecord', recordAccessId: 'billingaddress',
                     subrecordNeedsReload: true, subrecordListFieldToClear: 'billaddrlist', recordFieldId: 'addr1' },
             },
         });

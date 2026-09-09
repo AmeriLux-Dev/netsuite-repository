@@ -1,4 +1,4 @@
-import type { EntityRelationship, JoinDef, QueryConfig, QueryField, QueryParamValue, RelationshipFieldMap } from '../../src/types';
+import type { EntityRelationship, QueryComponent, QueryConfig, QueryField, RelationshipFieldMap, RelationshipLoad } from '../../src/types';
 import type { ResolvedClass, ResolvedField, ResolvedRelation } from '../collect/model-resolver';
 
 export class ModelValidationError extends Error {
@@ -18,44 +18,18 @@ function omitUndefined<T extends object>(value: T): T {
     return result as T;
 }
 
-/** Where a set of fields is read from: the alias of its table plus the type tables reachable from it. */
-interface Scope {
-    alias: string;
-    keyColumn: string;
-    typeTables: Record<string, { key?: string }> | undefined;
-    typeTableAliases: Map<string, string>;
-}
-
-class AliasRegistry {
-    private readonly used = new Set<string>();
-
-    claim(candidate: string): string {
-        let alias = candidate;
-        let suffix = 2;
-        while (this.used.has(alias)) {
-            alias = `${candidate}_${suffix++}`;
-        }
-        this.used.add(alias);
-        return alias;
-    }
-}
-
 /** Turns a resolved record type into the QueryConfig the runtime consumes. */
 export function compileModel(model: ResolvedClass): QueryConfig<unknown> {
     const problems: string[] = [];
     if (!model.recordType) problems.push('a record type is required (@RecordType).');
-    if (!model.table) problems.push(`no SuiteQL table is known for record type '${model.recordType}'; declare it with @RecordType('${model.recordType}', { table }).`);
     if (!model.fields.some((field) => field.name === model.keyProperty)) problems.push(`internal id property '${model.keyProperty}' is not declared.`);
     if (problems.length > 0) {
         throw new ModelValidationError(model.className, problems);
     }
 
-    const aliases = new AliasRegistry();
-    const rootAlias = aliases.claim(model.table as string);
-    const joins: JoinDef[] = [];
+    const components: Record<string, QueryComponent> = {};
     const fields: Record<string, QueryField> = {};
     const relationships: Record<string, EntityRelationship> = {};
-    const keyField = model.fields.find((field) => field.name === model.keyProperty) as ResolvedField;
 
     const registerField = (key: string, field: QueryField) => {
         if (fields[key]) {
@@ -64,82 +38,51 @@ export function compileModel(model: ResolvedClass): QueryConfig<unknown> {
         fields[key] = omitUndefined(field);
     };
 
-    /** Joins a type table on demand and returns its alias. */
-    const typeTableAlias = (scope: Scope, table: string, joinedAliases?: string[]): string => {
-        const existing = scope.typeTableAliases.get(table);
-        if (existing) {
-            return existing;
-        }
-        const key = scope.typeTables?.[table]?.key ?? 'id';
-        const alias = aliases.claim(scope.alias === table ? `${table}_type` : table);
-        joins.push({ toTable: { name: table, alias }, fromTable: scope.alias, type: 'inner', constraints: [{ joinKeys: { sourceForeignKey: scope.keyColumn, targetPrimaryKey: key } }] });
-        scope.typeTableAliases.set(table, alias);
-        joinedAliases?.push(alias);
-        return alias;
-    };
-
-    const rootScope: Scope = { alias: rootAlias, keyColumn: keyField.column, typeTables: model.typeTables, typeTableAliases: new Map() };
+    const commonFieldShape = (field: ResolvedField): Partial<QueryField> => ({
+        type: field.type,
+        select: field.selectByDefault === false ? false : undefined,
+        fieldContext: field.text ? 'DISPLAY' : undefined,
+        transform: field.transform,
+        coerce: field.coerce,
+        setFirst: field.setFirst ? true : undefined,
+    });
 
     for (const field of model.fields) {
-        const isKey = field.name === model.keyProperty;
         registerField(field.name, {
-            queryFieldId: field.column,
-            tableAlias: field.table ? typeTableAlias(rootScope, field.table) : rootAlias,
-            type: field.type,
-            isPrimary: isKey ? true : undefined,
-            select: field.selectByDefault === false ? false : undefined,
-            useText: field.text ? true : undefined,
-            transform: field.transform,
-            setFirst: field.setFirst ? true : undefined,
-            coerce: field.coerce,
-            recordFieldId: field.fieldId,
-            readonly: field.fieldId === undefined ? true : undefined,
+            queryFieldId: field.queryFieldId,
+            ...commonFieldShape(field),
+            isPrimary: field.name === model.keyProperty ? true : undefined,
+            recordFieldId: field.readOnly ? undefined : field.recordFieldId,
+            readonly: field.readOnly ? true : undefined,
         });
     }
 
     interface RelationContext {
         path: string[];
-        parentScope: Scope;
-        /** The depth-1 relation this belongs to; its kind decides how fields are written. */
+        /** The depth-1 relation this belongs to; its kind decides how fields are written and its load how they are read. */
         root: ResolvedRelation;
-        rootAliases: string[];
+        rootComponents: string[];
         rootFields: RelationshipFieldMap;
         insideSublist: boolean;
     }
 
     function compileRelation(relation: ResolvedRelation, context: RelationContext): void {
         const path = [...context.path, relation.name];
-        const alias = aliases.claim(path.join('_'));
-        context.rootAliases.push(alias);
-        const parentAlias = context.parentScope.alias;
-        let on: string;
-        let params: QueryParamValue[] | undefined;
+        const componentPath = path.join('.');
+        const parentPath = context.path.length > 0 ? context.path.join('.') : undefined;
+        context.rootComponents.push(componentPath);
+        const load: RelationshipLoad = context.path.length === 0 ? relation.load : context.root.load;
+        components[componentPath] = omitUndefined({
+            path: componentPath,
+            parent: parentPath,
+            relationship: context.root.name,
+            load,
+            join: relation.join,
+            conditions: relation.filter,
+            separate: relation.separate,
+            lineOrderFieldId: relation.lineOrderFieldId,
+        });
 
-        if (relation.kind === 'reference') {
-            const sourceAlias = relation.selectFieldTable ? typeTableAlias(context.parentScope, relation.selectFieldTable, context.rootAliases) : parentAlias;
-            on = `${alias}.${relation.targetKeyColumn} = ${sourceAlias}.${relation.selectFieldColumn}`;
-            if (relation.targetDiscriminator) {
-                on += ` AND ${alias}.${relation.targetDiscriminator.column} = ?`;
-                params = [relation.targetDiscriminator.value];
-            }
-            joins.push(omitUndefined({ toTable: { name: relation.targetTable as string, alias }, fromTable: parentAlias, type: relation.joinType, on, params }));
-        } else if (relation.kind === 'subrecord') {
-            on = `${alias}.${relation.subrecordKey} = ${parentAlias}.${relation.subrecordFieldId}`;
-            joins.push({ toTable: { name: relation.subrecordTable as string, alias }, fromTable: parentAlias, type: relation.joinType, on });
-        } else {
-            on = `${alias}.${relation.parentColumn} = ${parentAlias}.${context.parentScope.keyColumn}`;
-            if (relation.where) {
-                on += ` AND ${relation.where.replace(/\{alias\}/g, alias)}`;
-            }
-            joins.push({ toTable: { name: relation.sublistTable as string, alias }, fromTable: parentAlias, type: relation.joinType, on });
-        }
-
-        const scope: Scope = {
-            alias,
-            keyColumn: relation.kind === 'sublist' ? (relation.lineKey?.column ?? 'id') : (relation.targetKeyColumn ?? 'id'),
-            typeTables: relation.targetTypeTables,
-            typeTableAliases: new Map(),
-        };
         const insideSublist = context.insideSublist || relation.kind === 'sublist';
         const isDirect = context.path.length === 0;
         const rootKind = context.root.kind;
@@ -148,18 +91,12 @@ export function compileModel(model: ResolvedClass): QueryConfig<unknown> {
             const key = `${path.join('_')}_${field.name}`;
             const nestedPath = `${path.slice(1).join('.')}${path.length > 1 ? '.' : ''}${field.name}`;
             context.rootFields[nestedPath] = key;
-            const tableAlias = field.table ? typeTableAlias(scope, field.table, context.rootAliases) : alias;
             const common: QueryField = {
-                queryFieldId: field.column,
-                tableAlias,
-                type: field.type,
-                nestPath: `${path.join('.')}.${field.name}`,
+                queryFieldId: field.queryFieldId,
+                component: componentPath,
+                ...commonFieldShape(field),
+                nestPath: `${componentPath}.${field.name}`,
                 cardinality: insideSublist ? 'many' : undefined,
-                select: field.selectByDefault === false ? false : undefined,
-                useText: field.text ? true : undefined,
-                transform: field.transform,
-                coerce: field.coerce,
-                setFirst: field.setFirst ? true : undefined,
             };
 
             if (!isDirect || rootKind === 'reference') {
@@ -170,8 +107,8 @@ export function compileModel(model: ResolvedClass): QueryConfig<unknown> {
             if (rootKind === 'subrecord') {
                 registerField(key, {
                     ...common,
-                    recordFieldId: field.fieldId,
-                    readonly: field.fieldId === undefined ? true : undefined,
+                    recordFieldId: field.readOnly ? undefined : field.recordFieldId,
+                    readonly: field.readOnly ? true : undefined,
                     recordAccess: 'subrecord',
                     recordAccessId: relation.subrecordFieldId,
                     subrecordNeedsReload: relation.clearListField ? true : undefined,
@@ -180,28 +117,30 @@ export function compileModel(model: ResolvedClass): QueryConfig<unknown> {
                 continue;
             }
 
+            // The line key writes through its declared field id even though the internal id is read-only elsewhere: it is what identifies the line.
             const isLineKey = field.name === relation.lineKeyProperty;
-            const fieldId = isLineKey ? relation.lineKey?.field : field.fieldId;
+            const recordFieldId = isLineKey || !field.readOnly ? field.recordFieldId : undefined;
+            const lineKeyFieldId = relation.fields.find((candidate) => candidate.name === relation.lineKeyProperty)?.recordFieldId;
             registerField(key, {
                 ...common,
-                recordFieldId: fieldId,
-                readonly: fieldId === undefined ? true : undefined,
+                recordFieldId,
+                readonly: recordFieldId === undefined ? true : undefined,
                 recordAccess: 'sublist',
                 recordAccessId: relation.sublistId,
-                updateMapping: fieldId === undefined ? undefined : { kind: 'sublist', sublistId: relation.sublistId as string, fieldId, matchBy: relation.lineKey?.field },
+                updateMapping: recordFieldId === undefined ? undefined : { kind: 'sublist', sublistId: relation.sublistId as string, fieldId: recordFieldId, matchBy: lineKeyFieldId },
             });
         }
 
         for (const nested of relation.relations) {
-            compileRelation(nested, { ...context, path, parentScope: scope, insideSublist });
+            compileRelation(nested, { ...context, path, insideSublist });
         }
     }
 
     for (const relation of model.relations) {
-        const rootAliases: string[] = [];
+        const rootComponents: string[] = [];
         const rootFields: RelationshipFieldMap = {};
-        compileRelation(relation, { path: [], parentScope: rootScope, root: relation, rootAliases, rootFields, insideSublist: false });
-        const base = omitUndefined({ fields: rootFields, joinAliases: rootAliases, selectByDefault: relation.selectByDefault === false ? false : undefined });
+        compileRelation(relation, { path: [], root: relation, rootComponents, rootFields, insideSublist: false });
+        const base = omitUndefined({ fields: rootFields, components: rootComponents, load: relation.load, selectByDefault: relation.selectByDefault === false ? false : undefined });
         if (relation.kind === 'reference') {
             relationships[relation.name] = { kind: 'reference', ...base };
         } else if (relation.kind === 'subrecord') {
@@ -213,11 +152,11 @@ export function compileModel(model: ResolvedClass): QueryConfig<unknown> {
 
     return omitUndefined<QueryConfig<unknown>>({
         recordType: model.recordType as string,
-        query: omitUndefined({ from: { name: model.table as string, alias: rootAlias }, joins: joins.length > 0 ? joins : undefined }),
+        queryType: model.queryType,
+        rootConditions: model.rootFilter,
+        components,
         fields,
         relationships: Object.keys(relationships).length > 0 ? relationships : undefined,
-        discriminator: model.discriminator,
-        restRecordMetadata: model.restRecordMetadata,
         coerce: model.coerce ?? true,
         updaterOptions: model.updaterOptions,
     });

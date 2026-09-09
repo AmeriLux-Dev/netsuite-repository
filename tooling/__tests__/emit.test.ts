@@ -89,7 +89,7 @@ describe('emitModelFile()', () => {
     const unused = () => undefined;
     const aliased = () => undefined;
     const recordOptions = {
-        config: { recordType: 'salesorder', query: { from: { name: 'transaction', alias: 'transaction' } }, fields: { poNumber: { queryFieldId: 'otherrefnum', tableAlias: 'transaction', transform: trim }, memo: { queryFieldId: 'memo', tableAlias: 'transaction', transform: aliased } } },
+        config: { recordType: 'salesorder', fields: { poNumber: { queryFieldId: 'otherrefnum', transform: trim }, memo: { queryFieldId: 'memo', transform: aliased } } },
         functionImports: [
             { fn: trim, identifier: 'trim', exportName: 'trim', importPath: '../shared' },
             { fn: unused, identifier: 'unused', exportName: 'unused', importPath: '../shared' },
@@ -140,21 +140,13 @@ describe('emitModelFile()', () => {
             '',
             'export const SalesOrderConfig: QueryConfig<SalesOrder> = {',
             "    recordType: 'salesorder',",
-            '    query: {',
-            '        from: {',
-            "            name: 'transaction',",
-            "            alias: 'transaction',",
-            '        },',
-            '    },',
             '    fields: {',
             '        poNumber: {',
             "            queryFieldId: 'otherrefnum',",
-            "            tableAlias: 'transaction',",
             '            transform: trim,',
             '        },',
             '        memo: {',
             "            queryFieldId: 'memo',",
-            "            tableAlias: 'transaction',",
             '            transform: trim_2,',
             '        },',
             '    },',

@@ -74,9 +74,9 @@ export class RecordSet<TResult, TUpdate extends Record<string, unknown> = Partia
         return this.list();
     }
 
-    /** The first record matching the specifications. On a model with a sublist every matching row is read so the record comes back whole. */
+    /** The first record matching the specifications. */
     first(...specifications: Specification<TResult>[]): TResult | null {
-        return this.firstRecord(applySpecifications(this.query(), specifications));
+        return applySpecifications(this.query(), specifications).firstTyped();
     }
 
     count(...specifications: Specification<TResult>[]): number {
@@ -98,22 +98,12 @@ export class RecordSet<TResult, TUpdate extends Record<string, unknown> = Partia
         if (tracked) {
             return tracked;
         }
-        return this.firstRecord(this.untypedQuery().where(this.getPrimaryFieldKey(), '=', id) as QueryBuilder<TResult>);
+        return (this.untypedQuery().where(this.getPrimaryFieldKey(), '=', id) as QueryBuilder<TResult>).firstTyped();
     }
 
     /** The builder with the model's field typing set aside, for conditions the set states on the model's behalf. */
     private untypedQuery(): QueryBuilder<unknown> {
         return this.query() as QueryBuilder<unknown>;
-    }
-
-    /** A one-row SQL limit would cut a record with a sublist down to its first line, so those models read every row and keep the first record. */
-    private firstRecord(builder: QueryBuilder<TResult>): TResult | null {
-        return this.hasSublist() ? builder.executeTyped()[0] ?? null : builder.firstTyped();
-    }
-
-    private hasSublist(): boolean {
-        return Object.values(this.config.relationships ?? {}).some((relationship) => relationship.kind === 'sublist')
-            || Object.values(this.config.fields).some((field) => field.cardinality === 'many');
     }
 
     /** Starts tracking an existing entity as Unchanged. */

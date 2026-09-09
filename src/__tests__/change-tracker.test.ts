@@ -7,7 +7,7 @@ import { salesOrderModelConfig } from './model-fixtures';
 const configs: Record<string, QueryConfig<unknown>> = {
     salesOrders: salesOrderModelConfig as QueryConfig<unknown>,
     customers: customerConfig as QueryConfig<unknown>,
-    noKey: { recordType: 'nokey', query: { from: { name: 'x', alias: 'x' } }, fields: { name: { queryFieldId: 'name', tableAlias: 'x' } } },
+    noKey: { recordType: 'nokey', fields: { name: { queryFieldId: 'name' } } },
 };
 
 function createTracker(enabled = true): ChangeTracker {

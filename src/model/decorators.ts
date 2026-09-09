@@ -1,63 +1,52 @@
-import type { Discriminator, FieldType, JoinType, QueryField, RecordUpdaterOptions, RestRecordMetadata } from '../types';
+import type { ComponentCondition, FieldType, QueryField, RecordUpdaterOptions, RelationshipLoad } from '../types';
 import { createClassOverrides, getOrCreatePropertyOverrides, mergeClassOverrides } from './metadata';
-import type { ClassOverrides, LineKey, PropertyOverrides, TypeTableOptions } from './metadata';
+import type { ClassOverrides, PropertyOverrides, ReferenceJoinKind } from './metadata';
 
 export type ModelClass<T = unknown> = new (...args: never[]) => T;
 
 export interface RecordTypeOptions {
-    /** Base SuiteQL table when the conventions do not know it. */
-    table?: string;
+    /** N/query root type when it is not the record type. */
+    queryType?: string;
+    /** Conditions applied to every query on this record type. */
+    filter?: ComponentCondition[];
     /** Record set name on the context; derived from the class name when absent. */
     setName?: string;
     coerce?: boolean;
-    /** Table-per-hierarchy filter when the conventions do not know it. */
-    discriminator?: Discriminator;
-    /** Type tables fields may read from with @Field({ table }). */
-    tables?: Record<string, TypeTableOptions>;
     /** Default record updater options for every write on this record type. */
     updater?: RecordUpdaterOptions;
-    /** REST record metadata used by the scaffold and by runtime field lookups outside the model. */
-    rest?: RestRecordMetadata;
 }
 
 export interface FieldOptions {
-    /** SuiteQL column when it differs from the field id. */
-    column?: string;
-    /** Type table the column is read from. */
-    table?: string;
+    /** N/query field id when it differs from the record field id. */
+    queryFieldId?: string;
     type?: FieldType;
-    /** Read the display text of a select field (BUILTIN.DF). Text fields are read-only; declare a second property to write the select field itself. */
+    /** Read the display text of a select field. Text fields are read-only; declare a second property to write the select field itself. */
     text?: boolean;
     coerce?: boolean;
 }
 
 export interface RelationOptions {
-    /** Forces the join type. Sublists and subrecords join inner by default; references join left outer. */
-    join?: JoinType;
+    /** `join` (default) reads the relation in the parent's query; `separate` runs a second query keyed by the parent ids. */
+    load?: RelationshipLoad;
 }
 
 export interface ReferenceOptions extends RelationOptions {
-    /** Property on the referenced class to join on when it is not its internal id, for example a code column. */
+    /** Property on the referenced class to match when it is not its internal id. Such a reference always loads separately. */
     targetKey?: string;
+    /** How the reference is joined: `auto` (autoJoin on the select field) or `to` (joinTo with the target's query type). */
+    join?: ReferenceJoinKind;
 }
 
 export interface SubrecordOptions extends RelationOptions {
-    /** Queryable table and its key column when the conventions and the subrecord class do not know them. */
-    table?: string;
-    key?: string;
     /** List field cleared before the subrecord can be edited (for example 'shipaddresslist'). */
     clearListField?: string;
 }
 
 export interface SublistOptions extends RelationOptions {
-    /** Line table when the line class does not name it. */
-    table?: string;
-    /** Extra predicate on the join; `{alias}` stands for the line table alias. */
-    where?: string;
-    /** Column on the line table holding the parent's internal id. */
-    parentColumn?: string;
-    /** Column read and sublist field matched to identify a line. */
-    lineKey?: LineKey;
+    /** Conditions on the line component that pick this sublist's rows out of the line type. */
+    filter?: ComponentCondition[];
+    /** Relationship field for autoJoin, instead of joinFrom through the line class's @ParentId() field. */
+    relationship?: string;
 }
 
 type ClassDecoratorFunction = (target: Function) => void;
@@ -95,20 +84,22 @@ function splitIdAndOptions<TOptions extends object>(first: string | TOptions | u
         : { id: undefined, options: first ?? ({} as TOptions) };
 }
 
+function applyRelationOptions(property: PropertyOverrides, options: RelationOptions): void {
+    if (options.load !== undefined) property.load = options.load;
+}
+
 // ── class decorator ───────────────────────────────────────────────────────────
 
-/** A queryable record type. The class becomes a record set on the context; sublist line classes name the line table they read from. */
+/** A queryable record type. The class becomes a record set on the context, queried through N/query as the same type. */
 export function RecordType(recordType: string, options: RecordTypeOptions = {}): ClassDecoratorFunction {
     return (target) => {
         const overrides = getOrCreateRegistration(target);
         overrides.recordType = recordType;
-        overrides.table = options.table;
+        overrides.queryType = options.queryType;
+        overrides.rootFilter = options.filter;
         overrides.setName = options.setName;
         overrides.coerce = options.coerce;
-        overrides.discriminator = options.discriminator;
-        overrides.typeTables = options.tables;
         overrides.updaterOptions = options.updater;
-        overrides.restRecordMetadata = options.rest;
     };
 }
 
@@ -121,6 +112,13 @@ export function InternalId(): PropertyDecoratorFunction {
     });
 }
 
+/** On a line class: marks the property holding the parent record's internal id. Its field is what the sublist join goes through. */
+export function ParentId(): PropertyDecoratorFunction {
+    return propertyDecorator((property, overrides) => {
+        overrides.parentKeyProperty = property.name;
+    });
+}
+
 /** Renames the field or overrides the inferred type. Never required: by convention the field id is the lowercased property name. */
 export function Field(fieldId?: string, options?: FieldOptions): PropertyDecoratorFunction;
 export function Field(options: FieldOptions): PropertyDecoratorFunction;
@@ -128,8 +126,7 @@ export function Field(first?: string | FieldOptions, second?: FieldOptions): Pro
     const { id: fieldId, options } = splitIdAndOptions(first, second);
     return propertyDecorator((property) => {
         if (fieldId !== undefined) property.fieldId = fieldId;
-        if (options.column !== undefined) property.column = options.column;
-        if (options.table !== undefined) property.table = options.table;
+        if (options.queryFieldId !== undefined) property.queryFieldId = options.queryFieldId;
         if (options.type !== undefined) property.type = options.type;
         if (options.text !== undefined) property.text = options.text;
         if (options.coerce !== undefined) property.coerce = options.coerce;
@@ -151,12 +148,13 @@ export function Reference(first?: string | ReferenceOptions, second?: ReferenceO
     return propertyDecorator((property) => {
         property.relationKind = 'reference';
         if (selectFieldProperty !== undefined) property.selectFieldProperty = selectFieldProperty;
-        if (options.join !== undefined) property.joinType = options.join;
         if (options.targetKey !== undefined) property.targetKeyProperty = options.targetKey;
+        if (options.join !== undefined) property.joinKind = options.join;
+        applyRelationOptions(property, options);
     });
 }
 
-/** A subrecord: the field id when it is not the lowercased property name, and the table facts the conventions do not know. */
+/** A subrecord: the field id when it is not the lowercased property name. N/query resolves the join from the field. */
 export function Subrecord(fieldId?: string, options?: SubrecordOptions): PropertyDecoratorFunction;
 export function Subrecord(options: SubrecordOptions): PropertyDecoratorFunction;
 export function Subrecord(first?: string | SubrecordOptions, second?: SubrecordOptions): PropertyDecoratorFunction {
@@ -164,14 +162,12 @@ export function Subrecord(first?: string | SubrecordOptions, second?: SubrecordO
     return propertyDecorator((property) => {
         property.relationKind = 'subrecord';
         if (fieldId !== undefined) property.subrecordFieldId = fieldId;
-        if (options.table !== undefined) property.subrecordTable = options.table;
-        if (options.key !== undefined) property.subrecordKey = options.key;
         if (options.clearListField !== undefined) property.clearListField = options.clearListField;
-        if (options.join !== undefined) property.joinType = options.join;
+        applyRelationOptions(property, options);
     });
 }
 
-/** A sublist: the sublist id when it is not known from the line table, and the line table facts the conventions do not know. */
+/** A sublist: the sublist id when it is not the lowercased property name, and the conditions that pick its lines. */
 export function Sublist(sublistId?: string, options?: SublistOptions): PropertyDecoratorFunction;
 export function Sublist(options: SublistOptions): PropertyDecoratorFunction;
 export function Sublist(first?: string | SublistOptions, second?: SublistOptions): PropertyDecoratorFunction {
@@ -179,11 +175,9 @@ export function Sublist(first?: string | SublistOptions, second?: SublistOptions
     return propertyDecorator((property) => {
         property.relationKind = 'sublist';
         if (sublistId !== undefined) property.sublistId = sublistId;
-        if (options.table !== undefined) property.sublistTable = options.table;
-        if (options.where !== undefined) property.sublistWhere = options.where;
-        if (options.parentColumn !== undefined) property.parentColumn = options.parentColumn;
-        if (options.lineKey !== undefined) property.lineKey = options.lineKey;
-        if (options.join !== undefined) property.joinType = options.join;
+        if (options.filter !== undefined) property.filter = options.filter;
+        if (options.relationship !== undefined) property.relationshipFieldId = options.relationship;
+        applyRelationOptions(property, options);
     });
 }
 

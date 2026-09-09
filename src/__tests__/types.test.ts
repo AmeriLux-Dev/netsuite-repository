@@ -3,19 +3,18 @@ import type { QueryFieldConfig, QueryField } from '../types';
 
 describe('normalizeQueryField', () => {
     it('returns a plain QueryField unchanged', () => {
-        const field: QueryField = { queryFieldId: 'id', tableAlias: 'cust', type: 'integer' };
+        const field: QueryField = { queryFieldId: 'id', type: 'integer' };
         expect(normalizeQueryField(field)).toBe(field);
     });
 
     it('merges query + common + record sections', () => {
         const input: QueryFieldConfig = {
-            query:  { queryFieldId: 'companyname', tableAlias: 'cust' },
+            query:  { queryFieldId: 'companyname' },
             common: { type: 'string', isPrimary: false },
             record: { recordFieldId: 'companyname', recordAccess: 'body' },
         };
         expect(normalizeQueryField(input)).toEqual({
             queryFieldId: 'companyname',
-            tableAlias: 'cust',
             type: 'string',
             isPrimary: false,
             recordFieldId: 'companyname',
@@ -25,18 +24,19 @@ describe('normalizeQueryField', () => {
 
     it('merges query + common without record', () => {
         const input: QueryFieldConfig = {
-            query:  { queryFieldId: 'email', tableAlias: 'cust' },
+            query:  { queryFieldId: 'email', component: 'customer' },
             common: { type: 'string' },
         };
         const result = normalizeQueryField(input);
         expect(result.queryFieldId).toBe('email');
+        expect(result.component).toBe('customer');
         expect(result.type).toBe('string');
         expect(result.recordFieldId).toBeUndefined();
     });
 
     it('merges query + record without common', () => {
         const input: QueryFieldConfig = {
-            query:  { queryFieldId: 'memo', tableAlias: 'txn' },
+            query:  { queryFieldId: 'memo' },
             record: { recordFieldId: 'memo' },
         };
         const result = normalizeQueryField(input);
@@ -47,7 +47,7 @@ describe('normalizeQueryField', () => {
 
     it('record overrides common when both are present', () => {
         const input: QueryFieldConfig = {
-            query:  { queryFieldId: 'status', tableAlias: 'cust' },
+            query:  { queryFieldId: 'status' },
             common: { type: 'string', recordFieldId: 'status_common' },
             record: { recordFieldId: 'status_record' },
         };
@@ -59,11 +59,10 @@ describe('normalizeQueryConfig', () => {
     it('normalizes all fields in the config', () => {
         const config = normalizeQueryConfig({
             recordType: 'customer',
-            query: { from: { name: 'customer', alias: 'cust' } },
             fields: {
-                id: { queryFieldId: 'id', tableAlias: 'cust' },
+                id: { queryFieldId: 'id' },
                 name: {
-                    query:  { queryFieldId: 'companyname', tableAlias: 'cust' },
+                    query:  { queryFieldId: 'companyname' },
                     common: { type: 'string' },
                 },
             },
@@ -72,11 +71,27 @@ describe('normalizeQueryConfig', () => {
         expect(config.fields.name.type).toBe('string');
     });
 
+    it('defaults the query type to the record type and the components to an empty map', () => {
+        const config = normalizeQueryConfig({ recordType: 'customer', fields: { id: { queryFieldId: 'id' } } });
+        expect(config.queryType).toBe('customer');
+        expect(config.components).toEqual({});
+    });
+
+    it('keeps a declared query type and component map', () => {
+        const config = normalizeQueryConfig({
+            recordType: 'salesorder',
+            queryType: 'transaction',
+            components: { lines: { path: 'lines', relationship: 'lines', load: 'join', join: { kind: 'from', fieldId: 'transaction', source: 'transactionline' } } },
+            fields: { id: { queryFieldId: 'id' } },
+        });
+        expect(config.queryType).toBe('transaction');
+        expect(config.components?.lines.join).toEqual({ kind: 'from', fieldId: 'transaction', source: 'transactionline' });
+    });
+
     it('preserves non-field config properties', () => {
         const config = normalizeQueryConfig({
             recordType: 'myRecord',
-            query: { from: { name: 'myrecord', alias: 'r' } },
-            fields: { id: { queryFieldId: 'id', tableAlias: 'r' } },
+            fields: { id: { queryFieldId: 'id' } },
             composite: { updateMode: 'explicit' },
         });
         expect(config.recordType).toBe('myRecord');
@@ -88,10 +103,9 @@ describe('defineQueryConfig', () => {
     it('returns the config with normalized fields', () => {
         const config = defineQueryConfig<{ id: number }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
                 id: {
-                    query:  { queryFieldId: 'id', tableAlias: 't' },
+                    query:  { queryFieldId: 'id' },
                     common: { type: 'integer', isPrimary: true },
                 },
             },
@@ -103,9 +117,8 @@ describe('defineQueryConfig', () => {
     it('accepts an already-normalized QueryConfig', () => {
         const config = defineQueryConfig<{ id: number }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id: { queryFieldId: 'id', tableAlias: 't', type: 'integer', isPrimary: true },
+                id: { queryFieldId: 'id', type: 'integer', isPrimary: true },
             },
         });
         expect(config.fields.id.queryFieldId).toBe('id');

@@ -1,13 +1,14 @@
 /**
  * Typed field references for queries. A `FieldPath<T>` is every property of the model plus every dotted path
  * into its references, subrecords, and sublists (`'customer.companyName'`, `'lines.item.type'`), so a typo in a
- * `where()` or `orderBy()` is a compile error. Aliases declared per query (`leftJoin`, `selectRaw`) widen the
- * accepted paths on the builder that declared them; anything else goes through `raw()`.
+ * `where()` or `orderBy()` is a compile error. Aliases declared per query (`selectFormula`) widen the accepted
+ * paths on the builder that declared them.
  *
- * The declared type of the property behind a path narrows the condition too: `OperatorFor` keeps the operators
- * that make sense for it (no `BETWEEN` on text, no `LIKE` on a number) and `ParamFor` the values it compares to.
+ * The declared type of the property behind a path narrows the condition too: `OperatorFor` keeps the SQL-style
+ * operators that make sense for it (no `BETWEEN` on text, no `LIKE` on a number) and `ParamFor` the values it
+ * compares to. Any N/query operator name is accepted on any path; NetSuite validates those itself.
  */
-import type { QueryOperator, QueryParamValue } from './types';
+import type { ConditionParamValue, NQueryOperatorName, QueryOperator } from './types';
 
 type Primitive = string | number | boolean | bigint | symbol | Date | null | undefined;
 
@@ -34,23 +35,12 @@ export type RelationName<T> = unknown extends T
     ? string
     : { [K in keyof T & string]: Unwrap<T[K]> extends Primitive ? never : Unwrap<T[K]> extends object ? K : never }[keyof T & string];
 
-declare const rawFieldBrand: unique symbol;
-
-/** A column or alias reference the model does not know about, produced by raw(). */
-export type RawFieldReference = string & { readonly [rawFieldBrand]: true };
-
-/** Marks a field reference the type checker cannot verify: an alias from a hand-written join, or a column of one. */
-export function raw(reference: string): RawFieldReference {
-    return reference as RawFieldReference;
-}
-
-/** What a query method accepts as a field: a model path, an alias this builder declared, or a raw() reference. */
-export type FieldReference<T, TDeclared extends string = never> = FieldPath<T> | TDeclared | RawFieldReference;
+/** What a query method accepts as a field: a model path or an alias this builder declared. */
+export type FieldReference<T, TDeclared extends string = never> = FieldPath<T> | TDeclared;
 
 /**
  * The declared type of the property a field path points at, arrays unwrapped along the way (`'lines.quantity'` on
- * a sales order is the line's `quantity`). `unknown` for a path the model does not know: a declared alias or a
- * raw() reference.
+ * a sales order is the line's `quantity`). `unknown` for a path the model does not know: a declared alias.
  */
 export type FieldValue<T, TPath> = unknown extends T
     ? unknown
@@ -65,13 +55,13 @@ export type MembershipOperator = 'IN' | 'NOT IN';
 export type NullOperator = 'IS NULL' | 'IS NOT NULL';
 
 /** Text compares for equality, by pattern, and by membership. */
-export type TextOperator = EqualityOperator | PatternOperator | MembershipOperator | NullOperator;
+export type TextOperator = EqualityOperator | PatternOperator | MembershipOperator | NullOperator | NQueryOperatorName;
 /** Numbers compare for equality, by order, by membership, and by range. */
-export type NumericOperator = EqualityOperator | ComparisonOperator | MembershipOperator | NullOperator | 'BETWEEN';
+export type NumericOperator = EqualityOperator | ComparisonOperator | MembershipOperator | NullOperator | 'BETWEEN' | NQueryOperatorName;
 /** Dates compare for equality, by order, and by range. */
-export type DateOperator = EqualityOperator | ComparisonOperator | NullOperator | 'BETWEEN';
+export type DateOperator = EqualityOperator | ComparisonOperator | NullOperator | 'BETWEEN' | NQueryOperatorName;
 /** A checkbox is set or not. */
-export type BooleanOperator = EqualityOperator | NullOperator;
+export type BooleanOperator = EqualityOperator | NullOperator | NQueryOperatorName;
 
 /** The operators that make sense for a property of the given declared type; every operator when the type is unknown. */
 export type OperatorFor<TValue> = unknown extends TValue
@@ -88,11 +78,11 @@ export type OperatorFor<TValue> = unknown extends TValue
 
 /**
  * What a condition binds for a property of the given declared type. A checkbox takes a boolean or NetSuite's own
- * `'T'`/`'F'`; a date takes a `Date`, bound through `TO_DATE`. An unknown type takes any parameter value.
+ * `'T'`/`'F'`; a date takes a `Date`. An unknown type takes any condition value.
  * `null` is never a comparison value: use `whereNull()` and `whereNotNull()`.
  */
 export type ParamFor<TValue> = unknown extends TValue
-    ? QueryParamValue | Date
+    ? ConditionParamValue
     : [NonNullable<TValue>] extends [boolean]
         ? boolean | 'T' | 'F'
         : [NonNullable<TValue>] extends [number]
@@ -101,21 +91,23 @@ export type ParamFor<TValue> = unknown extends TValue
                 ? Date
                 : [NonNullable<TValue>] extends [string]
                     ? string
-                    : QueryParamValue | Date;
+                    : ConditionParamValue;
 
 /** The value argument a condition takes: none for the null checks, a list for IN, a pair for BETWEEN, one value otherwise. */
-export type ConditionValue<TValue, TOperator extends QueryOperator> = TOperator extends NullOperator
+export type ConditionValue<TValue, TOperator extends QueryOperator> = TOperator extends NullOperator | 'EMPTY' | 'EMPTY_NOT'
     ? undefined
     : TOperator extends MembershipOperator
         ? ParamFor<TValue>[]
         : TOperator extends 'BETWEEN'
             ? [ParamFor<TValue>, ParamFor<TValue>]
-            : ParamFor<TValue>;
+            : TOperator extends NQueryOperatorName
+                ? ParamFor<TValue> | ParamFor<TValue>[]
+                : ParamFor<TValue>;
 
 /** The field paths of `T` whose declared type accepts the operator. */
 export type FieldPathFor<T, TOperator extends QueryOperator> = {
     [P in FieldPath<T>]: TOperator extends OperatorFor<FieldValue<T, P>> ? P : never;
 }[FieldPath<T>];
 
-/** A field reference restricted to the paths that accept the operator; declared aliases and raw() references always qualify. */
-export type FieldReferenceFor<T, TDeclared extends string, TOperator extends QueryOperator> = FieldPathFor<T, TOperator> | TDeclared | RawFieldReference;
+/** A field reference restricted to the paths that accept the operator; declared aliases always qualify. */
+export type FieldReferenceFor<T, TDeclared extends string, TOperator extends QueryOperator> = FieldPathFor<T, TOperator> | TDeclared;

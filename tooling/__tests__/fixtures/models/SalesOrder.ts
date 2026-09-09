@@ -6,9 +6,10 @@ import { Transaction, TransactionLine } from './Transaction';
 export class SalesOrder extends Transaction {
     @Field('otherrefnum') poNumber!: string | null;
     @Field('custbody_approved') approved!: boolean;
-    @Field('shipmethod', { table: 'salesorder' }) shipMethodId!: number | null;
+    @Field('shipmethod') shipMethodId!: number | null;
     @Field('foreigntotal') @ReadOnly() total!: number;
     customer?: Pick<Customer, 'id' | 'companyName'>;
-    @Sublist('item') lines!: TransactionLine[];
+    /** The item lines are the transaction lines that are not the header line. */
+    @Sublist('item', { filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }) lines!: TransactionLine[];
     @NotMapped() cachedLabel?: string;
 }

@@ -7,5 +7,6 @@ export class Task {
     @Field('assigned') assignedTo!: number | null;
     @Field('transaction') transactionId!: number | null;
     @Field('duedate') dueDate!: Date | null;
-    @Field({ column: 'completeddate', type: 'boolean' }) @ReadOnly() completed!: boolean;
+    /** Read as a checkbox from the completed date field. */
+    @Field({ queryFieldId: 'completeddate', type: 'boolean' }) @ReadOnly() completed!: boolean;
 }

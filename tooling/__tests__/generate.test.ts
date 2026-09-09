@@ -42,7 +42,7 @@ describe('toRecordSetName()', () => {
     });
 });
 
-describe('planGeneration() – convention-mapped fixtures', () => {
+describe('planGeneration() – model fixtures', () => {
     const outDir = createTemporaryOutDir();
     temporaryDirectories.push(outDir);
     const plan = planGeneration({
@@ -70,76 +70,70 @@ describe('planGeneration() – convention-mapped fixtures', () => {
         ]);
     });
 
-    it('maps every property by convention: lowercased column, field id equal to the column, type from the declaration', () => {
-        expect(salesOrderConfig).toContain("from: {\n            name: 'transaction',\n            alias: 'transaction',\n        },");
-        expect(salesOrderConfig).toMatch(/id: \{\n\s+queryFieldId: 'id',\n\s+tableAlias: 'transaction',\n\s+type: 'integer',\n\s+isPrimary: true,\n\s+readonly: true,/);
+    it('maps every property from the model: lowercased field id, query field id equal to it, type from the declaration', () => {
+        expect(salesOrderConfig).toContain("recordType: 'salesorder',\n    queryType: 'salesorder',");
+        expect(salesOrderConfig).toMatch(/id: \{\n\s+queryFieldId: 'id',\n\s+type: 'integer',\n\s+isPrimary: true,\n\s+readonly: true,/);
         expect(salesOrderConfig).toMatch(/tranDate: \{[^}]*queryFieldId: 'trandate'[^}]*type: 'date'[^}]*recordFieldId: 'trandate'/);
         expect(salesOrderConfig).toMatch(/memo: \{[^}]*queryFieldId: 'memo'[^}]*recordFieldId: 'memo'/);
         expect(salesOrderConfig).toMatch(/approved: \{[^}]*queryFieldId: 'custbody_approved'[^}]*type: 'boolean'[^}]*recordFieldId: 'custbody_approved'/);
         expect(salesOrderConfig).toMatch(/customerId: \{[^}]*queryFieldId: 'entity'[^}]*type: 'integer'[^}]*recordFieldId: 'entity'/);
+        expect(salesOrderConfig).toMatch(/shipMethodId: \{[^}]*queryFieldId: 'shipmethod'[^}]*type: 'float'[^}]*recordFieldId: 'shipmethod'/);
         expect(salesOrderConfig).toMatch(/tranId: \{[^}]*transform: uppercaseText,\n\s+recordFieldId: 'tranid'/);
         expect(salesOrderConfig).toMatch(/import \{ trimText, uppercaseText \} from '.*fixtures\/models\/shared';/);
         expect(salesOrderConfig).not.toMatch(/cachedLabel: \{/);
         expect(salesOrderConfig).toContain('    cachedLabel?: string;');
+        expect(salesOrderConfig).not.toContain('discriminator');
+        expect(salesOrderConfig).not.toContain('tableAlias');
+        expect(fileByName.get('InventoryItem.gen.ts')).toContain("recordType: 'inventoryitem',\n    queryType: 'inventoryitem',");
     });
 
-    it('applies the opt-outs: @ReadOnly, text fields, and the internal id are read-only', () => {
+    it('applies the opt-outs: @ReadOnly, text fields, and the internal id are read-only, and text reads in DISPLAY context', () => {
         expect(salesOrderConfig).toMatch(/total: \{[^}]*queryFieldId: 'foreigntotal'[^}]*readonly: true/);
         expect(salesOrderConfig).not.toMatch(/total: \{[^}]*recordFieldId/);
-        expect(salesOrderConfig).toMatch(/statusText: \{[^}]*queryFieldId: 'status'[^}]*useText: true[^}]*readonly: true/);
+        expect(salesOrderConfig).toMatch(/statusText: \{[^}]*queryFieldId: 'status'[^}]*fieldContext: 'DISPLAY'[^}]*readonly: true/);
     });
 
-    it('adds the table-per-hierarchy discriminator and joins the type table only for the field that reads from it', () => {
-        expect(salesOrderConfig).toContain("discriminator: {\n        column: 'type',\n        value: 'SalesOrd',\n    },");
-        expect(salesOrderConfig).toContain("toTable: {\n                    name: 'salesorder',\n                    alias: 'salesorder',\n                },\n                fromTable: 'transaction',\n                type: 'inner',\n                constraints: [\n                    {\n                        joinKeys: {\n                            sourceForeignKey: 'id',\n                            targetPrimaryKey: 'id',\n                        },\n                    },\n                ],");
-        expect(salesOrderConfig).toMatch(/shipMethodId: \{[^}]*queryFieldId: 'shipmethod',\n\s+tableAlias: 'salesorder'/);
-        expect(fileByName.get('InventoryItem.gen.ts')).toContain("discriminator: {\n        column: 'itemtype',\n        value: 'InvtPart',\n    },");
-        expect(fileByName.get('Customer.gen.ts')).not.toContain('discriminator');
-    });
-
-    it('joins a projected reference through its select field and selects only the projected read-only fields', () => {
-        expect(salesOrderConfig).toContain("toTable: {\n                    name: 'customer',\n                    alias: 'customer',\n                },\n                fromTable: 'transaction',\n                type: 'leftOuter',\n                on: 'customer.id = transaction.entity',");
-        expect(salesOrderConfig).toMatch(/customer_companyName: \{[^}]*tableAlias: 'customer'[^}]*nestPath: 'customer.companyName'[^}]*transform: trimText[^}]*readonly: true/);
+    it('joins a projected reference through its select field with joinTo and selects only the projected read-only fields', () => {
+        expect(salesOrderConfig).toContain("        customer: {\n            path: 'customer',\n            relationship: 'customer',\n            load: 'join',\n            join: {\n                kind: 'to',\n                fieldId: 'entity',\n                target: 'customer',\n            },\n        },");
+        expect(salesOrderConfig).toMatch(/customer_companyName: \{[^}]*component: 'customer'[^}]*transform: trimText[^}]*nestPath: 'customer.companyName'[^}]*readonly: true/);
         expect(salesOrderConfig).not.toContain('customer_email');
-        expect(salesOrderConfig).toContain("customer: {\n            kind: 'reference',\n            fields: {\n                id: 'customer_id',\n                companyName: 'customer_companyName',\n            },\n            joinAliases: [\n                'customer',\n            ],\n        },");
+        expect(salesOrderConfig).toContain("customer: {\n            kind: 'reference',\n            fields: {\n                id: 'customer_id',\n                companyName: 'customer_companyName',\n            },\n            components: [\n                'customer',\n            ],\n            load: 'join',\n        },");
     });
 
-    it('maps both subrecords from one class, with the field id from the property and the table and list field from the conventions', () => {
-        expect(salesOrderConfig).toContain("on: 'shippingAddress.nkey = transaction.shippingaddress',");
-        expect(salesOrderConfig).toContain("on: 'billingAddress.nkey = transaction.billingaddress',");
-        expect(salesOrderConfig).toMatch(/shippingAddress_state: \{[^}]*setFirst: true,\n\s+recordFieldId: 'state',\n\s+recordAccess: 'subrecord',\n\s+recordAccessId: 'shippingaddress',\n\s+subrecordNeedsReload: true,\n\s+subrecordListFieldToClear: 'shipaddresslist'/);
+    it('maps both subrecords from one class, with the field id from the property, the join left to N/query, and the list field declared', () => {
+        expect(salesOrderConfig).toContain("        shippingAddress: {\n            path: 'shippingAddress',\n            relationship: 'shippingAddress',\n            load: 'join',\n            join: {\n                kind: 'auto',\n                fieldId: 'shippingaddress',\n            },\n        },");
+        expect(salesOrderConfig).toContain("        billingAddress: {\n            path: 'billingAddress',\n            relationship: 'billingAddress',\n            load: 'join',\n            join: {\n                kind: 'auto',\n                fieldId: 'billingaddress',\n            },\n        },");
+        expect(salesOrderConfig).toMatch(/shippingAddress_state: \{[^}]*setFirst: true,\n\s+nestPath: 'shippingAddress.state',\n\s+recordFieldId: 'state',\n\s+recordAccess: 'subrecord',\n\s+recordAccessId: 'shippingaddress',\n\s+subrecordNeedsReload: true,\n\s+subrecordListFieldToClear: 'shipaddresslist'/);
         expect(salesOrderConfig).toMatch(/billingAddress_city: \{[^}]*recordAccessId: 'billingaddress'[^}]*subrecordListFieldToClear: 'billaddresslist'/);
         expect(salesOrderConfig).toContain("shippingAddress: {\n            kind: 'subrecord',\n            recordAccessId: 'shippingaddress',");
         expect(salesOrderConfig).toContain("reload: {\n                listFieldToClear: 'billaddresslist',\n            },");
+        expect(salesOrderConfig).not.toContain('nkey');
     });
 
-    it('maps the sublist with the conventional line table, line key, and a nested reference under it', () => {
-        expect(salesOrderConfig).toContain("on: 'lines.transaction = transaction.id AND lines.mainline = \\'F\\'',");
-        expect(salesOrderConfig).toMatch(/lines_id: \{[^}]*cardinality: 'many',\n\s+recordFieldId: 'line',\n\s+recordAccess: 'sublist',\n\s+recordAccessId: 'item',\n\s+updateMapping: \{\n\s+kind: 'sublist',\n\s+sublistId: 'item',\n\s+fieldId: 'line',\n\s+matchBy: 'line',/);
+    it('maps the sublist through the line class parent id, with the declared filter, the line key, and a nested reference under it', () => {
+        expect(salesOrderConfig).toContain("        lines: {\n            path: 'lines',\n            relationship: 'lines',\n            load: 'join',\n            join: {\n                kind: 'from',\n                fieldId: 'transaction',\n                source: 'transactionline',\n            },\n            conditions: [\n                {\n                    fieldId: 'mainline',\n                    operator: 'IS',\n                    values: [\n                        false,\n                    ],\n                },\n            ],\n            lineOrderFieldId: 'id',\n        },");
+        expect(salesOrderConfig).toContain("        'lines.item': {\n            path: 'lines.item',\n            parent: 'lines',\n            relationship: 'lines',\n            load: 'join',\n            join: {\n                kind: 'to',\n                fieldId: 'item',\n                target: 'inventoryitem',\n            },\n        },");
+        expect(salesOrderConfig).toMatch(/lines_id: \{[^}]*queryFieldId: 'id',\n\s+component: 'lines',[^}]*cardinality: 'many',\n\s+recordFieldId: 'line',\n\s+recordAccess: 'sublist',\n\s+recordAccessId: 'item',\n\s+updateMapping: \{\n\s+kind: 'sublist',\n\s+sublistId: 'item',\n\s+fieldId: 'line',\n\s+matchBy: 'line',/);
         expect(salesOrderConfig).toMatch(/lines_quantity: \{[^}]*recordFieldId: 'quantity'[^}]*updateMapping: \{[^}]*fieldId: 'quantity',\n\s+matchBy: 'line'/);
         expect(salesOrderConfig).toMatch(/lines_amount: \{[^}]*readonly: true,\n\s+recordAccess: 'sublist'/);
+        expect(salesOrderConfig).toMatch(/lines_transactionId: \{[^}]*queryFieldId: 'transaction'[^}]*readonly: true/);
         expect(salesOrderConfig).toMatch(/lines_notes: \{[^}]*select: false/);
-        expect(salesOrderConfig).toContain("on: 'lines_item.id = lines.item AND lines_item.itemtype = ?',\n                params: [\n                    'InvtPart',\n                ],");
-        expect(salesOrderConfig).toMatch(/lines_item_displayName: \{[^}]*tableAlias: 'lines_item'[^}]*nestPath: 'lines.item.displayName',\n\s+cardinality: 'many',\n\s+readonly: true/);
-        expect(salesOrderConfig).toContain("lines: {\n            kind: 'sublist',\n            recordAccessId: 'item',\n            fields: {\n                id: 'lines_id',\n                itemId: 'lines_itemId',\n                quantity: 'lines_quantity',\n                amount: 'lines_amount',\n                notes: 'lines_notes',\n                'item.itemId': 'lines_item_itemId',\n                'item.displayName': 'lines_item_displayName',\n            },\n            joinAliases: [\n                'lines',\n                'lines_item',\n            ],\n            matchField: 'id',\n        },");
+        expect(salesOrderConfig).toMatch(/lines_item_displayName: \{[^}]*component: 'lines.item'[^}]*nestPath: 'lines.item.displayName',\n\s+cardinality: 'many',\n\s+readonly: true/);
+        expect(salesOrderConfig).toContain("lines: {\n            kind: 'sublist',\n            recordAccessId: 'item',\n            fields: {\n                id: 'lines_id',\n                transactionId: 'lines_transactionId',\n                itemId: 'lines_itemId',\n                quantity: 'lines_quantity',\n                amount: 'lines_amount',\n                notes: 'lines_notes',\n                'item.itemId': 'lines_item_itemId',\n                'item.displayName': 'lines_item_displayName',\n            },\n            components: [\n                'lines',\n                'lines.item',\n            ],\n            load: 'join',\n            matchField: 'id',\n        },");
     });
 
-    it('joins sublists and subrecords inner, references left outer, and keeps a relation under a left outer join outer', () => {
-        expect(salesOrderConfig).toMatch(/alias: 'shippingAddress',\n\s+\},\n\s+fromTable: 'transaction',\n\s+type: 'inner',/);
-        expect(salesOrderConfig).toMatch(/alias: 'lines',\n\s+\},\n\s+fromTable: 'transaction',\n\s+type: 'inner',/);
-        expect(salesOrderConfig).toMatch(/alias: 'lines_item',\n\s+\},\n\s+fromTable: 'lines',\n\s+type: 'leftOuter',/);
-
+    it('carries separate loads, a reference matched on a code field, and a subrecord loaded on its own', () => {
         const joins = planGeneration({ config: buildConfig(['tooling/__tests__/fixtures/joins/*.ts'], outDir), cwd: repositoryRoot, fileSystem, compilerOptions, version: '0.0.0-test' });
         expect(joins.diagnostics).toEqual([]);
         const invoiceConfig = joins.files.find((file) => file.path.endsWith('Invoice.gen.ts'))?.content as string;
         const warehouseConfig = joins.files.find((file) => file.path.endsWith('Warehouse.gen.ts'))?.content as string;
-        // The sublist id comes from the line table when the property does not name it.
-        expect(invoiceConfig).toContain("on: 'lines.transaction = transaction.id AND lines.mainline = \\'F\\'',");
-        expect(invoiceConfig).toContain("recordAccessId: 'item',");
-        expect(invoiceConfig).toMatch(/alias: 'lines',\n\s+\},\n\s+fromTable: 'transaction',\n\s+type: 'inner',/);
-        expect(invoiceConfig).toMatch(/alias: 'lines_location',\n\s+\},\n\s+fromTable: 'lines',\n\s+type: 'leftOuter',/);
-        expect(invoiceConfig).toMatch(/alias: 'lines_location_mainAddress',\n\s+\},\n\s+fromTable: 'lines_location',\n\s+type: 'leftOuter',\n\s+on: 'lines_location_mainAddress.nkey = lines_location.mainaddress',/);
-        expect(warehouseConfig).toMatch(/alias: 'mainAddress',\n\s+\},\n\s+fromTable: 'location',\n\s+type: 'inner',/);
+        expect(invoiceConfig).toContain("        carrier: {\n            path: 'carrier',\n            relationship: 'carrier',\n            load: 'separate',\n            join: {\n                kind: 'to',\n                fieldId: 'custbody_carrier_code',\n                target: 'customrecord_carrier',\n            },\n            separate: {\n                queryType: 'customrecord_carrier',\n                parentKeyField: 'carrierCode',\n                targetKeyFieldId: 'custrecord_carrier_code',\n            },\n        },");
+        expect(invoiceConfig).toMatch(/lines: \{\n\s+path: 'lines',\n\s+relationship: 'lines',\n\s+load: 'separate',/);
+        expect(invoiceConfig).toContain("        'lines.location': {\n            path: 'lines.location',\n            parent: 'lines',\n            relationship: 'lines',\n            load: 'separate',");
+        expect(invoiceConfig).toContain("        'lines.location.mainAddress': {\n            path: 'lines.location.mainAddress',\n            parent: 'lines.location',\n            relationship: 'lines',\n            load: 'separate',\n            join: {\n                kind: 'auto',\n                fieldId: 'mainaddress',\n            },\n        },");
+        expect(invoiceConfig).toMatch(/billingAddress: \{\n\s+path: 'billingAddress',\n\s+relationship: 'billingAddress',\n\s+load: 'separate',/);
+        expect(invoiceConfig).toMatch(/carrier: \{\n\s+kind: 'reference',[\s\S]*?load: 'separate',/);
+        expect(warehouseConfig).toContain("        mainAddress: {\n            path: 'mainAddress',\n            relationship: 'mainAddress',\n            load: 'join',\n            join: {\n                kind: 'auto',\n                fieldId: 'mainaddress',\n            },\n        },");
     });
 
     it('emits one interface per class, extending the base and importing referenced types', () => {
@@ -162,7 +156,7 @@ describe('planGeneration() – convention-mapped fixtures', () => {
         expect(fileByName.get('Transaction.gen.ts')).toContain("import type { TransactionAddress } from './TransactionAddress.gen';\n\nexport interface Transaction {\n    id: number;\n    tranId: string;\n    tranDate: Date;\n    memo?: string | null;\n    customerId: number;\n    statusText: string;\n    shippingAddress: TransactionAddress;\n    billingAddress?: TransactionAddress;\n}\n");
         expect(fileByName.get('Transaction.gen.ts')).not.toContain('RecordGraphPatch');
         expect(fileByName.get('TransactionAddress.gen.ts')).toContain('export interface TransactionAddress {\n    addr1: string | null;\n    city: string | null;\n    state: string | null;\n}');
-        expect(fileByName.get('TransactionLine.gen.ts')).toContain("export interface TransactionLine {\n    id: number;\n    itemId: number;\n    quantity: number;\n    amount: number;\n    notes: string | null;\n    item?: Pick<InventoryItem, 'itemId' | 'displayName'>;\n}");
+        expect(fileByName.get('TransactionLine.gen.ts')).toContain("export interface TransactionLine {\n    id: number;\n    transactionId: number;\n    itemId: number;\n    quantity: number;\n    amount: number;\n    notes: string | null;\n    item?: Pick<InventoryItem, 'itemId' | 'displayName'>;\n}");
         expect(fileByName.get('Customer.gen.ts')).toContain('export interface Customer {\n    id: number;\n    companyName: string;\n    email: string | null;\n    isInactive: boolean;\n    categoryIds: number[];\n}');
         expect(fileByName.get('Customer.gen.ts')).toMatch(/categoryIds: \{[^}]*type: 'multiselect'/);
     });
@@ -204,6 +198,7 @@ describe('planGeneration() – convention-mapped fixtures', () => {
             '    },',
             '    lines: {',
             "        id: 'lines.id',",
+            "        transactionId: 'lines.transactionId',",
             "        itemId: 'lines.itemId',",
             "        quantity: 'lines.quantity',",
             "        amount: 'lines.amount',",
@@ -333,15 +328,18 @@ describe('planGeneration() – diagnostics', () => {
     it('reports every way a reference, subrecord, or sublist can be declared wrong', () => {
         const plan = planFor(['tooling/__tests__/fixtures/broken/BadRelations.ts']);
         expect(plan.diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
-            "Sublist 'BadRelations.notes' ('notes') has no known line table; declare it with @Sublist('notes', { table, parentColumn }) or type it with a @RecordType class.",
-            "Sublist 'BadRelations.children' ('children') has no known parent column on 'customrecord_child'; declare it with @Sublist('children', { parentColumn }).",
+            "Property 'BadRelations.ghostParent' has type 'Map<string, string>', which does not map to a NetSuite field type. Declare it with @Field({ type }), type it as a model class, or mark it @NotMapped().",
+            "Property 'BadRelations.ghostParent' is marked @ParentId() but is not a mapped field.",
+            "Sublist 'BadRelations.notes' ('notes') is typed as 'Note', which has no @RecordType; a line class names its record type, or the property names the relationship with @Sublist('notes', { relationship }).",
+            "Sublist 'BadRelations.children' ('children') has no way back to its parent: mark the property of 'ChildLine' holding the parent's internal id with @ParentId(), or name the relationship with @Sublist('children', { relationship }).",
             "Reference 'BadRelations.owner' needs a select field: declare 'ownerId', name one with @Reference('<property>'), or mark the property @Subrecord() if it is one.",
-            "Subrecord 'BadRelations.detail' ('detail') has no known table; declare it with @Subrecord('detail', { table, key }).",
+            "Reference 'BadRelations.detail' targets 'Note', which has no @RecordType; a reference needs a query type.",
             "Property 'BadRelations.line' is marked @Sublist() but is not an array.",
             "Property 'BadRelations.tags' is an array; use @Sublist() on it, @Subrecord() and @Reference() apply to object properties.",
-            "Sublist 'BadRelationsOwner.parents' ('parents') has no known parent column on 'customrecord_parent'; declare it with @Sublist('parents', { parentColumn }).",
+            "Sublist 'BadRelationsOwner.parents' ('parents') has no way back to its parent: mark the property of 'BadRelations' holding the parent's internal id with @ParentId(), or name the relationship with @Sublist('parents', { relationship }).",
             "Reference 'BadRelationsOwner.parent' needs a select field: declare 'parentId', name one with @Reference('<property>'), or mark the property @Subrecord() if it is one.",
-            "Reference 'BadTargetKey.owner' joins on 'BadRelationsOwner.ghost', which is not a mapped field.",
+            "Reference 'BadTargetKey.owner' matches on 'BadRelationsOwner.ghost', which is not a mapped field.",
+            "Reference 'BadTargetKey.joined' matches on 'BadRelationsOwner.id' and must load separately; N/query joins only through the target's internal id. Remove load: 'join'.",
         ]);
     });
 

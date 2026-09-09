@@ -1,24 +1,34 @@
-import { query, raw } from '..';
+import { query } from '..';
 import type { FieldPath, RelationName } from '..';
 import { salesOrderModelConfig } from './model-fixtures';
 import type { SalesOrderModel } from './model-fixtures';
 
 describe('typed field paths', () => {
     it('accepts model paths and the aliases a query declares, and turns typos into compile errors', () => {
-        const built = query(salesOrderModelConfig)
+        const description = query(salesOrderModelConfig)
             .where('memo', '=', 'x')
             .where('lines.itemId', '=', 1)
             .where('shippingAddress.city', '=', 'Dallas')
             .orderByAsc('customer.companyName')
-            .leftJoin('transactionline', 'l', 'l.transaction = txn.id')
-            .selectRaw('COUNT(l.id)', 'lineCount', { type: 'integer' })
-            .where('l.mainline', '=', 'F')
-            .orderByDesc('lineCount')
-            .build();
+            .selectFormula('{lines.quantity} * 2', 'doubled', { type: 'FLOAT', fieldType: 'float' })
+            .where('doubled', '>', 1)
+            .orderByDesc('doubled')
+            .describe();
 
-        expect(built.sql).toContain('LEFT OUTER JOIN transactionline l ON l.transaction = txn.id');
-        expect(built.sql).toContain('l.mainline = ?');
-        expect(built.sql).toMatch(/ORDER BY cust\.companyname ASC, \S+ DESC/);
+        expect(description.columns).toContainEqual({ alias: 'doubled', formula: '{lines.quantity} * 2', formulaType: 'FLOAT' });
+        expect(description.condition).toEqual({
+            kind: 'and',
+            nodes: [
+                { kind: 'field', fieldId: 'memo', operator: 'EQUAL', values: ['x'] },
+                { kind: 'field', component: 'lines', fieldId: 'item', operator: 'EQUAL', values: [1] },
+                { kind: 'field', component: 'shippingAddress', fieldId: 'city', operator: 'EQUAL', values: ['Dallas'] },
+                { kind: 'formula', formula: '{lines.quantity} * 2', type: 'FLOAT', operator: 'GREATER', values: [1] },
+            ],
+        });
+        expect(description.sort).toEqual([
+            { component: 'customer', fieldId: 'companyname', ascending: true },
+            { formula: '{lines.quantity} * 2', formulaType: 'FLOAT', ascending: false },
+        ]);
 
         const path: FieldPath<SalesOrderModel> = 'lines.quantity';
         const relation: RelationName<SalesOrderModel> = 'lines';
@@ -33,10 +43,10 @@ describe('typed field paths', () => {
             builder.orderByAsc('lines.quantityy');
             // @ts-expect-error a relation name is not a field path of its own members' type
             builder.select('customer.ghost');
-            const joined = builder.leftJoin('transactionline', 'l', 'l.transaction = txn.id');
+            const widened = builder.selectFormula('{id}', 'copy');
             // @ts-expect-error an alias this query did not declare
-            joined.where('x.column', '=', 1);
-            joined.where(raw('x.column'), '=', 1);
+            widened.where('other', '=', 1);
+            widened.where('copy', '=', 1);
             // @ts-expect-error only relations can be included
             builder.include('memo');
             builder.include('lines');

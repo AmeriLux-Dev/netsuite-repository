@@ -2,14 +2,8 @@ import { RecordSet, applySpecifications, createNetSuiteContext } from '../contex
 import type { Specification } from '../context';
 import { customerConfig, salesOrderConfig } from './fixtures';
 import type { Customer } from './fixtures';
-import { salesOrderModelConfig } from './model-fixtures';
-import * as NsQuery from 'N/query';
-
-const mockRunSuiteQL = NsQuery.runSuiteQL as unknown as jest.Mock;
-
-function mockRows(rows: Record<string, unknown>[]) {
-    mockRunSuiteQL.mockReturnValue({ asMappedResults: () => rows });
-}
+import { salesOrderModelConfig, separateLinesSalesOrderModelConfig } from './model-fixtures';
+import { fakeNQuery } from '../testing';
 
 const named = (name: string): Specification<Customer> => (query) => query.where('name', '=', name);
 const withEmail = (): Specification<Customer> => (query) => query.where('email', 'IS NOT NULL');
@@ -27,55 +21,66 @@ class CustomerRepository extends RecordSet<Customer> {
 
 beforeEach(() => {
     jest.clearAllMocks();
+    fakeNQuery.reset();
 });
 
 describe('specifications', () => {
     it('apply in order and compose on one query', () => {
-        mockRows([]);
         const set = new RecordSet<Customer>(customerConfig);
-        const built = applySpecifications(set.query(), [named('Acme'), withEmail()]).build();
-        expect(built.sql).toContain('WHERE cust.companyname = ? AND cust.email IS NOT NULL');
-        expect(built.params).toEqual(['Acme']);
+        const text = applySpecifications(set.query(), [named('Acme'), withEmail()]).describeText();
+        expect(text).toContain("WHERE companyname EQUAL ['Acme'] AND email EMPTY_NOT");
     });
 
     it('drive list(), first(), count(), and exists() on a record set', () => {
         const set = new RecordSet<Customer>(customerConfig);
 
-        mockRows([{ id: 1, name: 'Acme', email: 'a@x' }, { id: 2, name: 'Bolt', email: 'b@x' }]);
+        fakeNQuery.queueRows('customer', [{ id: 1, name: 'Acme', email: 'a@x' }, { id: 2, name: 'Bolt', email: 'b@x' }]);
         expect(set.list(withEmail())).toHaveLength(2);
-        expect(mockRunSuiteQL.mock.calls[0][0].query).toContain('cust.email IS NOT NULL');
+        expect(fakeNQuery.calls[0].text).toContain('email EMPTY_NOT');
 
-        mockRows([{ id: 1, name: 'Acme', email: 'a@x' }]);
+        fakeNQuery.queueRows('customer', [{ id: 1, name: 'Acme', email: 'a@x' }]);
         expect(set.first(named('Acme'))).toMatchObject({ id: 1, name: 'Acme' });
-        expect(mockRunSuiteQL.mock.calls[1][0].query).toContain('FETCH NEXT 1 ROWS ONLY');
+        expect(fakeNQuery.calls[1].execution).toBe('runPaged');
+        expect(fakeNQuery.calls[1].pageSize).toBe(5);
 
-        mockRows([{ count: '3' }]);
+        fakeNQuery.queueRows('customer', [{ count: '3' }]);
         expect(set.count(named('Acme'))).toBe(3);
-        expect(mockRunSuiteQL.mock.calls[2][0].query).toMatch(/^SELECT COUNT\(\*\)/);
-        expect(mockRunSuiteQL.mock.calls[2][0].params).toEqual(['Acme']);
+        expect(fakeNQuery.calls[2].text).toContain('SELECT COUNT(id) AS count');
+        expect(fakeNQuery.calls[2].text).toContain("WHERE companyname EQUAL ['Acme']");
 
-        mockRows([{ exists: 1 }]);
+        fakeNQuery.queueRows('customer', [{ id: 1 }]);
         expect(set.exists(named('Acme'), withEmail())).toBe(true);
-        mockRows([]);
         expect(set.exists()).toBe(false);
     });
 
-    it('reads every row for first() and find() on a model with a sublist, so the record keeps all its lines', () => {
+    it('reads every row for first() and find() on a model with a joined sublist, so the record keeps all its lines', () => {
         const orders = new RecordSet(salesOrderModelConfig);
         const lineRows = [
-            { id: 9, tranid: 'SO9', memo: null, companyname: 'Acme', shippingaddress_addr1: '1 Main', shippingaddress_city: 'Dallas', lines_line: 1, lines_itemid: 5, lines_quantity: 2, customer_companyname: 'Acme' },
-            { id: 9, tranid: 'SO9', memo: null, companyname: 'Acme', shippingaddress_addr1: '1 Main', shippingaddress_city: 'Dallas', lines_line: 2, lines_itemid: 6, lines_quantity: 1, customer_companyname: 'Acme' },
+            { id: 9, tranid: 'SO9', memo: null, customername: 'Acme', shippingaddress_addr1: '1 Main', shippingaddress_city: 'Dallas', lines_line: 1, lines_itemid: 5, lines_quantity: 2, customer_companyname: 'Acme' },
+            { id: 9, tranid: 'SO9', memo: null, customername: 'Acme', shippingaddress_addr1: '1 Main', shippingaddress_city: 'Dallas', lines_line: 2, lines_itemid: 6, lines_quantity: 1, customer_companyname: 'Acme' },
         ];
 
-        mockRows(lineRows);
+        fakeNQuery.queueRows('salesorder', lineRows);
         const first = orders.first((query) => query.where('memo', 'IS NULL'));
         expect(first?.lines).toHaveLength(2);
-        expect(mockRunSuiteQL.mock.calls[0][0].query).not.toContain('FETCH NEXT');
+        expect(fakeNQuery.calls[0].execution).toBe('run');
 
         // A fresh set, so find() has nothing tracked and must query.
-        mockRows(lineRows);
+        fakeNQuery.queueRows('salesorder', lineRows);
         expect(new RecordSet(salesOrderModelConfig).find(9)?.lines.map((line) => line.line)).toEqual([1, 2]);
-        expect(mockRunSuiteQL.mock.calls[1][0].query).not.toContain('FETCH NEXT');
+        expect(fakeNQuery.calls[1].execution).toBe('run');
+    });
+
+    it('pages over records when the lines load separately', () => {
+        const orders = new RecordSet(separateLinesSalesOrderModelConfig);
+        fakeNQuery.queueRows({ type: 'salesorder', contains: 'shippingaddress' }, [{ id: 9, tranid: 'SO9', memo: null, customername: 'Acme', shippingaddress_addr1: '1 Main', shippingaddress_city: 'Dallas', customer_companyname: 'Acme' }]);
+        fakeNQuery.queueRows({ type: 'salesorder', contains: '__parentKey' }, [{ __parentkey: 9, lines_line: 1, lines_itemid: 5, lines_quantity: 2 }]);
+
+        const first = orders.first();
+
+        expect(first?.lines).toEqual([{ line: 1, itemId: 5, quantity: 2 }]);
+        expect(fakeNQuery.calls[0].execution).toBe('runPaged');
+        expect(fakeNQuery.calls[1].text).toContain('id ANY_OF [9]');
     });
 });
 
@@ -89,9 +94,8 @@ describe('repository registration', () => {
         expect(db.salesOrders).not.toBeInstanceOf(CustomerRepository);
         expect(db.set('customers')).toBe(db.customers);
 
-        mockRows([{ id: 7, name: 'Acme', email: 'a@x' }]);
+        fakeNQuery.queueRows('customer', [{ id: 7, name: 'Acme', email: 'a@x' }]);
         expect(db.customers.findByName('Acme')).toMatchObject({ id: 7 });
-        mockRows([]);
         expect(db.customers.listContactable()).toEqual([]);
     });
 
@@ -100,7 +104,7 @@ describe('repository registration', () => {
         expect(db.customers.changeTracker).toBe(db.changeTracker);
         expect(db.customers.name).toBe('customers');
 
-        mockRows([{ id: 7, name: 'Acme', email: 'a@x' }]);
+        fakeNQuery.queueRows('customer', [{ id: 7, name: 'Acme', email: 'a@x' }]);
         const customer = db.customers.findByName('Acme') as Customer;
         expect(db.entry(customer)).toBeDefined();
         expect(db.customers.find(7)).toBe(customer);
@@ -108,7 +112,7 @@ describe('repository registration', () => {
 
     it('honours tracking: false alongside repositories', () => {
         const db = createNetSuiteContext(schema, { tracking: false, repositories: { customers: CustomerRepository } });
-        mockRows([{ id: 7, name: 'Acme', email: 'a@x' }]);
+        fakeNQuery.queueRows('customer', [{ id: 7, name: 'Acme', email: 'a@x' }]);
         const customer = db.customers.findByName('Acme') as Customer;
         expect(db.entry(customer)).toBeUndefined();
         expect(db.options).toEqual({ tracking: false });

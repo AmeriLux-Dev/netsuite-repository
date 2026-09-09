@@ -3,6 +3,7 @@ import {
     Field,
     InternalId,
     NotMapped,
+    ParentId,
     ReadOnly,
     RecordType,
     Reference,
@@ -20,43 +21,44 @@ import {
 
 const upper = (value: unknown) => String(value).toUpperCase();
 
-/** A subrecord shape: plain class, the table comes from the property or the conventions. */
+/** A subrecord shape: a plain class; N/query resolves its table and key from the field it hangs off. */
 class Address {
     addr1!: string | null;
     @SetFirst() state!: string | null;
 }
 
-/** A sublist line: a record type of its own, naming the line table. */
+/** A sublist line: a record type of its own, naming the field that points at its parent. */
 @RecordType('transactionline')
 class Line {
-    id!: number;
+    @InternalId() @Field('line', { queryFieldId: 'id' }) id!: number;
+    @ParentId() @Field('transaction') transactionId!: number;
     @Field('item') itemId!: number;
 }
 
 abstract class Transaction {
     @InternalId() internalId!: number;
     @Field('tranid') @Transform(upper) tranId!: string;
-    @Field({ column: 'status', text: true }) statusText!: string;
+    @Field('orderstatus', { queryFieldId: 'status' }) status!: string;
+    @Field({ queryFieldId: 'status', text: true }) statusText!: string;
     @NotMapped() cachedLabel?: string;
-    @Subrecord('shippingaddress', { clearListField: 'shipaddresslist', join: 'leftOuter' }) shippingAddress!: Address;
-    @Subrecord({ table: 'customaddress', key: 'nkey' }) billingAddress!: Address;
+    @Subrecord('shippingaddress', { clearListField: 'shipaddresslist', load: 'separate' }) shippingAddress!: Address;
+    @Subrecord({ clearListField: 'billaddresslist' }) billingAddress!: Address;
 }
 
 @RecordType('salesorder', {
+    queryType: 'transaction',
+    filter: [{ fieldId: 'type', operator: 'ANY_OF', values: ['SalesOrd'] }],
     setName: 'orders',
     coerce: false,
-    discriminator: { column: 'type', value: 'SalesOrd' },
-    tables: { salesorder: { key: 'id' } },
     updater: { requireFastPath: true },
-    rest: { recordType: 'transaction' },
 })
 class SalesOrder extends Transaction {
-    @Field('shipmethod', { table: 'salesorder', type: 'integer', coerce: false }) shipMethodId!: number | null;
+    @Field('shipmethod', { type: 'integer', coerce: false }) shipMethodId!: number | null;
     @ReadOnly() @ExcludeFromDefaultSelect() total!: number;
-    @Reference('entityId', { join: 'inner', targetKey: 'externalId' }) customer?: object;
-    @Reference({ join: 'inner' }) vendor?: object;
-    @Sublist('item', { table: 'transactionline', where: "{alias}.mainline = 'F'", parentColumn: 'transaction', lineKey: { column: 'id', field: 'line' }, join: 'leftOuter' }) lines!: Line[];
-    @Sublist({ parentColumn: 'transaction' }) extras!: Line[];
+    @Reference('entityId', { join: 'to', targetKey: 'externalId' }) customer?: object;
+    @Reference({ load: 'separate' }) vendor?: object;
+    @Sublist('item', { filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }], load: 'join' }) lines!: Line[];
+    @Sublist({ relationship: 'transactionlines' }) extras!: Line[];
     @Field('tranid') tranId!: string;
 }
 
@@ -65,17 +67,16 @@ class Plain {
 }
 
 describe('decorator registry', () => {
-    it('records everything @RecordType says about a class, including the updater and REST metadata', () => {
+    it('records everything @RecordType says about a class', () => {
         expect(getOwnClassOverrides(SalesOrder)).toEqual(expect.objectContaining({
             recordType: 'salesorder',
+            queryType: 'transaction',
+            rootFilter: [{ fieldId: 'type', operator: 'ANY_OF', values: ['SalesOrd'] }],
             setName: 'orders',
             coerce: false,
-            discriminator: { column: 'type', value: 'SalesOrd' },
-            typeTables: { salesorder: { key: 'id' } },
             updaterOptions: { requireFastPath: true },
-            restRecordMetadata: { recordType: 'transaction' },
         }));
-        expect(getOwnClassOverrides(Line)).toEqual(expect.objectContaining({ recordType: 'transactionline' }));
+        expect(getOwnClassOverrides(Line)).toEqual(expect.objectContaining({ recordType: 'transactionline', keyProperty: 'id', parentKeyProperty: 'transactionId' }));
         expect(getOwnClassOverrides(Transaction)).toEqual(expect.objectContaining({ keyProperty: 'internalId' }));
         expect(getOwnClassOverrides(Transaction)?.recordType).toBeUndefined();
         expect(getOwnClassOverrides(Address)).toEqual(expect.objectContaining({ properties: expect.any(Map) }));
@@ -84,21 +85,23 @@ describe('decorator registry', () => {
 
     it('records field overrides', () => {
         const properties = getClassOverrides(SalesOrder).properties;
-        expect(properties.get('shipMethodId')).toEqual({ name: 'shipMethodId', fieldId: 'shipmethod', table: 'salesorder', type: 'integer', coerce: false });
+        expect(properties.get('shipMethodId')).toEqual({ name: 'shipMethodId', fieldId: 'shipmethod', type: 'integer', coerce: false });
         expect(properties.get('total')).toEqual({ name: 'total', readOnly: true, selectByDefault: false });
-        expect(properties.get('statusText')).toEqual({ name: 'statusText', column: 'status', text: true });
+        expect(properties.get('status')).toEqual({ name: 'status', fieldId: 'orderstatus', queryFieldId: 'status' });
+        expect(properties.get('statusText')).toEqual({ name: 'statusText', queryFieldId: 'status', text: true });
+        expect(getClassOverrides(Line).properties.get('id')).toEqual({ name: 'id', fieldId: 'line', queryFieldId: 'id' });
         expect(getClassOverrides(Address).properties.get('state')).toEqual({ name: 'state', setFirst: true });
         expect(getClassOverrides(Transaction).notMapped).toEqual(new Set(['cachedLabel']));
     });
 
     it('records the relation decorators on the properties that carry them', () => {
         const properties = getClassOverrides(SalesOrder).properties;
-        expect(properties.get('customer')).toEqual({ name: 'customer', relationKind: 'reference', selectFieldProperty: 'entityId', joinType: 'inner', targetKeyProperty: 'externalId' });
-        expect(properties.get('vendor')).toEqual({ name: 'vendor', relationKind: 'reference', joinType: 'inner' });
-        expect(properties.get('lines')).toEqual({ name: 'lines', relationKind: 'sublist', sublistId: 'item', sublistTable: 'transactionline', sublistWhere: "{alias}.mainline = 'F'", parentColumn: 'transaction', lineKey: { column: 'id', field: 'line' }, joinType: 'leftOuter' });
-        expect(properties.get('extras')).toEqual({ name: 'extras', relationKind: 'sublist', parentColumn: 'transaction' });
-        expect(properties.get('shippingAddress')).toEqual({ name: 'shippingAddress', relationKind: 'subrecord', subrecordFieldId: 'shippingaddress', clearListField: 'shipaddresslist', joinType: 'leftOuter' });
-        expect(properties.get('billingAddress')).toEqual({ name: 'billingAddress', relationKind: 'subrecord', subrecordTable: 'customaddress', subrecordKey: 'nkey' });
+        expect(properties.get('customer')).toEqual({ name: 'customer', relationKind: 'reference', selectFieldProperty: 'entityId', joinKind: 'to', targetKeyProperty: 'externalId' });
+        expect(properties.get('vendor')).toEqual({ name: 'vendor', relationKind: 'reference', load: 'separate' });
+        expect(properties.get('lines')).toEqual({ name: 'lines', relationKind: 'sublist', sublistId: 'item', filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }], load: 'join' });
+        expect(properties.get('extras')).toEqual({ name: 'extras', relationKind: 'sublist', relationshipFieldId: 'transactionlines' });
+        expect(properties.get('shippingAddress')).toEqual({ name: 'shippingAddress', relationKind: 'subrecord', subrecordFieldId: 'shippingaddress', clearListField: 'shipaddresslist', load: 'separate' });
+        expect(properties.get('billingAddress')).toEqual({ name: 'billingAddress', relationKind: 'subrecord', clearListField: 'billaddresslist' });
     });
 
     it('merges base-class overrides under the derived class, letting the derived class win per property', () => {
