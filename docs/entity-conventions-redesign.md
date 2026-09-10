@@ -337,3 +337,11 @@ Decisions:
 - The library ships a test double for N/query (`@amerilux/netsuite-repository/testing`) that records every query as
   a `QueryDescription` with a rendered text form and answers with queued rows, so consumers assert on what was asked
   rather than on SQL strings.
+- A has-many keyed by a field on the child (2026-09-10, from the labels page port in the order-processing test
+  project): `@Sublist({ load: 'separate' })` on the owner with `@ParentId()` on the child's field emits a `separate`
+  block whose query type is the child's own record type and whose target key is that field. The planner reroots the
+  relation at the child (columns, conditions, sorts, nested joins), turns the sublist filter into a root condition,
+  and batches on the child field with ANY_OF; rows map one item each. It exists because `joinFrom` is not registered
+  for every reverse relationship N/query knows (a fulfillment's SPS contents, keyed by `custrecord_pack_content_fulfillment`),
+  while a query on the child type filtered by that field always is. A separate relation nested inside a separately
+  loaded relation is still not planned; repositories compose those (fulfillments onto orders).

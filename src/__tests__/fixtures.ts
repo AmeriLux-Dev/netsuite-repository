@@ -189,3 +189,41 @@ export const shipmentConfig = defineQueryConfig<Shipment>({
         carrier: { kind: 'reference', load: 'separate', components: ['carrier', 'carrier.scac'], fields: { id: 'carrier_id', name: 'carrier_name' } },
     },
 });
+
+// ── Order with a has-many keyed by a field on the child, loaded on the child's own type ──
+
+export interface OrderPackage {
+    id: number;
+    weight: number;
+    type: { name: string } | null;
+}
+export interface OrderWithPackages {
+    id: number;
+    entityId: number;
+    packages: OrderPackage[];
+}
+
+/** Packages joined `from` their order field; loaded separately they run on `customrecord_pkg`, batched on that field. */
+export const childRootedPackagesOrderConfig = defineQueryConfig<OrderWithPackages>({
+    recordType: 'salesorder',
+    components: {
+        packages: {
+            path: 'packages', relationship: 'packages', load: 'separate',
+            join: { kind: 'from', fieldId: 'custrecord_pkg_order', source: 'customrecord_pkg' },
+            conditions: [{ fieldId: 'isinactive', operator: 'IS', values: [false] }],
+            separate: { queryType: 'customrecord_pkg', parentKeyField: 'id', targetKeyFieldId: 'custrecord_pkg_order', targetKeyFieldType: 'select' },
+            lineOrderFieldId: 'id',
+        },
+        'packages.type': { path: 'packages.type', parent: 'packages', relationship: 'packages', load: 'separate', join: { kind: 'auto', fieldId: 'custrecord_pkg_type' } },
+    },
+    fields: {
+        id:                 { queryFieldId: 'id',     type: 'integer', isPrimary: true, recordFieldId: 'id' },
+        entityId:           { queryFieldId: 'entity', type: 'key',     recordFieldId: 'entity' },
+        packages_id:        { queryFieldId: 'id',                       component: 'packages',      type: 'key',    nestPath: 'packages.id',        cardinality: 'many', readonly: true },
+        packages_weight:    { queryFieldId: 'custrecord_pkg_weight',    component: 'packages',      type: 'float',  nestPath: 'packages.weight',    cardinality: 'many', readonly: true },
+        packages_type_name: { queryFieldId: 'name',                     component: 'packages.type', type: 'string', nestPath: 'packages.type.name', cardinality: 'many', readonly: true },
+    },
+    relationships: {
+        packages: { kind: 'sublist', recordAccessId: 'packages', components: ['packages', 'packages.type'], load: 'separate', fields: { id: 'packages_id', weight: 'packages_weight', 'type.name': 'packages_type_name' } },
+    },
+});

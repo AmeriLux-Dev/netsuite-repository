@@ -464,6 +464,36 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
         if (!primary) {
             throw new Error(`A primary key field is required to load '${relationship}' separately on '${this.config.recordType}'.`);
         }
+        // A has-many joined `from` a field on the child (its @ParentId() field) runs on the child's own type when loaded
+        // separately: the rows are the items, so the relation's fields, conditions, sorts, and nested components are
+        // rerooted at the child, the sublist filter becomes a root condition, and each batch matches the child's parent
+        // field against the owners' keys.
+        if (component.separate && component.join.kind === 'from') {
+            const separate = component.separate;
+            const parentKeyField = this.config.fields[separate.parentKeyField] ?? primary.field;
+            const reroot = (path: string | undefined): string | undefined => (path === relationship ? undefined : path);
+            const nested = relationComponents.filter((candidate) => candidate.path !== relationship);
+            const columns = [
+                ...relationFields.map(([key, field]) => omitUndefined({ ...this.toColumn(key, field), component: reroot(field.component) })),
+                { alias: parentKeyAlias, fieldId: separate.targetKeyFieldId },
+            ];
+            const filterNodes: ConditionNode[] = (component.conditions ?? []).map((condition) => omitUndefined({ kind: 'field' as const, fieldId: condition.fieldId, operator: condition.operator, values: condition.values }));
+            const userCondition = combineConditions(conditions.map((condition) => ({ ...condition, node: rerootConditionNode(condition.node, relationship) })));
+            const conditionNodes = [...filterNodes, ...(userCondition ? [userCondition] : [])];
+            const defaultSort: DescribedSort[] = component.lineOrderFieldId ? [{ fieldId: component.lineOrderFieldId, ascending: true }] : [];
+            const description: QueryDescription = omitUndefined({
+                queryType: separate.queryType,
+                components: this.orderComponents(nested).map((candidate) => omitUndefined({ ...this.toDescribedComponent(candidate), parent: reroot(candidate.parent) })),
+                columns,
+                condition: conditionNodes.length === 0 ? undefined : conditionNodes.length === 1 ? conditionNodes[0] : { kind: 'and', nodes: conditionNodes },
+                sort: (sorts.length > 0 ? sorts : defaultSort).map((sort) => omitUndefined({ ...sort, component: reroot(sort.component) })),
+            });
+            return {
+                load: { relationship, kind, description, parentKeyPath: parentKeyField.nestPath ?? separate.parentKeyField, batchFieldId: separate.targetKeyFieldId, batchFieldType: separate.targetKeyFieldType ?? 'select', parentKeyAlias },
+                mapping: this.relationMappingOptions(relationship, relationFields, kind),
+            };
+        }
+
         // A sublist may run its own query on another root (a sales order's lines hang off `transaction`); it then matches
         // the owner by internal id and the owner's root conditions do not apply.
         const ownRoot = component.separate;

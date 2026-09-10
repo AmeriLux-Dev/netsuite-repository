@@ -2,7 +2,7 @@ import { query } from '../query';
 import type { QueryBuilder } from '../query';
 import type { QueryConfig } from '../types';
 import { fakeNQuery } from '../testing';
-import { ownRootLinesOrderConfig, separateOrderConfig, shipmentConfig } from './fixtures';
+import { childRootedPackagesOrderConfig, ownRootLinesOrderConfig, separateOrderConfig, shipmentConfig } from './fixtures';
 import { salesOrderModelConfig, separateLinesSalesOrderModelConfig } from './model-fixtures';
 import type { SalesOrderModel } from './model-fixtures';
 
@@ -236,5 +236,47 @@ describe('QueryBuilder – separately loaded references', () => {
     it('refuses a separate reference without separate load facts', () => {
         const broken = { ...shipmentConfig, components: { ...shipmentConfig.components, carrier: { ...shipmentConfig.components!.carrier, separate: undefined } } } as QueryConfig<unknown>;
         expect(() => query(broken).describe()).toThrow("Reference 'carrier' is loaded separately but declares no separate load in query config for 'customrecord_shipment'.");
+    });
+});
+
+describe('QueryBuilder – has-many loaded on the child type', () => {
+    it('runs the relation on the child type, rerooted at it, batched on the child field that points at the owner', () => {
+        const description = query(childRootedPackagesOrderConfig).where('entityId', '=', 7).where('packages.weight', '>', 1).describe();
+        expect(description.components).toEqual([]);
+        expect(description.columns.map((column) => column.alias)).toEqual(['id', 'entityId']);
+        expect(description.separateLoads).toEqual([{
+            relationship: 'packages',
+            kind: 'sublist',
+            parentKeyPath: 'id',
+            batchFieldId: 'custrecord_pkg_order',
+            batchFieldType: 'select',
+            parentKeyAlias: '__parentKey',
+            description: {
+                queryType: 'customrecord_pkg',
+                components: [{ path: 'packages.type', join: { kind: 'auto', fieldId: 'custrecord_pkg_type' }, conditions: [] }],
+                columns: [
+                    { alias: 'packages_id', fieldId: 'id' },
+                    { alias: 'packages_weight', fieldId: 'custrecord_pkg_weight' },
+                    { alias: 'packages_type_name', component: 'packages.type', fieldId: 'name' },
+                    { alias: '__parentKey', fieldId: 'custrecord_pkg_order' },
+                ],
+                // The sublist filter is a root condition of the child query, ahead of the query's own.
+                condition: { kind: 'and', nodes: [{ kind: 'field', fieldId: 'isinactive', operator: 'IS', values: [false] }, { kind: 'field', fieldId: 'custrecord_pkg_weight', operator: 'GREATER', values: [1] }] },
+                sort: [{ fieldId: 'id', ascending: true }],
+            },
+        }]);
+    });
+
+    it('stitches one item per child row under its owner, an empty array when there are none', () => {
+        fakeNQuery.queueRows('salesorder', [{ id: 1, entityid: 7 }, { id: 2, entityid: 7 }]);
+        fakeNQuery.queueRows('customrecord_pkg', [
+            { __parentkey: 1, packages_id: 50, packages_weight: 2.5, packages_type_name: 'Box' },
+            { __parentkey: 1, packages_id: 51, packages_weight: 4, packages_type_name: null },
+        ]);
+        expect(query(childRootedPackagesOrderConfig).executeTyped()).toEqual([
+            { id: 1, entityId: 7, packages: [{ id: 50, weight: 2.5, type: { name: 'Box' } }, { id: 51, weight: 4, type: { name: null } }] },
+            { id: 2, entityId: 7, packages: [] },
+        ]);
+        expect(fakeNQuery.calls[1].text).toBe('FROM customrecord_pkg\nJOIN auto custrecord_pkg_type AS custrecord_pkg_type\nSELECT id AS packages_id, custrecord_pkg_weight AS packages_weight, custrecord_pkg_type.name AS packages_type_name, custrecord_pkg_order AS __parentKey\nWHERE custrecord_pkg_order ANY_OF [1, 2] AND isinactive IS [false]\nORDER BY id ASC');
     });
 });

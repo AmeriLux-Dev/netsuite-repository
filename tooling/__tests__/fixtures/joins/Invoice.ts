@@ -43,4 +43,14 @@ export class Invoice {
     @Sublist('expense', { queryType: 'transaction', relationship: 'transactionlines' }) expenses!: InvoiceLine[];
     /** A subrecord loaded separately too. */
     @Subrecord('billingaddress', { load: 'separate' }) billingAddress?: Address;
+    /** A has-many loaded separately runs on the child's record type, batched on the field that points back at the invoice. */
+    @Sublist({ load: 'separate' }) shipments!: Shipment[];
+}
+
+/** A custom record pointing at the invoice through a list/record field: a has-many keyed by that field. */
+@RecordType('customrecord_shipment')
+export class Shipment {
+    id!: number;
+    @ParentId() @Field('custrecord_shipment_invoice') invoiceId!: number;
+    @Field('custrecord_shipment_weight') weight!: number | null;
 }

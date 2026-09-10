@@ -114,7 +114,7 @@ The class decorator is only ever `@RecordType`. A sublist line class is a record
 | Select field of a reference | `<reference>Id` on the same class | `@Reference('entityId')` |
 | Reference join | `joinTo` through the select field and the target's record type | `@Reference({ join: 'auto' })` |
 | Reference matched on another field | | `@Reference('code', { targetKey: 'code' })`; always loaded separately |
-| Reference N/query has no join for | | `@Reference('parentId', { load: 'separate' })`: a second query matches the target's internal id against the select field values |
+| Reference N/query has no join for | | `@Reference('parentId', { load: 'separate' })`: a second query matches the target's internal id against the select field values. A custom List/Record field whose list is Item is one such field: `autoJoin` on it fails with "Record Join ... was not found", while custom fields pointing at one custom record or at a standard record such as `shipitem` do join |
 | Subrecord field id | lowercased property name | `@Subrecord('x')` |
 | Subrecord list field to clear | none | `@Subrecord({ clearListField: 'shipaddresslist' })` |
 | Sublist id | lowercased property name | `@Sublist('x')` |
@@ -122,6 +122,7 @@ The class decorator is only ever `@RecordType`. A sublist line class is a record
 | Sublist rows | every row of the line type | `@Sublist('x', { filter: [...] })` |
 | Loading | `join`: read in the parent's query; NetSuite decides inner or outer | `load: 'separate'` on `@Sublist`, `@Subrecord`, `@Reference` |
 | Root of the line query | the owner's query type | `@Sublist('item', { queryType: 'transaction', relationship: 'transactionlines' })` when the lines hang off another record than the owner (a `salesorder` root has no join to its lines; `transaction` has); the lines then run as their own query, matched to the owner by internal id |
+| Has-many keyed by a field on the child | | `@Sublist({ load: 'separate' })` on the owner with `@ParentId()` on the child's field that points back at it (a fulfillment's SPS contents, keyed by their fulfillment field): the children run as their own query on the child's record type, batched on that field with ANY_OF; nothing is joined to reach them |
 | Record set name | pluralized camel-case class name | `@RecordType('x', { setName })` |
 
 Nothing in the build step knows a NetSuite table, relationship, sublist, or field. What the table does not list is either derived from the class or resolved by N/query when the query runs. A missing declaration the build step needs is a diagnostic naming the decorator that supplies it.
@@ -149,6 +150,26 @@ N/query has no join-type option: NetSuite decides whether a relationship joins i
 
 `separate` runs one query for the parents and one per batch of parent ids for the relation, then stitches the lines in (`[]` when there are none, `null` for a subrecord or reference). Rows never fan out, `limit()` and `page()` count records, and a `where` on a field of the relation narrows the relation's rows rather than the parents. It costs one extra `run` per batch. A reference matched on a field other than the target's internal id (`targetKey`) always loads this way, because N/query joins only through internal ids.
 
+Where the second query runs depends on how the relation is joined. A sublist reached through a relationship field (`relationship`) or another root (`queryType`) queries that root and joins the lines; a has-many joined `from` the child's `@ParentId()` field queries the child's own record type, with the sublist filter as a root condition and the child's parent field matched against the owners' ids, and the child's own references (`spsPackage`, `spsPackage.packType`) join inside that query:
+
+```ts
+@RecordType('customrecord_sps_content')
+export class SpsContent {
+    id!: number;
+    @ParentId() @Field('custrecord_pack_content_fulfillment') fulfillmentId!: number;
+    @Field('custrecord_sps_content_package') packageId!: number | null;
+    @Reference('packageId', { join: 'auto' }) spsPackage?: Pick<SpsPackage, 'id' | 'sscc' | 'packType'>;
+}
+
+@RecordType('itemfulfillment')
+export class ItemFulfillment {
+    id!: number;
+    @Sublist({ load: 'separate' }) contents!: SpsContent[];   // FROM customrecord_sps_content WHERE custrecord_pack_content_fulfillment ANY_OF [...]
+}
+```
+
+A separate relation inside a separately loaded relation is not planned: compose it in the repository, as the order-processing test project does when it reads the fulfillments of a set of orders and stitches them onto the orders itself.
+
 ### Inheritance
 
 A base class without `@RecordType` is a mapping base whose members are inherited. Each `@RecordType` class queries its own record type, so `salesorder` and `invoice` classes extending one `Transaction` base each read their own fields with no discriminator to declare.
@@ -164,7 +185,7 @@ A base class without `@RecordType` is a mapping base whose members are inherited
 | `@ReadOnly()` | property | Excludes the property from writes. |
 | `@Reference(selectFieldProperty?, { targetKey?, load?, join? })` | property | A reference: the select field behind it, and the referenced property to match on when it is not the internal id. |
 | `@Subrecord(fieldId?, { clearListField?, load? })` | property | A subrecord: its field id and the list field cleared before an edit. |
-| `@Sublist(sublistId?, { filter?, relationship?, load? })` | property | A sublist: its id and the conditions that pick its lines. |
+| `@Sublist(sublistId?, { filter?, relationship?, queryType?, load? })` | property | A sublist, or any has-many: its id, the conditions that pick its lines, and how the lines are reached (a relationship field, another root, or the line class's `@ParentId()` field). |
 | `@SetFirst()`, `@ExcludeFromDefaultSelect()`, `@Transform(fn)`, `@NotMapped()` | property | Flags. Transforms must be exported functions so the build step can import them by name. |
 
 ## Build step and generated files

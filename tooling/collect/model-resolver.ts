@@ -250,13 +250,14 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
                 }
                 const sublistId = propertyOverrides?.sublistId ?? property.name.toLowerCase();
                 let join: ComponentJoin;
+                let parentKeyField: ResolvedField | undefined;
                 if (propertyOverrides?.relationshipFieldId !== undefined) {
                     join = { kind: 'auto', fieldId: propertyOverrides.relationshipFieldId };
                 } else if (!targetIsRecordType) {
                     report(entry, `Sublist '${qualifiedName}' ('${sublistId}') is typed as '${target.className}', which has no @RecordType; a line class names its record type, or the property names the relationship with @Sublist('${sublistId}', { relationship }).`);
                     continue;
                 } else {
-                    const parentKeyField = target.fields.find((field) => field.name === target.parentKeyProperty);
+                    parentKeyField = target.fields.find((field) => field.name === target.parentKeyProperty);
                     if (!parentKeyField) {
                         report(entry, `Sublist '${qualifiedName}' ('${sublistId}') has no way back to its parent: mark the property of '${target.className}' holding the parent's internal id with @ParentId(), or name the relationship with @Sublist('${sublistId}', { relationship }).`);
                         continue;
@@ -272,7 +273,14 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
                 }
                 const sublistLoad: RelationshipLoad = separateQueryType === undefined ? load : 'separate';
                 const ownerKeyQueryFieldId = resolved.fields.find((field) => field.name === resolved.keyProperty)?.queryFieldId ?? resolved.keyProperty.toLowerCase();
-                const separate = separateQueryType === undefined ? undefined : { queryType: separateQueryType, parentKeyField: resolved.keyProperty, targetKeyFieldId: ownerKeyQueryFieldId, targetKeyFieldType: 'key' as const };
+                // A has-many joined from the line class's @ParentId() field and loaded separately runs on the line's own
+                // record type, matching that field against the owners' internal ids (a fulfillment's SPS contents, keyed
+                // by their fulfillment field). The line rows are the items, so nothing is joined to reach them.
+                const separate: SeparateLoad | undefined = separateQueryType !== undefined
+                    ? { queryType: separateQueryType, parentKeyField: resolved.keyProperty, targetKeyFieldId: ownerKeyQueryFieldId, targetKeyFieldType: 'key' as const }
+                    : load === 'separate' && parentKeyField !== undefined
+                        ? { queryType: target.queryType as string, parentKeyField: resolved.keyProperty, targetKeyFieldId: parentKeyField.queryFieldId, targetKeyFieldType: parentKeyField.type }
+                        : undefined;
                 relations.push({
                     ...toRelation('sublist', join, sublistLoad),
                     ...(separate ? { separate } : {}),
