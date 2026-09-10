@@ -246,19 +246,28 @@ const pending = db.salesOrders.query()
     .page(1, 50)
     .executeTyped();
 
-// Change tracking
+// One-call writes: load, patch, plan, save; throw on failure
+const approved = db.salesOrders.update(9876, { memo: 'Auto-approved', shippingAddress: { city: 'Dallas' }, lines: { add: [{ itemId: 1, quantity: 2 }] } });
+const customer = db.customers.create({ companyName: 'Acme' }); // the same object, with its new id written back
+db.salesOrders.delete(9876);
+
+// Change tracking: a unit of work across records
 order.memo = 'Auto-approved';
 order.shippingAddress.city = 'Dallas';
 order.lines.push({ itemId: 1, quantity: 2 } as TransactionLine);
 const result = db.saveChanges();
 
-// Explicit patches still work
+// The record updater underneath: results instead of exceptions
 db.salesOrders.submitPatch(9876, { memo: 'x', lines: { add: [{ itemId: 1, quantity: 2 }] } });
 db.salesOrders.createRecord({ customerId: 12, memo: 'new' });
-db.salesOrders.delete(9876);
+db.salesOrders.deleteRecord(9876);
 ```
 
-Entities returned by `find()`, `executeTyped()`, `all()`, and `first()` are tracked. `saveChanges()` diffs each one against its snapshot and writes the difference through the record updater: body-only changes use `submitFields`, and anything touching a subrecord or sublist loads, mutates, and saves. Lines are matched by their line key. Added entities get their new id written back. `planChanges()` shows what would happen without calling NetSuite. Changes to a referenced record's fields are reported as ignored, never written.
+`getById()`, `list()`, `create()`, `update()`, and `delete()` are the standard operations of every record set. `update()` loads the record, applies the patch to the tracked entity, plans the save, and writes only that entity. `create()` tracks the values object, saves it, and returns it with its id. All three throw: `RecordNotFoundError` when the id does not exist, `SaveChangesError` when NetSuite rejects the save (its `result` lists every entity's outcome). Both take options: `beforeSave` receives the plan before anything is written (log it, or throw to refuse an expensive one), and `updater` passes record updater options such as `requireFastPath` for that write.
+
+A patch is the entity's own shape made partial (`<Model>Patch` in the generated file): scalars replace, `null` clears, `undefined` is skipped, a subrecord merges, and a sublist takes `{ update, add, remove }` where each line patch carries the line's identity (the model's line field, or its match field). A reference cannot be patched; set its select field instead.
+
+Entities returned by `find()`, `getById()`, `list()`, `first()`, and `executeTyped()` are tracked. `saveChanges()` diffs each one against its snapshot and writes the difference through the record updater: body-only changes use `submitFields`, and anything touching a subrecord or sublist loads, mutates, and saves. Lines are matched by their line key. Added entities get their new id written back. `planChanges()` shows what would happen without calling NetSuite, and both take `{ entities }` to work on a subset. Changes to a referenced record's fields are reported as ignored, never written.
 
 Use `asNoTracking()` for reporting reads, and `{ tracking: false }` on `createAppContext()` for contexts that never write. Contexts hold tracked entities strongly, so create one per script execution.
 
@@ -283,13 +292,17 @@ export function listPendingSalesOrders(db: AppContext, customerId: number): Sale
     return db.salesOrders.list(forCustomer(customerId), pendingFulfillment(), (query) => query.orderByAsc(so.tranDate));
 }
 
+export function approveSalesOrder(db: AppContext, salesOrderId: number, memo: string): SalesOrder {
+    return db.salesOrders.update(salesOrderId, { memo }, { beforeSave: (plan) => log.debug('approve plan', plan.entries) });
+}
+
 // a script
 const db = createAppContext();
 const pending = listPendingSalesOrders(db, 12);
-db.saveChanges();
+approveSalesOrder(db, pending[0].id, 'Auto-approved');
 ```
 
-Nothing is registered, a function can read several record sets, and a test can pass any object with the sets it needs. This is the style to reach for first. Keep the specifications in a module of their own, one per record type, and the query functions in another; the predicates then read as a vocabulary and the functions as sentences built from it.
+Nothing is registered, a function can read several record sets, and a test can pass any object with the sets it needs. Writes wrap the set's `create()`, `update()`, and `delete()` the same way: the module adds the validation and the domain name, the set does the loading, planning, and saving. This is the style to reach for first. Keep the specifications in a module of their own, one per record type, and the query functions in another; the predicates then read as a vocabulary and the functions as sentences built from it.
 
 If you prefer the queries on the set itself, set `"repositories": "classes"` in the build config. The build step then emits a base repository per record type; extend it and register the subclass when the context is created:
 
@@ -345,7 +358,9 @@ The record updater chooses the cheapest NetSuite path for a change:
 - subrecords or sublists: `record.load`, apply, `record.save`;
 - an address whose list field is set: clear the list field, save, reload, edit the subrecord, save.
 
-`plan()` on any updater describes the calls it would make, and options such as `requireFastPath`, `maxRecordCalls`, `allowLineScans`, and `allowSubrecordReloads` reject expensive plans before they run. `@RecordType('x', { updater })` sets the defaults for a record type. `createRecord()` and `deleteRecord()` cover the remaining operations. The updater trusts the model: a field id NetSuite does not accept surfaces as an `N/record` error at save time.
+`plan()` on any updater describes the calls it would make, and options such as `requireFastPath`, `maxRecordCalls`, `allowLineScans`, and `allowSubrecordReloads` reject expensive plans before they run. `@RecordType('x', { updater })` sets the defaults for a record type; the `updater` option of `create()`, `update()`, and `delete()` and the `updaterOptions` of `saveChanges()` layer over them for one write. The updater trusts the model: a field id NetSuite does not accept surfaces as an `N/record` error at save time.
+
+The record set exposes the updater in three layers. `create()`, `update()`, and `delete()` go through change tracking and throw. `add()`, `remove()`, and mutation wait for `saveChanges()`, which returns a result per entity. `updater(id)`, `submitPatch()`, `createRecord()`, and `deleteRecord()` call the updater directly with a graph patch and return results without throwing; reach for them when a failure is something to log rather than an error.
 
 ## Testing
 

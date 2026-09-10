@@ -29,12 +29,10 @@ describe('RecordSet – config sources', () => {
         const vendors = new RecordSet<VendorModel>(vendorModelConfig);
 
         const created = vendors.createRecord({ companyName: 'Acme' }, { enableSourcing: true });
-        const staged = vendors.create();
-        const deleted = vendors.delete(77);
+        const deleted = vendors.deleteRecord(77);
 
         expect(created).toEqual(expect.objectContaining({ success: true, id: 77 }));
         expect(mockRecord.save).toHaveBeenCalledWith(expect.objectContaining({ enableSourcing: true }));
-        expect(staged.mode).toBe('create');
         expect(deleted).toEqual({ success: true, id: 77 });
         expect(mockDelete).toHaveBeenCalledWith({ type: 'vendor', id: 77 });
     });

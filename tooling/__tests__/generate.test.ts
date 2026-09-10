@@ -145,7 +145,7 @@ describe('planGeneration() – model fixtures', () => {
 
     it('emits one interface per class, extending the base and importing referenced types', () => {
         expect(salesOrderConfig).toContain('//   Generated type, config, field paths, base repository for the SalesOrder model.');
-        expect(salesOrderConfig).toContain("import { RecordSet } from '@amerilux/netsuite-repository';\nimport type { QueryConfig, QueryConfigSource, RecordGraphPatch, RecordSetOptions } from '@amerilux/netsuite-repository';\nimport type { Customer } from './Customer.gen';\nimport type { Transaction } from './Transaction.gen';\nimport type { TransactionLine } from './TransactionLine.gen';");
+        expect(salesOrderConfig).toContain("import { RecordSet } from '@amerilux/netsuite-repository';\nimport type { EntityCreate, EntityPatch, QueryConfig, QueryConfigSource, RecordSetOptions } from '@amerilux/netsuite-repository';\nimport type { Customer } from './Customer.gen';\nimport type { Transaction } from './Transaction.gen';\nimport type { TransactionLine } from './TransactionLine.gen';");
         expect(salesOrderConfig).toContain([
             'export interface SalesOrder extends Transaction {',
             '    poNumber: string | null;',
@@ -157,11 +157,13 @@ describe('planGeneration() – model fixtures', () => {
             '    lines: TransactionLine[];',
             '}',
             '',
-            'export type SalesOrderPatch = RecordGraphPatch<SalesOrder>;',
-            'export type SalesOrderCreate = Partial<SalesOrder>;',
+            '/** What `update()` takes for a SalesOrder: a deep partial; subrecords merge, sublists take { update, add, remove }. */',
+            'export type SalesOrderPatch = EntityPatch<SalesOrder>;',
+            '/** What `create()` takes for a SalesOrder: a deep partial with sublists as arrays of partial lines. */',
+            'export type SalesOrderCreate = EntityCreate<SalesOrder>;',
         ].join('\n'));
         expect(fileByName.get('Transaction.gen.ts')).toContain("import type { TransactionAddress } from './TransactionAddress.gen';\n\nexport interface Transaction {\n    id: number;\n    tranId: string;\n    tranDate: Date;\n    memo?: string | null;\n    customerId: number;\n    statusText: string;\n    shippingAddress: TransactionAddress;\n    billingAddress?: TransactionAddress;\n}\n");
-        expect(fileByName.get('Transaction.gen.ts')).not.toContain('RecordGraphPatch');
+        expect(fileByName.get('Transaction.gen.ts')).not.toContain('EntityPatch');
         expect(fileByName.get('TransactionAddress.gen.ts')).toContain('export interface TransactionAddress {\n    addr1: string | null;\n    city: string | null;\n    state: string | null;\n}');
         expect(fileByName.get('TransactionLine.gen.ts')).toContain("export interface TransactionLine {\n    id: number;\n    transactionId: number;\n    itemId: number;\n    quantity: number;\n    amount: number;\n    notes: string | null;\n    item?: Pick<InventoryItem, 'itemId' | 'displayName'>;\n}");
         expect(fileByName.get('Customer.gen.ts')).toContain('export interface Customer {\n    id: number;\n    companyName: string;\n    email: string | null;\n    isInactive: boolean;\n    categoryIds: number[];\n}');

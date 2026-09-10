@@ -86,9 +86,9 @@ describe('RecordSet.find()', () => {
     });
 });
 
-describe('RecordSet.update()', () => {
+describe('RecordSet.updater()', () => {
     it('returns a RecordUpdater for the given ID', () => {
-        const updater = new RecordSet(customerConfig).update(1);
+        const updater = new RecordSet(customerConfig).updater(1);
         expect(updater).toBeInstanceOf(RecordUpdater);
     });
 });

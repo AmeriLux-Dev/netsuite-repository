@@ -579,6 +579,46 @@ export interface CollectionPatch {
 
 export type RecordGraphPatch<TUpdate extends object = Record<string, unknown>> = Partial<TUpdate> & Record<string, unknown>;
 
+// ── entity patches ───────────────────────────────────────────────────────────
+// What RecordSet.update() and RecordSet.create() take: the entity's own shape, made partial all the way down.
+// Scalars and dates replace, subrecords merge, sublists are patched by line, null clears, and undefined is skipped.
+
+type EntityPatchValue<TValue> =
+    TValue extends ReadonlyArray<infer TLine>
+        ? TLine extends object ? SublistPatch<TLine> : TValue
+        : TValue extends Date
+            ? TValue
+            : TValue extends object
+                ? EntityPatch<TValue>
+                : TValue;
+
+/** An update to one entity: a deep partial of it. A sublist takes a SublistPatch; a reference cannot be patched. */
+export type EntityPatch<TEntity> = {
+    [K in keyof TEntity]?: EntityPatchValue<NonNullable<TEntity[K]>> | Extract<TEntity[K], null>;
+};
+
+/** Changes to a sublist. Each line patch carries the line's identity: the relationship's line field, or else its match field. */
+export interface SublistPatch<TLine> {
+    update?: Array<EntityPatch<TLine>>;
+    add?: Array<EntityCreate<TLine>>;
+    /** Identities of the lines to remove. */
+    remove?: Array<string | number>;
+}
+
+type EntityCreateValue<TValue> =
+    TValue extends ReadonlyArray<infer TLine>
+        ? TLine extends object ? Array<EntityCreate<TLine>> : TValue
+        : TValue extends Date
+            ? TValue
+            : TValue extends object
+                ? EntityCreate<TValue>
+                : TValue;
+
+/** The values of a new entity: a deep partial of it, with sublists as arrays of partial lines. */
+export type EntityCreate<TEntity> = {
+    [K in keyof TEntity]?: EntityCreateValue<NonNullable<TEntity[K]>> | Extract<TEntity[K], null>;
+};
+
 export interface SubrecordReloadConfig {
     subrecordFieldId: string;
     listFieldToClear: string;

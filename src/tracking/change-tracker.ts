@@ -74,7 +74,7 @@ export class ChangeTracker {
     private readonly entries = new Map<object, TrackedEntry>();
     private readonly identity = new Map<string, Map<string, object>>();
 
-    constructor(private readonly resolveConfig: (setName: string) => QueryConfig<unknown>, readonly enabled = true) {}
+    constructor(readonly resolveConfig: (setName: string) => QueryConfig<unknown>, readonly enabled = true) {}
 
     /** Registers query results; a result whose key is already tracked is replaced by the tracked instance (identity resolution). */
     trackQueryResults<T extends object>(setName: string, results: T[]): T[] {

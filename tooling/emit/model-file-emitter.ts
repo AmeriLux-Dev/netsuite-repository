@@ -82,7 +82,7 @@ export function emitModelFile(options: ModelFileEmitOptions): string {
     // Imports: the runtime first, then sibling generated types, then functions the config references.
     const libraryTypeImports: string[] = [];
     if (record) {
-        libraryTypeImports.push('QueryConfig', 'RecordGraphPatch');
+        libraryTypeImports.push('EntityCreate', 'EntityPatch', 'QueryConfig');
         if (record.repository) {
             lines.push(`import { RecordSet } from '${libraryModule}';`);
             libraryTypeImports.push('QueryConfigSource', 'RecordSetOptions');
@@ -121,7 +121,10 @@ export function emitModelFile(options: ModelFileEmitOptions): string {
     lines.push('}');
 
     if (record && configLiteral !== undefined) {
-        lines.push('', `export type ${className}Patch = RecordGraphPatch<${className}>;`, `export type ${className}Create = Partial<${className}>;`);
+        lines.push('', `/** What \`update()\` takes for a ${className}: a deep partial; subrecords merge, sublists take { update, add, remove }. */`);
+        lines.push(`export type ${className}Patch = EntityPatch<${className}>;`);
+        lines.push(`/** What \`create()\` takes for a ${className}: a deep partial with sublists as arrays of partial lines. */`);
+        lines.push(`export type ${className}Create = EntityCreate<${className}>;`);
         lines.push('', `export const ${className}Config: QueryConfig<${className}> = ${configLiteral};`);
         lines.push('', `/** Field paths of ${className}, for where(), orderBy(), and select(): \`${className}Fields.<property>\` at any depth. */`);
         lines.push(`export const ${className}Fields = {`, ...renderFieldTree(record.fields, '    '), '} as const;');
