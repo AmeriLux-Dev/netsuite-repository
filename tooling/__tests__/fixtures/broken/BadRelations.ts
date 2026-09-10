@@ -1,9 +1,10 @@
-import { Field, RecordType, Reference, Sublist, Subrecord } from '@amerilux/netsuite-repository';
+import { Field, ParentId, RecordType, Reference, Sublist, Subrecord } from '@amerilux/netsuite-repository';
 
 export class Note {
     text!: string;
 }
 
+/** A line class that never says which field points at its parent. */
 @RecordType('customrecord_child')
 export class ChildLine {
     id!: number;
@@ -12,16 +13,19 @@ export class ChildLine {
 @RecordType('customrecord_parent')
 export class BadRelations {
     id!: number;
-    /** A sublist of a plain class: no line table. */
+    /** A sublist of a plain class: no line record type. */
     notes!: Note[];
-    /** The line table comes from the class, but nothing says which column holds the parent. */
+    /** The line class has a record type but no @ParentId(). */
     children!: ChildLine[];
     /** A reference without a select field. */
     owner?: BadRelationsOwner;
-    /** A subrecord the conventions do not know. */
-    detail!: Note;
+    /** A reference to a plain class. */
+    @Reference('detailId') detail?: Note;
+    @Field('detail') detailId!: number;
     @Sublist('item') line!: ChildLine;
     @Subrecord() tags!: Note[];
+    /** @ParentId() on a property that does not map to a field, so the class has no way back to a parent either. */
+    @ParentId() ghostParent!: Map<string, string>;
 }
 
 @RecordType('employee')
@@ -29,6 +33,8 @@ export class BadRelationsOwner {
     id!: number;
     parents!: BadRelations[];
     parent?: BadRelations;
+    /** A query type of its own cannot be joined into the owner's query. */
+    @Sublist('lines', { load: 'join', queryType: 'transaction', relationship: 'transactionlines' }) joinedElsewhere!: BadRelations[];
 }
 
 @RecordType('customrecord_code_owner')
@@ -36,4 +42,5 @@ export class BadTargetKey {
     id!: number;
     @Field('custrecord_code') code!: string;
     @Reference('code', { targetKey: 'ghost' }) owner?: BadRelationsOwner;
+    @Reference('code', { targetKey: 'id', load: 'join' }) joined?: BadRelationsOwner;
 }

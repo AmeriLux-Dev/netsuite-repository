@@ -1,8 +1,8 @@
 {
   "name": "@amerilux/netsuite-repository",
-  "version": "0.4.0",
+  "version": "1.0.0",
   "private": false,
-  "description": "Entity Framework style data access for NetSuite SuiteScript: decorated models, a build step that generates configs and types, typed SuiteQL queries, change tracking, and record updates.",
+  "description": "Entity Framework style data access for NetSuite SuiteScript: decorated models, a build step that generates configs and types, typed queries through the N/query object model, change tracking, and record updates.",
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,8 +12,8 @@
       "default": "./dist/index.js"
     },
     "./query": {
-      "types": "./dist/query.d.ts",
-      "default": "./dist/query.js"
+      "types": "./dist/query/index.d.ts",
+      "default": "./dist/query/index.js"
     },
     "./record-updater": {
       "types": "./dist/record-updater.d.ts",
@@ -35,6 +35,10 @@
       "types": "./dist/coercion.d.ts",
       "default": "./dist/coercion.js"
     },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "default": "./dist/testing/index.js"
+    },
     "./cli": {
       "types": "./dist-tooling/tooling/index.d.ts",
       "default": "./dist-tooling/tooling/index.js"
@@ -42,6 +46,19 @@
     "./plugin": {
       "types": "./dist-tooling/tooling/plugin.d.ts",
       "default": "./dist-tooling/tooling/plugin.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "query": ["dist/query/index.d.ts"],
+      "record-updater": ["dist/record-updater.d.ts"],
+      "context": ["dist/context.d.ts"],
+      "model": ["dist/model/index.d.ts"],
+      "tracking": ["dist/tracking/index.d.ts"],
+      "coercion": ["dist/coercion.d.ts"],
+      "testing": ["dist/testing/index.d.ts"],
+      "cli": ["dist-tooling/tooling/index.d.ts"],
+      "plugin": ["dist-tooling/tooling/plugin.d.ts"]
     }
   },
   "files": [

@@ -10,7 +10,6 @@ function snapshotOrder() {
         id: 1,
         tranId: 'SO1',
         memo: 'old',
-        customerName: 'Acme',
         shippingAddress: { addr1: '1 Main', city: 'Dallas' },
         lines: [
             { line: 0, itemId: 10, quantity: 2 },
@@ -57,10 +56,10 @@ describe('diffTrackedEntity() – scalars and owned subrecords', () => {
     });
 
     it('patches writable scalars and reports read-only changes', () => {
-        const current = { ...snapshotOrder(), memo: 'new', tranId: 'SO2', customerName: 'Other', customer: { companyName: 'Other' } };
+        const current = { ...snapshotOrder(), memo: 'new', tranId: 'SO2', customer: { companyName: 'Other' } };
         expect(diffTrackedEntity(salesOrderConfig, snapshotOrder(), current)).toEqual({
             patch: { memo: 'new' },
-            ignoredProperties: ['tranId', 'customerName', 'customer_companyName'],
+            ignoredProperties: ['tranId', 'customer_companyName'],
         });
     });
 
@@ -141,7 +140,7 @@ describe('diffTrackedEntity() – collections', () => {
 
     it('reports read-only line changes and removes every line when the collection is cleared', () => {
         const readOnlyChange = { ...snapshotOrder(), lines: snapshotOrder().lines.map((line) => ({ ...line, amount: 5 })) };
-        const config: QueryConfig<unknown> = { ...salesOrderConfig, fields: { ...salesOrderConfig.fields, lines_amount: { queryFieldId: 'amount', tableAlias: 'tl', readonly: true, nestPath: 'lines.amount', cardinality: 'many' } }, relationships: { ...salesOrderConfig.relationships, lines: { ...(salesOrderConfig.relationships!.lines as object), fields: { ...(salesOrderConfig.relationships!.lines as { fields: Record<string, string> }).fields, amount: 'lines_amount' } } as never } };
+        const config: QueryConfig<unknown> = { ...salesOrderConfig, fields: { ...salesOrderConfig.fields, lines_amount: { queryFieldId: 'amount', readonly: true, nestPath: 'lines.amount', cardinality: 'many' } }, relationships: { ...salesOrderConfig.relationships, lines: { ...(salesOrderConfig.relationships!.lines as object), fields: { ...(salesOrderConfig.relationships!.lines as { fields: Record<string, string> }).fields, amount: 'lines_amount' } } as never } };
         expect(diffTrackedEntity(config, snapshotOrder(), readOnlyChange)).toEqual({ patch: undefined, ignoredProperties: ['lines_amount', 'lines_amount', 'lines_amount'] });
 
         const cleared = { ...snapshotOrder(), lines: undefined };

@@ -2,19 +2,18 @@ import { RecordSet, NetSuiteContext, createNetSuiteContext } from '../context';
 import { RecordUpdater } from '../record-updater';
 import { QueryBuilder } from '../query';
 import { customerConfig, salesOrderConfig } from './fixtures';
-import * as NsQuery from 'N/query';
+import { fakeNQuery } from '../testing';
 import * as NsRecord from 'N/record';
-import { createMockRecord } from '../__mocks__/netsuite/record';
 
-const mockRunSuiteQL = NsQuery.runSuiteQL as unknown as jest.Mock;
 const mockSubmitFields = NsRecord.submitFields as unknown as jest.Mock;
 
-function mockRows(rows: Record<string, unknown>[]) {
-    mockRunSuiteQL.mockReturnValue({ asMappedResults: () => rows });
+function queueCustomers(rows: Record<string, unknown>[]) {
+    fakeNQuery.queueRows('customer', rows);
 }
 
 beforeEach(() => {
     jest.clearAllMocks();
+    fakeNQuery.reset();
 });
 
 // ── RecordSet ─────────────────────────────────────────────────────────────────
@@ -30,6 +29,7 @@ describe('RecordSet.metadata', () => {
     it('returns the normalized query config', () => {
         const set = new RecordSet(customerConfig);
         expect(set.metadata.recordType).toBe('customer');
+        expect(set.metadata.queryType).toBe('customer');
         expect(set.metadata.fields).toBeDefined();
     });
 });
@@ -42,7 +42,7 @@ describe('RecordSet.query()', () => {
 
 describe('RecordSet.all()', () => {
     it('returns all typed results', () => {
-        mockRows([{ id: 1, name: 'Acme', email: '', isactive: false, score: 0 }]);
+        queueCustomers([{ id: 1, name: 'Acme', email: '', isactive: false, score: 0 }]);
         const result = new RecordSet(customerConfig).all();
         expect(result[0].name).toBe('Acme');
     });
@@ -50,13 +50,12 @@ describe('RecordSet.all()', () => {
 
 describe('RecordSet.first()', () => {
     it('returns first typed result', () => {
-        mockRows([{ id: 2, name: 'Beta', email: '', isactive: false, score: 0 }]);
+        queueCustomers([{ id: 2, name: 'Beta', email: '', isactive: false, score: 0 }]);
         const result = new RecordSet(customerConfig).first();
         expect(result?.name).toBe('Beta');
     });
 
     it('returns null when no results', () => {
-        mockRows([]);
         expect(new RecordSet(customerConfig).first()).toBeNull();
     });
 });
@@ -65,20 +64,19 @@ describe('RecordSet.where()', () => {
     it('returns a QueryBuilder with condition applied', () => {
         const builder = new RecordSet(customerConfig).where('id', '=', 1);
         expect(builder).toBeInstanceOf(QueryBuilder);
-        const { sql } = builder.build();
-        expect(sql).toContain('WHERE');
+        expect(builder.describeText()).toContain('WHERE id ANY_OF [1]');
     });
 });
 
 describe('RecordSet.find()', () => {
     it('finds a record by primary key', () => {
-        mockRows([{ id: 5, name: 'Found', email: '', isactive: false, score: 0 }]);
+        queueCustomers([{ id: 5, name: 'Found', email: '', isactive: false, score: 0 }]);
         const result = new RecordSet(customerConfig).find(5);
         expect(result?.name).toBe('Found');
+        expect(fakeNQuery.calls[0].text).toContain('WHERE id ANY_OF [5]');
     });
 
     it('returns null when not found', () => {
-        mockRows([]);
         expect(new RecordSet(customerConfig).find(999)).toBeNull();
     });
 
@@ -88,9 +86,9 @@ describe('RecordSet.find()', () => {
     });
 });
 
-describe('RecordSet.update()', () => {
+describe('RecordSet.updater()', () => {
     it('returns a RecordUpdater for the given ID', () => {
-        const updater = new RecordSet(customerConfig).update(1);
+        const updater = new RecordSet(customerConfig).updater(1);
         expect(updater).toBeInstanceOf(RecordUpdater);
     });
 });
@@ -178,7 +176,7 @@ describe('createNetSuiteContext()', () => {
     });
 
     it('can query through the context directly', () => {
-        mockRows([{ id: 1, name: 'Test', email: '', isactive: false, score: 0 }]);
+        queueCustomers([{ id: 1, name: 'Test', email: '', isactive: false, score: 0 }]);
         const ctx = createNetSuiteContext(schema);
         const result = (ctx as any).customers.all();
         expect(result[0].name).toBe('Test');

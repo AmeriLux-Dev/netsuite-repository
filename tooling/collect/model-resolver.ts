@@ -1,7 +1,6 @@
-import type { Discriminator, FieldType, JoinType, QueryField, RecordUpdaterOptions, RestRecordMetadata } from '../../src/types';
-import type { LineKey, PropertyOverrides, RelationKind, TypeTableOptions } from '../../src/model';
+import type { ComponentCondition, ComponentJoin, FieldType, QueryField, RecordUpdaterOptions, RelationshipLoad, SeparateLoad } from '../../src/types';
+import type { PropertyOverrides, RelationKind } from '../../src/model';
 import type { CollectedClass, ModelFileDiagnostic } from './model-file-evaluator';
-import { defaultLineKeyField, resolveFieldIdForColumn, resolveRecordTypeConvention, resolveSublistConvention, resolveSubrecordConvention } from './netsuite-conventions';
 import { classKeyOf } from './property-type-reader';
 import type { ClassIdentity, DeclaredClass, DeclaredProperty } from './property-type-reader';
 
@@ -9,11 +8,11 @@ export type { RelationKind };
 
 export interface ResolvedField {
     name: string;
-    column: string;
-    /** Type table the column is read from; undefined for the owner's base table. */
-    table?: string;
-    /** Record field id; undefined means the field is read-only. */
-    fieldId?: string;
+    /** N/query field id. */
+    queryFieldId: string;
+    /** N/record field id the property writes through; `readOnly` says whether it ever does. */
+    recordFieldId: string;
+    readOnly: boolean;
     type: FieldType;
     text?: boolean;
     coerce?: boolean;
@@ -38,31 +37,24 @@ export interface ResolvedRelation {
     kind: RelationKind;
     optional: boolean;
     inherited: boolean;
-    joinType: JoinType;
+    load: RelationshipLoad;
     selectByDefault?: boolean;
     targetClassName: string;
     projection: string[] | 'all';
     fields: ResolvedField[];
     relations: ResolvedRelation[];
-    /** Reference: the owner's column holding the referenced internal id, and the target's table and key. */
-    selectFieldColumn?: string;
-    selectFieldTable?: string;
-    targetTable?: string;
-    targetKeyColumn?: string;
-    targetDiscriminator?: Discriminator;
-    targetTypeTables?: Record<string, TypeTableOptions>;
-    /** Subrecord: field id on the owner, the queryable table, its key column, and the list field cleared before edits. */
+    /** How N/query joins the relation to its parent component. */
+    join: ComponentJoin;
+    /** Reference matched on a field other than the target's internal id: loaded by its own query. */
+    separate?: SeparateLoad;
+    /** Subrecord: field id on the owner and the list field cleared before edits. */
     subrecordFieldId?: string;
-    subrecordTable?: string;
-    subrecordKey?: string;
     clearListField?: string;
-    /** Sublist: id on the owner, line table, parent column, extra predicate, and the line key column/field plus the property carrying it. */
+    /** Sublist: id on the owner, the conditions that pick its lines, and the line class's key property. */
     sublistId?: string;
-    sublistTable?: string;
-    parentColumn?: string;
-    where?: string;
-    lineKey?: LineKey;
+    filter?: ComponentCondition[];
     lineKeyProperty?: string;
+    lineOrderFieldId?: string;
 }
 
 export interface ResolvedClass extends ClassIdentity {
@@ -71,14 +63,14 @@ export interface ResolvedClass extends ClassIdentity {
     base?: ClassIdentity;
     /** Set for @RecordType classes; plain classes (subrecord shapes, mapping bases) have none. */
     recordType?: string;
-    table?: string;
+    /** N/query root type; the record type unless overridden. */
+    queryType?: string;
+    rootFilter?: ComponentCondition[];
     setName?: string;
-    discriminator?: Discriminator;
-    typeTables?: Record<string, TypeTableOptions>;
     keyProperty: string;
+    parentKeyProperty?: string;
     coerce?: boolean;
     updaterOptions?: RecordUpdaterOptions;
-    restRecordMetadata?: RestRecordMetadata;
     fields: ResolvedField[];
     relations: ResolvedRelation[];
     unmapped: ResolvedUnmappedProperty[];
@@ -99,36 +91,18 @@ interface ClassEntry {
     declared: DeclaredClass;
 }
 
-/** Table facts of a class: what its fields' columns are read from and what its subrecords and sublists hang off. */
-interface OwnerTable {
-    table: string;
-    keyColumn: string;
-}
-
-/** Sublists and subrecords are part of their record, so they join inner; a reference is another record that may be absent. */
-const defaultJoinTypes: Record<RelationKind, JoinType> = { sublist: 'inner', subrecord: 'inner', reference: 'leftOuter' };
-
-/** A relation nested under a left outer join keeps the outer join, otherwise the nested inner join would filter the parent out. */
-function resolveJoinType(kind: RelationKind, declared: JoinType | undefined, parentJoinType: JoinType | undefined): JoinType {
-    if (declared) {
-        return declared;
-    }
-    return parentJoinType === 'leftOuter' ? 'leftOuter' : defaultJoinTypes[kind];
-}
-
-function toShallowField(property: DeclaredProperty, overrides: PropertyOverrides | undefined, owner: OwnerTable | undefined, isKey: boolean, isSelectField: boolean): ResolvedField | undefined {
-    const column = overrides?.column ?? overrides?.fieldId ?? property.name.toLowerCase();
-    const inferredType = overrides?.type ?? (isKey || isSelectField ? 'integer' : property.scalarType);
+function toShallowField(property: DeclaredProperty, overrides: PropertyOverrides | undefined, isKey: boolean, isSelectField: boolean): ResolvedField | undefined {
+    // The internal id is a key and a reference's select field a select: both compare through ANY_OF in N/query.
+    const inferredType = overrides?.type ?? (isKey ? 'key' : isSelectField && property.scalarType ? 'select' : property.scalarType);
     if (!inferredType) {
         return undefined;
     }
-    const conventionalFieldId = owner ? resolveFieldIdForColumn(owner.table, column) : column;
-    const readOnly = overrides?.readOnly || isKey || overrides?.text;
+    const recordFieldId = overrides?.fieldId ?? property.name.toLowerCase();
     return {
         name: property.name,
-        column,
-        table: overrides?.table,
-        fieldId: readOnly ? undefined : overrides?.fieldId ?? conventionalFieldId,
+        queryFieldId: overrides?.queryFieldId ?? recordFieldId,
+        recordFieldId,
+        readOnly: Boolean(overrides?.readOnly || isKey || overrides?.text),
         type: inferredType,
         text: overrides?.text,
         coerce: overrides?.coerce,
@@ -141,7 +115,11 @@ function toShallowField(property: DeclaredProperty, overrides: PropertyOverrides
     };
 }
 
-/** Turns collected classes plus their declared shapes into resolved models, applying the NetSuite conventions. */
+/**
+ * Turns collected classes plus their declared shapes into resolved models. Every fact comes from the model itself:
+ * property names and types, the decorators, and the classes properties point at. Nothing is looked up in a table of
+ * NetSuite knowledge; what the model does not say, N/query resolves at run time.
+ */
 export function resolveModels(options: ResolveModelsOptions): ResolveModelsResult {
     const diagnostics: ModelFileDiagnostic[] = [];
     const entries = new Map<string, ClassEntry>();
@@ -162,15 +140,6 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
         return entry.collected.overrides.keyProperty ?? 'id';
     }
 
-    function keyColumnOf(resolved: Pick<ResolvedClass, 'keyProperty' | 'fields'>): string {
-        const keyField = resolved.fields.find((field) => field.name === resolved.keyProperty);
-        return keyField?.column ?? resolved.keyProperty.toLowerCase();
-    }
-
-    function ownerTableOf(resolved: Pick<ResolvedClass, 'table' | 'keyProperty' | 'fields'>): OwnerTable | undefined {
-        return resolved.table ? { table: resolved.table, keyColumn: keyColumnOf(resolved) } : undefined;
-    }
-
     /** Resolves scalars and the class-level facts; relations are attached afterwards so cycles cannot recurse. */
     function resolveShallow(entry: ClassEntry): ResolvedClass {
         const key = classKeyOf(entry.collected);
@@ -181,8 +150,6 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
 
         const overrides = entry.collected.overrides;
         const keyProperty = keyPropertyOf(entry);
-        const convention = overrides.recordType ? resolveRecordTypeConvention(overrides.recordType) : undefined;
-        const baseTable = overrides.table ?? convention?.table;
 
         const resolved: ResolvedClass = {
             className: entry.declared.className,
@@ -190,14 +157,13 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
             exportName: entry.collected.exportName,
             base: entry.declared.base && entries.has(classKeyOf(entry.declared.base)) ? entry.declared.base : undefined,
             recordType: overrides.recordType,
-            table: baseTable,
+            queryType: overrides.recordType === undefined ? undefined : overrides.queryType ?? overrides.recordType,
+            rootFilter: overrides.rootFilter,
             setName: overrides.setName,
-            discriminator: overrides.discriminator ?? convention?.discriminator,
-            typeTables: overrides.typeTables ?? convention?.typeTables,
             keyProperty,
+            parentKeyProperty: overrides.parentKeyProperty,
             coerce: overrides.coerce,
             updaterOptions: overrides.updaterOptions,
-            restRecordMetadata: overrides.restRecordMetadata,
             fields: [],
             relations: [],
             unmapped: [],
@@ -211,7 +177,6 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
             }
         }
 
-        const owner: OwnerTable | undefined = baseTable ? { table: baseTable, keyColumn: keyProperty.toLowerCase() } : undefined;
         for (const property of entry.declared.properties) {
             if (overrides.notMapped.has(property.name)) {
                 resolved.unmapped.push({ name: property.name, typeText: property.typeText, optional: property.optional, inherited: property.inherited });
@@ -220,20 +185,19 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
             if (property.target) {
                 continue;
             }
-            const propertyOverrides = overrides.properties.get(property.name);
-            const field = toShallowField(property, propertyOverrides, owner, property.name === keyProperty, selectFieldProperties.has(property.name));
+            const field = toShallowField(property, overrides.properties.get(property.name), property.name === keyProperty, selectFieldProperties.has(property.name) || property.name === overrides.parentKeyProperty);
             if (!field) {
                 report(entry, `Property '${entry.declared.className}.${property.name}' has type '${property.typeText}', which does not map to a NetSuite field type. Declare it with @Field({ type }), type it as a model class, or mark it @NotMapped().`);
                 continue;
-            }
-            if (field.table && !resolved.typeTables?.[field.table]) {
-                report(entry, `Property '${entry.declared.className}.${property.name}' reads from table '${field.table}', which is not a type table of '${overrides.recordType ?? entry.declared.className}'. Declare it with @RecordType('...', { tables: { ${field.table}: { key: 'id' } } }).`);
             }
             resolved.fields.push(field);
         }
 
         if (overrides.recordType !== undefined && !resolved.fields.some((field) => field.name === keyProperty)) {
             report(entry, `Record type '${entry.declared.className}' has no internal id property; declare '${keyProperty}' or mark one with @InternalId().`);
+        }
+        if (resolved.parentKeyProperty !== undefined && !resolved.fields.some((field) => field.name === resolved.parentKeyProperty)) {
+            report(entry, `Property '${entry.declared.className}.${resolved.parentKeyProperty}' is marked @ParentId() but is not a mapped field.`);
         }
 
         return resolved;
@@ -243,9 +207,8 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
         return projection === 'all' ? target.fields : target.fields.filter((field) => projection.includes(field.name));
     }
 
-    function resolveRelations(entry: ClassEntry, resolved: ResolvedClass, stack: string[], parentJoinType?: JoinType): ResolvedRelation[] {
+    function resolveRelations(entry: ClassEntry, resolved: ResolvedClass, stack: string[]): ResolvedRelation[] {
         const overrides = entry.collected.overrides;
-        const owner = ownerTableOf(resolved);
         const relations: ResolvedRelation[] = [];
 
         for (const property of entry.declared.properties) {
@@ -262,55 +225,70 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
             const propertyOverrides = overrides.properties.get(property.name);
             const declaredKind = propertyOverrides?.relationKind;
             const qualifiedName = `${entry.declared.className}.${property.name}`;
+            const projection = property.target.projection ?? 'all';
 
-            const toRelation = (kind: RelationKind): ResolvedRelation => ({
+            const toRelation = (kind: RelationKind, join: ComponentJoin, load: RelationshipLoad): ResolvedRelation => ({
                 name: property.name,
                 kind,
                 optional: property.optional,
                 inherited: property.inherited,
-                joinType: resolveJoinType(kind, propertyOverrides?.joinType, parentJoinType),
+                load,
                 selectByDefault: propertyOverrides?.selectByDefault,
                 targetClassName: target.className,
-                projection: property.target?.projection ?? 'all',
-                fields: projectFields(target, property.target?.projection ?? 'all'),
+                projection,
+                fields: projectFields(target, projection),
                 relations: [],
+                join,
             });
-            const nested = (relation: ResolvedRelation): ResolvedRelation[] => nestedRelations(targetEntry, target, relation.projection, stack, entry, property.name, relation.kind, relation.joinType);
+            const nested = (): ResolvedRelation[] => nestedRelations(targetEntry, target, projection, stack, entry, property.name);
+            const load: RelationshipLoad = propertyOverrides?.load ?? 'join';
 
             if (property.isArray) {
                 if (declaredKind !== undefined && declaredKind !== 'sublist') {
                     report(entry, `Property '${qualifiedName}' is an array; use @Sublist() on it, @Subrecord() and @Reference() apply to object properties.`);
                     continue;
                 }
-                const lineTableFromClass = targetIsRecordType ? target.table : undefined;
-                const convention = owner ? resolveSublistConvention(owner.table, { sublistId: propertyOverrides?.sublistId, lineTable: propertyOverrides?.sublistTable ?? lineTableFromClass }) : undefined;
-                const sublistId = propertyOverrides?.sublistId ?? convention?.sublistId ?? property.name.toLowerCase();
-                const sublistTable = propertyOverrides?.sublistTable ?? convention?.table ?? lineTableFromClass;
-                const parentColumn = propertyOverrides?.parentColumn ?? convention?.parentColumn;
-                const base = toRelation('sublist');
-                if (!owner) {
-                    relations.push({ ...base, sublistId });
+                const sublistId = propertyOverrides?.sublistId ?? property.name.toLowerCase();
+                let join: ComponentJoin;
+                let parentKeyField: ResolvedField | undefined;
+                if (propertyOverrides?.relationshipFieldId !== undefined) {
+                    join = { kind: 'auto', fieldId: propertyOverrides.relationshipFieldId };
+                } else if (!targetIsRecordType) {
+                    report(entry, `Sublist '${qualifiedName}' ('${sublistId}') is typed as '${target.className}', which has no @RecordType; a line class names its record type, or the property names the relationship with @Sublist('${sublistId}', { relationship }).`);
+                    continue;
+                } else {
+                    parentKeyField = target.fields.find((field) => field.name === target.parentKeyProperty);
+                    if (!parentKeyField) {
+                        report(entry, `Sublist '${qualifiedName}' ('${sublistId}') has no way back to its parent: mark the property of '${target.className}' holding the parent's internal id with @ParentId(), or name the relationship with @Sublist('${sublistId}', { relationship }).`);
+                        continue;
+                    }
+                    join = { kind: 'from', fieldId: parentKeyField.queryFieldId, source: target.queryType as string };
+                }
+                const lineKeyField = target.fields.find((field) => field.name === target.keyProperty);
+                // A query type of its own means the lines run as their own query, matched to the owner by internal id.
+                const separateQueryType = propertyOverrides?.separateQueryType;
+                if (separateQueryType !== undefined && propertyOverrides?.load === 'join') {
+                    report(entry, `Sublist '${qualifiedName}' ('${sublistId}') names a query type ('${separateQueryType}') for its own query, which cannot be joined into the owner's. Remove load: 'join'.`);
                     continue;
                 }
-                if (!sublistTable) {
-                    report(entry, `Sublist '${qualifiedName}' ('${sublistId}') has no known line table; declare it with @Sublist('${sublistId}', { table, parentColumn }) or type it with a @RecordType class.`);
-                    continue;
-                }
-                if (!parentColumn) {
-                    report(entry, `Sublist '${qualifiedName}' ('${sublistId}') has no known parent column on '${sublistTable}'; declare it with @Sublist('${sublistId}', { parentColumn }).`);
-                    continue;
-                }
-                const lineKeyProperty = target.keyProperty;
-                const lineKey = propertyOverrides?.lineKey ?? convention?.lineKey ?? { column: keyColumnOf(target), field: defaultLineKeyField };
+                const sublistLoad: RelationshipLoad = separateQueryType === undefined ? load : 'separate';
+                const ownerKeyQueryFieldId = resolved.fields.find((field) => field.name === resolved.keyProperty)?.queryFieldId ?? resolved.keyProperty.toLowerCase();
+                // A has-many joined from the line class's @ParentId() field and loaded separately runs on the line's own
+                // record type, matching that field against the owners' internal ids (a fulfillment's SPS contents, keyed
+                // by their fulfillment field). The line rows are the items, so nothing is joined to reach them.
+                const separate: SeparateLoad | undefined = separateQueryType !== undefined
+                    ? { queryType: separateQueryType, parentKeyField: resolved.keyProperty, targetKeyFieldId: ownerKeyQueryFieldId, targetKeyFieldType: 'key' as const }
+                    : load === 'separate' && parentKeyField !== undefined
+                        ? { queryType: target.queryType as string, parentKeyField: resolved.keyProperty, targetKeyFieldId: parentKeyField.queryFieldId, targetKeyFieldType: parentKeyField.type }
+                        : undefined;
                 relations.push({
-                    ...base,
+                    ...toRelation('sublist', join, sublistLoad),
+                    ...(separate ? { separate } : {}),
                     sublistId,
-                    sublistTable,
-                    parentColumn,
-                    where: propertyOverrides?.sublistWhere ?? convention?.where,
-                    lineKey,
-                    lineKeyProperty,
-                    relations: nested(base),
+                    filter: propertyOverrides?.filter,
+                    lineKeyProperty: target.keyProperty,
+                    lineOrderFieldId: lineKeyField?.queryFieldId,
+                    relations: nested(),
                 });
                 continue;
             }
@@ -320,63 +298,61 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
                 continue;
             }
 
-            const subrecordFieldId = propertyOverrides?.subrecordFieldId ?? property.name.toLowerCase();
-            const subrecordConvention = owner ? resolveSubrecordConvention(owner.table, subrecordFieldId) : undefined;
-            // A plain class can only be a subrecord; a record class is a reference unless the property or the conventions say otherwise.
-            const kind: RelationKind = declaredKind ?? (!targetIsRecordType || subrecordConvention ? 'subrecord' : 'reference');
+            // A plain class is a subrecord; a record class is a reference unless the property says @Subrecord().
+            const kind: RelationKind = declaredKind ?? (targetIsRecordType ? 'reference' : 'subrecord');
 
             if (kind === 'reference') {
+                if (!targetIsRecordType) {
+                    report(entry, `Reference '${qualifiedName}' targets '${target.className}', which has no @RecordType; a reference needs a query type.`);
+                    continue;
+                }
                 const selectFieldProperty = propertyOverrides?.selectFieldProperty ?? `${property.name}Id`;
                 const selectField = resolved.fields.find((field) => field.name === selectFieldProperty);
                 if (!selectField) {
                     report(entry, `Reference '${qualifiedName}' needs a select field: declare '${selectFieldProperty}', name one with @Reference('<property>'), or mark the property @Subrecord() if it is one.`);
                     continue;
                 }
-                const targetKeyProperty = propertyOverrides?.targetKeyProperty ?? target.keyProperty;
-                const targetKeyField = target.fields.find((field) => field.name === targetKeyProperty);
-                if (!targetKeyField) {
-                    report(entry, `Reference '${qualifiedName}' joins on '${target.className}.${targetKeyProperty}', which is not a mapped field.`);
+                const targetKeyProperty = propertyOverrides?.targetKeyProperty;
+                const join: ComponentJoin = propertyOverrides?.joinKind === 'auto'
+                    ? { kind: 'auto', fieldId: selectField.queryFieldId }
+                    : { kind: 'to', fieldId: selectField.queryFieldId, target: target.queryType as string };
+                if (targetKeyProperty === undefined) {
+                    // A reference loaded separately by internal id: the second query matches the target's key against the select field values.
+                    const targetKeyQueryFieldId = target.fields.find((field) => field.name === target.keyProperty)?.queryFieldId ?? target.keyProperty.toLowerCase();
+                    const separate = load === 'separate' ? { queryType: target.queryType as string, parentKeyField: selectFieldProperty, targetKeyFieldId: targetKeyQueryFieldId, targetKeyFieldType: 'key' as const } : undefined;
+                    relations.push({ ...toRelation('reference', join, load), ...(separate ? { separate } : {}), relations: nested() });
                     continue;
                 }
-                const base = toRelation('reference');
+                const targetKeyField = target.fields.find((field) => field.name === targetKeyProperty);
+                if (!targetKeyField) {
+                    report(entry, `Reference '${qualifiedName}' matches on '${target.className}.${targetKeyProperty}', which is not a mapped field.`);
+                    continue;
+                }
+                if (propertyOverrides?.load === 'join') {
+                    report(entry, `Reference '${qualifiedName}' matches on '${target.className}.${targetKeyProperty}' and must load separately; N/query joins only through the target's internal id. Remove load: 'join'.`);
+                    continue;
+                }
                 relations.push({
-                    ...base,
-                    selectFieldColumn: selectField.column,
-                    selectFieldTable: selectField.table,
-                    targetTable: target.table,
-                    targetKeyColumn: targetKeyField.column,
-                    targetDiscriminator: target.discriminator,
-                    targetTypeTables: target.typeTables,
-                    relations: nested(base),
+                    ...toRelation('reference', join, 'separate'),
+                    separate: { queryType: target.queryType as string, parentKeyField: selectFieldProperty, targetKeyFieldId: targetKeyField.queryFieldId, targetKeyFieldType: targetKeyField.type },
+                    relations: nested(),
                 });
                 continue;
             }
 
-            const subrecordTable = propertyOverrides?.subrecordTable ?? subrecordConvention?.table ?? (targetIsRecordType ? target.table : undefined);
-            const subrecordKey = propertyOverrides?.subrecordKey ?? subrecordConvention?.key ?? (targetIsRecordType ? keyColumnOf(target) : undefined);
-            const base = toRelation('subrecord');
-            if (!owner) {
-                relations.push({ ...base, subrecordFieldId });
-                continue;
-            }
-            if (!subrecordTable || !subrecordKey) {
-                report(entry, `Subrecord '${qualifiedName}' ('${subrecordFieldId}') has no known table; declare it with @Subrecord('${subrecordFieldId}', { table, key }).`);
-                continue;
-            }
+            const subrecordFieldId = propertyOverrides?.subrecordFieldId ?? property.name.toLowerCase();
             relations.push({
-                ...base,
+                ...toRelation('subrecord', { kind: 'auto', fieldId: subrecordFieldId }, load),
                 subrecordFieldId,
-                subrecordTable,
-                subrecordKey,
-                clearListField: propertyOverrides?.clearListField ?? subrecordConvention?.clearListField,
-                relations: nested(base),
+                clearListField: propertyOverrides?.clearListField,
+                relations: nested(),
             });
         }
 
         return relations;
     }
 
-    function nestedRelations(targetEntry: ClassEntry, target: ResolvedClass, projection: string[] | 'all', stack: string[], owner: ClassEntry, propertyName: string, ownerKind: RelationKind, ownerJoinType: JoinType): ResolvedRelation[] {
+    function nestedRelations(targetEntry: ClassEntry, target: ResolvedClass, projection: string[] | 'all', stack: string[], owner: ClassEntry, propertyName: string): ResolvedRelation[] {
         const targetKey = classKeyOf(targetEntry.collected);
         const wanted = targetEntry.declared.properties.filter((property) => property.target && (projection === 'all' || projection.includes(property.name)) && !targetEntry.collected.overrides.notMapped.has(property.name));
         if (wanted.length === 0) {
@@ -386,19 +362,12 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
             report(owner, `Property '${owner.declared.className}.${propertyName}' brings '${target.className}' back into itself; project it with Pick<${target.className}, ...> to cut the cycle.`);
             return [];
         }
-        const nested = resolveRelations(targetEntry, target, [...stack, targetKey], ownerJoinType).filter((relation) => projection === 'all' || projection.includes(relation.name));
-        for (const relation of nested) {
-            if (relation.kind === 'sublist' && ownerKind === 'sublist') {
-                report(owner, `Sublist '${target.className}.${relation.name}' cannot be loaded inside sublist '${owner.declared.className}.${propertyName}'; SuiteQL would multiply the rows.`);
-            }
-        }
-        return nested.filter((relation) => !(relation.kind === 'sublist' && ownerKind === 'sublist'));
+        return resolveRelations(targetEntry, target, [...stack, targetKey]).filter((relation) => projection === 'all' || projection.includes(relation.name));
     }
 
     const classes: ResolvedClass[] = [];
     for (const entry of entries.values()) {
-        const resolved = resolveShallow(entry);
-        classes.push(resolved);
+        classes.push(resolveShallow(entry));
     }
     for (const entry of entries.values()) {
         const resolved = resolveShallow(entry);

@@ -1,4 +1,4 @@
-import { ExcludeFromDefaultSelect, Field, ReadOnly, RecordType, SetFirst, Subrecord, Transform } from '@amerilux/netsuite-repository';
+import { ExcludeFromDefaultSelect, Field, InternalId, ParentId, ReadOnly, RecordType, SetFirst, Subrecord, Transform } from '@amerilux/netsuite-repository';
 import type { InventoryItem } from './InventoryItem';
 import { uppercaseText } from './shared';
 
@@ -9,10 +9,11 @@ export class TransactionAddress {
     @SetFirst() state!: string | null;
 }
 
-/** One line of a transaction sublist, read from the transactionline table. `id` is the line key the conventions match on write. */
+/** One line of a transaction sublist. The line id is queried as `id` and written through the sublist field `line`; `transaction` points at the parent. */
 @RecordType('transactionline')
 export class TransactionLine {
-    id!: number;
+    @InternalId() @Field('line', { queryFieldId: 'id' }) id!: number;
+    @ParentId() @Field('transaction') @ReadOnly() transactionId!: number;
     @Field('item') itemId!: number;
     item?: Pick<InventoryItem, 'itemId' | 'displayName'>;
     quantity!: number;
@@ -27,7 +28,7 @@ export abstract class Transaction {
     tranDate!: Date;
     memo?: string | null;
     @Field('entity') customerId!: number;
-    @Field('status', { text: true }) statusText!: string;
-    @Subrecord('shippingaddress') shippingAddress!: TransactionAddress;
-    billingAddress?: TransactionAddress;
+    @Field({ queryFieldId: 'status', text: true }) statusText!: string;
+    @Subrecord('shippingaddress', { clearListField: 'shipaddresslist' }) shippingAddress!: TransactionAddress;
+    @Subrecord({ clearListField: 'billaddresslist' }) billingAddress?: TransactionAddress;
 }

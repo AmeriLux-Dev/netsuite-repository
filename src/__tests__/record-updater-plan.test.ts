@@ -1,7 +1,7 @@
 import { RecordUpdater, updateRecord } from '../record-updater';
 import {
     customerConfig, vendorBillConfig, salesOrderConfig,
-    compositeConfig, restMetadataConfig,
+    compositeConfig,
 } from './fixtures';
 import { defineQueryConfig } from '../types';
 import type { QueryConfig } from '../types';
@@ -129,10 +129,9 @@ describe('RecordUpdater.plan() – operations', () => {
     it('subrecord operation has reload when reload config present', () => {
         const cfg = defineQueryConfig<{ id: number; addr1: string }>({
             recordType: 'vendorbill',
-            query: { from: { name: 'transaction', alias: 'txn' } },
             fields: {
-                id:    { queryFieldId: 'id',       tableAlias: 'txn', isPrimary: true },
-                addr1: { queryFieldId: 'billaddr1', tableAlias: 'txn', recordAccess: 'subrecord', recordAccessId: 'billingaddress',
+                id:    { queryFieldId: 'id',       isPrimary: true },
+                addr1: { queryFieldId: 'billaddr1', recordAccess: 'subrecord', recordAccessId: 'billingaddress',
                     subrecordNeedsReload: true, subrecordListFieldToClear: 'billaddrlist', recordFieldId: 'addr1' },
             },
         });
@@ -179,10 +178,9 @@ describe('RecordUpdater.plan() – performance estimates', () => {
     it('counts conditional subrecord reloads in performance', () => {
         const cfg = defineQueryConfig<{ id: number; addr1: string }>({
             recordType: 'vendorbill',
-            query: { from: { name: 'transaction', alias: 'txn' } },
             fields: {
-                id:    { queryFieldId: 'id',       tableAlias: 'txn', isPrimary: true },
-                addr1: { queryFieldId: 'addr1',    tableAlias: 'txn', recordAccess: 'subrecord', recordAccessId: 'billingaddress',
+                id:    { queryFieldId: 'id',       isPrimary: true },
+                addr1: { queryFieldId: 'addr1',    recordAccess: 'subrecord', recordAccessId: 'billingaddress',
                     subrecordNeedsReload: true, subrecordListFieldToClear: 'billaddrlist', recordFieldId: 'addr1' },
             },
         });
@@ -221,12 +219,11 @@ describe('RecordUpdater.set()', () => {
     it('does not re-register subrecord reload if already registered', () => {
         const cfg = defineQueryConfig<{ id: number; addr1: string; city: string }>({
             recordType: 'vendorbill',
-            query: { from: { name: 'transaction', alias: 'txn' } },
             fields: {
-                id:   { queryFieldId: 'id',   tableAlias: 'txn', isPrimary: true },
-                addr1:{ queryFieldId: 'addr1', tableAlias: 'txn', recordAccess: 'subrecord', recordAccessId: 'ba',
+                id:   { queryFieldId: 'id',   isPrimary: true },
+                addr1:{ queryFieldId: 'addr1', recordAccess: 'subrecord', recordAccessId: 'ba',
                     subrecordNeedsReload: true, subrecordListFieldToClear: 'listfield', recordFieldId: 'addr1' },
-                city: { queryFieldId: 'city',  tableAlias: 'txn', recordAccess: 'subrecord', recordAccessId: 'ba',
+                city: { queryFieldId: 'city',  recordAccess: 'subrecord', recordAccessId: 'ba',
                     subrecordNeedsReload: true, subrecordListFieldToClear: 'listfield', recordFieldId: 'city' },
             },
         });
@@ -238,10 +235,9 @@ describe('RecordUpdater.set()', () => {
     it('does not register reload when subrecordListFieldToClear is missing', () => {
         const cfg = defineQueryConfig<{ id: number; val: string }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:  { queryFieldId: 'id',  tableAlias: 't', isPrimary: true },
-                val: { queryFieldId: 'val', tableAlias: 't', recordAccess: 'subrecord', recordAccessId: 'sub',
+                id:  { queryFieldId: 'id',  isPrimary: true },
+                val: { queryFieldId: 'val', recordAccess: 'subrecord', recordAccessId: 'sub',
                     subrecordNeedsReload: true, recordFieldId: 'val' },
             },
         });
@@ -257,10 +253,9 @@ describe('RecordUpdater.set()', () => {
     it('throws when field is marked readonly', () => {
         const cfg = defineQueryConfig<{ id: number; computed: string }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:       { queryFieldId: 'id',       tableAlias: 't', isPrimary: true },
-                computed: { queryFieldId: 'computed', tableAlias: 't', readonly: true },
+                id:       { queryFieldId: 'id',       isPrimary: true },
+                computed: { queryFieldId: 'computed', readonly: true },
             },
         });
         expect(() => updater(cfg).id(1).set('computed', 'x')).toThrow("is readonly");
@@ -275,11 +270,10 @@ describe('RecordUpdater.set()', () => {
     it('throws when explicit composite field has no updateMapping', () => {
         const cfg = defineQueryConfig<{ id: number; name: string }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             composite: { updateMode: 'explicit' },
             fields: {
-                id:   { queryFieldId: 'id',   tableAlias: 't', isPrimary: true, updateMapping: { kind: 'body' } },
-                name: { queryFieldId: 'name', tableAlias: 't' },
+                id:   { queryFieldId: 'id',   isPrimary: true, updateMapping: { kind: 'body' } },
+                name: { queryFieldId: 'name' },
             },
         });
         expect(() => updater(cfg).id(1).set('name', 'x')).toThrow("does not declare an updateMapping");
@@ -290,10 +284,9 @@ describe('RecordUpdater.set() – updateMapping kinds', () => {
     it('throws for readonly mapping', () => {
         const cfg = defineQueryConfig<{ id: number; computed: string }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:       { queryFieldId: 'id',       tableAlias: 't', isPrimary: true },
-                computed: { queryFieldId: 'computed', tableAlias: 't', updateMapping: { kind: 'readonly', reason: 'system-generated' } },
+                id:       { queryFieldId: 'id',       isPrimary: true },
+                computed: { queryFieldId: 'computed', updateMapping: { kind: 'readonly', reason: 'system-generated' } },
             },
         });
         expect(() => updater(cfg).id(1).set('computed', 'x')).toThrow('system-generated');
@@ -302,10 +295,9 @@ describe('RecordUpdater.set() – updateMapping kinds', () => {
     it('throws for derived mapping without reason', () => {
         const cfg = defineQueryConfig<{ id: number; derived: string }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:      { queryFieldId: 'id',      tableAlias: 't', isPrimary: true },
-                derived: { queryFieldId: 'derived', tableAlias: 't', updateMapping: { kind: 'derived' } },
+                id:      { queryFieldId: 'id',      isPrimary: true },
+                derived: { queryFieldId: 'derived', updateMapping: { kind: 'derived' } },
             },
         });
         expect(() => updater(cfg).id(1).set('derived', 'x')).toThrow('derived');
@@ -314,10 +306,9 @@ describe('RecordUpdater.set() – updateMapping kinds', () => {
     it('throws for external mapping', () => {
         const cfg = defineQueryConfig<{ id: number; ext: string }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:  { queryFieldId: 'id',  tableAlias: 't', isPrimary: true },
-                ext: { queryFieldId: 'ext', tableAlias: 't', updateMapping: { kind: 'external' } },
+                id:  { queryFieldId: 'id',  isPrimary: true },
+                ext: { queryFieldId: 'ext', updateMapping: { kind: 'external' } },
             },
         });
         expect(() => updater(cfg).id(1).set('ext', 'x')).toThrow('external');
@@ -326,10 +317,9 @@ describe('RecordUpdater.set() – updateMapping kinds', () => {
     it('throws for relatedRecord mapping', () => {
         const cfg = defineQueryConfig<{ id: number; vendorName: string }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:         { queryFieldId: 'id',   tableAlias: 't', isPrimary: true },
-                vendorName: { queryFieldId: 'name', tableAlias: 't', updateMapping: { kind: 'relatedRecord', recordType: 'vendor', idPath: 'entity' } },
+                id:         { queryFieldId: 'id',   isPrimary: true },
+                vendorName: { queryFieldId: 'name', updateMapping: { kind: 'relatedRecord', recordType: 'vendor', idPath: 'entity' } },
             },
         });
         expect(() => updater(cfg).id(1).set('vendorName', 'x')).toThrow("maps to related record");
@@ -338,10 +328,9 @@ describe('RecordUpdater.set() – updateMapping kinds', () => {
     it('applies body mapping with explicit fieldId', () => {
         const cfg = defineQueryConfig<{ id: number; memo: string }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:   { queryFieldId: 'id',   tableAlias: 't', isPrimary: true },
-                memo: { queryFieldId: 'memo', tableAlias: 't', updateMapping: { kind: 'body', fieldId: 'custbody_memo', setFirst: true } },
+                id:   { queryFieldId: 'id',   isPrimary: true },
+                memo: { queryFieldId: 'memo', updateMapping: { kind: 'body', fieldId: 'custbody_memo', setFirst: true } },
             },
         });
         const plan = updater(cfg).id(1).set('memo', 'x').plan();
@@ -353,10 +342,9 @@ describe('RecordUpdater.set() – updateMapping kinds', () => {
     it('applies ownedSubrecord mapping', () => {
         const cfg = defineQueryConfig<{ id: number; addr1: string }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:    { queryFieldId: 'id',    tableAlias: 't', isPrimary: true },
-                addr1: { queryFieldId: 'addr1', tableAlias: 't', updateMapping: { kind: 'ownedSubrecord', subrecordFieldId: 'billingaddress', fieldId: 'addr1' } },
+                id:    { queryFieldId: 'id',    isPrimary: true },
+                addr1: { queryFieldId: 'addr1', updateMapping: { kind: 'ownedSubrecord', subrecordFieldId: 'billingaddress', fieldId: 'addr1' } },
             },
         });
         const plan = updater(cfg).id(1).set('addr1', '123 Main').plan();
@@ -367,10 +355,9 @@ describe('RecordUpdater.set() – updateMapping kinds', () => {
     it('applies ownedSubrecord mapping with clearBeforeUpdateFieldId', () => {
         const cfg = defineQueryConfig<{ id: number; addr1: string }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:    { queryFieldId: 'id',    tableAlias: 't', isPrimary: true },
-                addr1: { queryFieldId: 'addr1', tableAlias: 't', updateMapping: { kind: 'ownedSubrecord', subrecordFieldId: 'billingaddress', clearBeforeUpdateFieldId: 'billaddrlist' } },
+                id:    { queryFieldId: 'id',    isPrimary: true },
+                addr1: { queryFieldId: 'addr1', updateMapping: { kind: 'ownedSubrecord', subrecordFieldId: 'billingaddress', clearBeforeUpdateFieldId: 'billaddrlist' } },
             },
         });
         const plan = updater(cfg).id(1).set('addr1', 'x').plan();
@@ -381,11 +368,10 @@ describe('RecordUpdater.set() – updateMapping kinds', () => {
     it('applies ownedSubrecord mapping with clearBeforeUpdateFieldId already registered (no double register)', () => {
         const cfg = defineQueryConfig<{ id: number; addr1: string; city: string }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:    { queryFieldId: 'id',    tableAlias: 't', isPrimary: true },
-                addr1: { queryFieldId: 'addr1', tableAlias: 't', updateMapping: { kind: 'ownedSubrecord', subrecordFieldId: 'ba', clearBeforeUpdateFieldId: 'balist' } },
-                city:  { queryFieldId: 'city',  tableAlias: 't', updateMapping: { kind: 'ownedSubrecord', subrecordFieldId: 'ba', clearBeforeUpdateFieldId: 'balist' } },
+                id:    { queryFieldId: 'id',    isPrimary: true },
+                addr1: { queryFieldId: 'addr1', updateMapping: { kind: 'ownedSubrecord', subrecordFieldId: 'ba', clearBeforeUpdateFieldId: 'balist' } },
+                city:  { queryFieldId: 'city',  updateMapping: { kind: 'ownedSubrecord', subrecordFieldId: 'ba', clearBeforeUpdateFieldId: 'balist' } },
             },
         });
         expect(() => updater(cfg).id(1).set('addr1', 'x').set('city', 'NYC').plan()).not.toThrow();
@@ -609,10 +595,9 @@ describe('RecordUpdater – relationship field resolution', () => {
     it('resolves field from relationship.fields mapping', () => {
         const cfg = defineQueryConfig<{ id: number; addr1: string }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:         { queryFieldId: 'id',    tableAlias: 't', isPrimary: true },
-                physAddr1:  { queryFieldId: 'addr1', tableAlias: 't', recordAccess: 'subrecord', recordAccessId: 'physaddr', recordFieldId: 'addr1' },
+                id:         { queryFieldId: 'id',    isPrimary: true },
+                physAddr1:  { queryFieldId: 'addr1', recordAccess: 'subrecord', recordAccessId: 'physaddr', recordFieldId: 'addr1' },
             },
             relationships: {
                 physicalAddress: { kind: 'subrecord', recordAccessId: 'physaddr', fields: { addr1: 'physAddr1' } },
@@ -634,10 +619,9 @@ describe('RecordUpdater – relationship field resolution', () => {
     it('resolves field by nestPath', () => {
         const cfg = defineQueryConfig<{ id: number; billingAddress: { city: string } }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:   { queryFieldId: 'id',   tableAlias: 't', isPrimary: true },
-                city: { queryFieldId: 'city', tableAlias: 't', recordAccess: 'subrecord', recordAccessId: 'billingaddress', nestPath: 'billingAddress.city', recordFieldId: 'city' },
+                id:   { queryFieldId: 'id',   isPrimary: true },
+                city: { queryFieldId: 'city', recordAccess: 'subrecord', recordAccessId: 'billingaddress', nestPath: 'billingAddress.city', recordFieldId: 'city' },
             },
             relationships: {
                 billingAddress: { kind: 'subrecord', recordAccessId: 'billingaddress' },
@@ -660,10 +644,9 @@ describe('RecordUpdater – registerSubrecordReload', () => {
     it('registers reload from relationship.reload config', () => {
         const cfg = defineQueryConfig<{ id: number; city: string }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:   { queryFieldId: 'id',   tableAlias: 't', isPrimary: true },
-                city: { queryFieldId: 'city', tableAlias: 't', recordAccess: 'subrecord', recordAccessId: 'ba', nestPath: 'billing.city', recordFieldId: 'city' },
+                id:   { queryFieldId: 'id',   isPrimary: true },
+                city: { queryFieldId: 'city', recordAccess: 'subrecord', recordAccessId: 'ba', nestPath: 'billing.city', recordFieldId: 'city' },
             },
             relationships: {
                 billing: { kind: 'subrecord', recordAccessId: 'ba', reload: { listFieldToClear: 'balist' } },
@@ -676,281 +659,6 @@ describe('RecordUpdater – registerSubrecordReload', () => {
 });
 
 // ── REST record metadata field resolution ────────────────────────────────────
-
-describe('RecordUpdater – REST metadata field resolution', () => {
-    it('resolves a body field from REST metadata when not in config', () => {
-        const cfg = defineQueryConfig<{ id: number }>({
-            recordType: 'customer',
-            query: { from: { name: 'customer', alias: 'cust' } },
-            fields: {
-                id: { queryFieldId: 'id', tableAlias: 'cust', isPrimary: true },
-            },
-            restRecordMetadata: {
-                recordType: 'customer',
-                fields: { companyname: { id: 'companyname', kind: 'string', writable: true } },
-            },
-        });
-        const plan = updater(cfg).id(1).set('companyname' as any, 'Acme').plan();
-        expect(plan.details.bodyFieldsUpdated).toBe(1);
-    });
-
-    it('throws when REST metadata field is writable: false', () => {
-        expect(() =>
-            updater(restMetadataConfig).id(1).set('id' as any, 999)
-        ).toThrow("is not writable");
-    });
-
-    it('resolves a sublist field from REST metadata', () => {
-        const cfg = defineQueryConfig<{ id: number }>({
-            recordType: 'salesorder',
-            query: { from: { name: 'transaction', alias: 'txn' } },
-            fields: { id: { queryFieldId: 'id', tableAlias: 'txn', isPrimary: true } },
-            restRecordMetadata: {
-                recordType: 'salesorder',
-                sublists: { item: { sublistId: 'item', writable: true, fields: { quantity: { id: 'quantity', kind: 'float', writable: true } } } },
-            },
-        });
-        const plan = updater(cfg).id(1).updateLine('item', 0, { quantity: 5 } as any).plan();
-        expect(plan.details.sublistLinesUpdated).toBe(1);
-    });
-
-    it('throws when sublist is writable: false in REST metadata', () => {
-        const cfg = defineQueryConfig<{ id: number }>({
-            recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
-            fields: { id: { queryFieldId: 'id', tableAlias: 't', isPrimary: true, recordAccess: 'sublist', recordAccessId: 'locked' } },
-            restRecordMetadata: {
-                recordType: 'test',
-                fields: { id: { id: 'id', kind: 'integer', writable: true } },
-                sublists: { locked: { sublistId: 'locked', writable: false } },
-            },
-        });
-        expect(() => updater(cfg).id(1).set('id' as any, 1)).toThrow("Sublist 'locked' is not writable");
-    });
-
-    it('resolves a subrecord field from REST metadata', () => {
-        const cfg = defineQueryConfig<{ id: number; addr1: string }>({
-            recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
-            fields: {
-                id:    { queryFieldId: 'id',    tableAlias: 't', isPrimary: true },
-                addr1: { queryFieldId: 'addr1', tableAlias: 't', recordAccess: 'subrecord', recordAccessId: 'billingaddress', recordFieldId: 'addr1' },
-            },
-            restRecordMetadata: {
-                recordType: 'test',
-                subrecords: { billingaddress: { fieldId: 'billingaddress', writable: true, clearBeforeUpdateFieldId: 'balist', fields: { addr1: { id: 'addr1', kind: 'string', writable: true } } } },
-            },
-        });
-        const plan = updater(cfg).id(1).set('addr1', '123 Main').plan();
-        expect(plan.details.subrecordsUpdated).toBe(1);
-    });
-
-    it('throws when subrecord is writable: false in REST metadata', () => {
-        const cfg = defineQueryConfig<{ id: number }>({
-            recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
-            fields: { id: { queryFieldId: 'id', tableAlias: 't', isPrimary: true, recordAccess: 'subrecord', recordAccessId: 'locked' } },
-            restRecordMetadata: {
-                recordType: 'test',
-                fields: { id: { id: 'id', kind: 'integer', writable: true } },
-                subrecords: { locked: { fieldId: 'locked', writable: false } },
-            },
-        });
-        expect(() => updater(cfg).id(1).set('id' as any, 1)).toThrow("Subrecord 'locked' is not writable");
-    });
-});
-
-// ── REST metadata value validation ───────────────────────────────────────────
-
-describe('RecordUpdater – REST metadata value validation', () => {
-    it('throws when required non-nullable field is set to null', () => {
-        const cfg = defineQueryConfig<{ id: number; name: string }>({
-            recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
-            fields: {
-                id:   { queryFieldId: 'id',   tableAlias: 't', isPrimary: true },
-                name: { queryFieldId: 'name', tableAlias: 't' },
-            },
-            restRecordMetadata: {
-                recordType: 'test',
-                fields: { name: { id: 'name', kind: 'string', required: true, nullable: false } },
-            },
-        });
-        expect(() => updater(cfg).id(1).set('name', null as any)).toThrow("required and not nullable");
-    });
-
-    it('passes validation when field is null and not required+non-nullable', () => {
-        expect(() => updater(restMetadataConfig).id(1).set('name', null as any)).not.toThrow();
-    });
-
-    it('throws on enum violation', () => {
-        expect(() =>
-            updater(restMetadataConfig).id(1).set('status', 'pending' as any)
-        ).toThrow("expects one of active, inactive");
-    });
-
-    it('passes on valid enum value', () => {
-        expect(() =>
-            updater(restMetadataConfig).id(1).set('status', 'active' as any)
-        ).not.toThrow();
-    });
-
-    it('throws on minLength violation', () => {
-        expect(() =>
-            updater(restMetadataConfig).id(1).set('name', '' as any)
-        ).toThrow("at least 1 characters");
-    });
-
-    it('throws on maxLength violation', () => {
-        expect(() =>
-            updater(restMetadataConfig).id(1).set('name', 'x'.repeat(101) as any)
-        ).toThrow("no more than 100 characters");
-    });
-
-    it('throws on pattern violation', () => {
-        const cfg = defineQueryConfig<{ id: number; code: string }>({
-            recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
-            fields: {
-                id:   { queryFieldId: 'id',   tableAlias: 't', isPrimary: true },
-                code: { queryFieldId: 'code', tableAlias: 't' },
-            },
-            restRecordMetadata: {
-                recordType: 'test',
-                fields: { code: { id: 'code', kind: 'string', pattern: '^[A-Z]{3}$' } },
-            },
-        });
-        expect(() => updater(cfg).id(1).set('code', 'abc' as any)).toThrow("does not match the REST record metadata pattern");
-    });
-
-    it('throws on numeric non-numeric value', () => {
-        expect(() =>
-            updater(restMetadataConfig).id(1).set('score', 'not-a-number' as any)
-        ).toThrow("expects a numeric value");
-    });
-
-    it('throws on minimum violation', () => {
-        expect(() =>
-            updater(restMetadataConfig).id(1).set('score', -1 as any)
-        ).toThrow("greater than or equal to 0");
-    });
-
-    it('throws on maximum violation', () => {
-        expect(() =>
-            updater(restMetadataConfig).id(1).set('score', 200 as any)
-        ).toThrow("less than or equal to 100");
-    });
-
-    it('passes valid numeric string', () => {
-        expect(() => updater(restMetadataConfig).id(1).set('score', '75' as any)).not.toThrow();
-    });
-
-    it('throws on boolean non-boolean string value', () => {
-        expect(() =>
-            updater(restMetadataConfig).id(1).set('flag', 'yes' as any)
-        ).toThrow("expects a boolean value");
-    });
-
-    it('passes boolean string T', () => {
-        expect(() => updater(restMetadataConfig).id(1).set('flag', 'T' as any)).not.toThrow();
-    });
-
-    it('passes boolean string false', () => {
-        expect(() => updater(restMetadataConfig).id(1).set('flag', 'false' as any)).not.toThrow();
-    });
-
-    it('throws on multiselect non-array', () => {
-        expect(() =>
-            updater(restMetadataConfig).id(1).set('tags', 'single' as any)
-        ).toThrow("expects an array value");
-    });
-
-    it('passes multiselect array', () => {
-        expect(() => updater(restMetadataConfig).id(1).set('tags', ['a', 'b'] as any)).not.toThrow();
-    });
-
-    it('throws on date invalid string', () => {
-        const cfg = defineQueryConfig<{ id: number; dueDate: string }>({
-            recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
-            fields: {
-                id:      { queryFieldId: 'id',      tableAlias: 't', isPrimary: true },
-                dueDate: { queryFieldId: 'duedate', tableAlias: 't' },
-            },
-            restRecordMetadata: {
-                recordType: 'test',
-                fields: { duedate: { id: 'duedate', kind: 'date' } },
-            },
-        });
-        expect(() => updater(cfg).id(1).set('dueDate', 'not-a-date' as any)).toThrow("expects a date value");
-    });
-
-    it('passes valid date string', () => {
-        const cfg = defineQueryConfig<{ id: number; dueDate: string }>({
-            recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
-            fields: {
-                id:      { queryFieldId: 'id',      tableAlias: 't', isPrimary: true },
-                dueDate: { queryFieldId: 'duedate', tableAlias: 't' },
-            },
-            restRecordMetadata: {
-                recordType: 'test',
-                fields: { duedate: { id: 'duedate', kind: 'date' } },
-            },
-        });
-        expect(() => updater(cfg).id(1).set('dueDate', '2026-01-01' as any)).not.toThrow();
-    });
-
-    it('throws on reference invalid type', () => {
-        const cfg = defineQueryConfig<{ id: number; entityId: number }>({
-            recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
-            fields: {
-                id:       { queryFieldId: 'id',     tableAlias: 't', isPrimary: true },
-                entityId: { queryFieldId: 'entity', tableAlias: 't' },
-            },
-            restRecordMetadata: {
-                recordType: 'test',
-                fields: { entity: { id: 'entity', kind: 'reference' } },
-            },
-        });
-        expect(() => updater(cfg).id(1).set('entityId', [] as any)).toThrow("expects a record reference value");
-    });
-
-    it('passes reference with id object', () => {
-        const cfg = defineQueryConfig<{ id: number; entityId: any }>({
-            recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
-            fields: {
-                id:       { queryFieldId: 'id',     tableAlias: 't', isPrimary: true },
-                entityId: { queryFieldId: 'entity', tableAlias: 't', type: 'key' },
-            },
-            restRecordMetadata: {
-                recordType: 'test',
-                fields: { entity: { id: 'entity', kind: 'reference' } },
-            },
-        });
-        expect(() => updater(cfg).id(1).set('entityId', { id: 5 })).not.toThrow();
-    });
-
-    it('throws on object/subrecord/sublist non-object value', () => {
-        const cfg = defineQueryConfig<{ id: number; meta: any }>({
-            recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
-            fields: {
-                id:   { queryFieldId: 'id',   tableAlias: 't', isPrimary: true },
-                meta: { queryFieldId: 'meta', tableAlias: 't' },
-            },
-            restRecordMetadata: {
-                recordType: 'test',
-                fields: { meta: { id: 'meta', kind: 'object' } },
-            },
-        });
-        expect(() => updater(cfg).id(1).set('meta', 'string-not-obj' as any)).toThrow("expects an object value");
-    });
-});
-
-// ── convertValue ──────────────────────────────────────────────────────────────
 
 describe('RecordUpdater – value conversion', () => {
     it('converts integer string to number via parseInt', () => {
@@ -974,46 +682,14 @@ describe('RecordUpdater – value conversion', () => {
     it('converts multiselect single value to array', () => {
         const cfg = defineQueryConfig<{ id: number; tags: string[] }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:   { queryFieldId: 'id',   tableAlias: 't', isPrimary: true },
-                tags: { queryFieldId: 'tags', tableAlias: 't', type: 'multiselect', recordFieldId: 'tags' },
+                id:   { queryFieldId: 'id',   isPrimary: true },
+                tags: { queryFieldId: 'tags', type: 'multiselect', recordFieldId: 'tags' },
             },
         });
         expect(() => updater(cfg).id(1).set('tags', 'single' as any)).not.toThrow();
     });
 
-    it('converts reference object with externalId key', () => {
-        const cfg = defineQueryConfig<{ id: number; entity: any }>({
-            recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
-            fields: {
-                id:     { queryFieldId: 'id',     tableAlias: 't', isPrimary: true },
-                entity: { queryFieldId: 'entity', tableAlias: 't', type: 'key' },
-            },
-            restRecordMetadata: {
-                recordType: 'test',
-                fields: { entity: { id: 'entity', kind: 'reference' } },
-            },
-        });
-        expect(() => updater(cfg).id(1).set('entity', { externalId: 'EXT-001' })).not.toThrow();
-    });
-
-    it('converts reference object with refName key', () => {
-        const cfg = defineQueryConfig<{ id: number; entity: any }>({
-            recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
-            fields: {
-                id:     { queryFieldId: 'id',     tableAlias: 't', isPrimary: true },
-                entity: { queryFieldId: 'entity', tableAlias: 't', type: 'key' },
-            },
-            restRecordMetadata: {
-                recordType: 'test',
-                fields: { entity: { id: 'entity', kind: 'reference' } },
-            },
-        });
-        expect(() => updater(cfg).id(1).set('entity', { refName: 'Vendor A' })).not.toThrow();
-    });
 });
 
 // ── assertPerformanceGuardrails ───────────────────────────────────────────────
@@ -1056,10 +732,9 @@ describe('RecordUpdater – performance guardrails', () => {
     it('throws when allowSubrecordReloads is false and reload planned', () => {
         const cfg = defineQueryConfig<{ id: number; addr1: string }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:    { queryFieldId: 'id',    tableAlias: 't', isPrimary: true },
-                addr1: { queryFieldId: 'addr1', tableAlias: 't', recordAccess: 'subrecord', recordAccessId: 'ba',
+                id:    { queryFieldId: 'id',    isPrimary: true },
+                addr1: { queryFieldId: 'addr1', recordAccess: 'subrecord', recordAccessId: 'ba',
                     subrecordNeedsReload: true, subrecordListFieldToClear: 'balist', recordFieldId: 'addr1' },
             },
         });
@@ -1112,11 +787,10 @@ describe('RecordUpdater – flattenPatchUpdates', () => {
     it('handles nested array with plain object items', () => {
         const cfg = defineQueryConfig<{ id: number; lines_itemId: number; lines_qty: number }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:          { queryFieldId: 'id',       tableAlias: 't', isPrimary: true },
-                lines_itemId:{ queryFieldId: 'item',     tableAlias: 't', recordFieldId: 'item', updateMapping: { kind: 'body', fieldId: 'item' } },
-                lines_qty:   { queryFieldId: 'quantity', tableAlias: 't', recordFieldId: 'quantity', updateMapping: { kind: 'body', fieldId: 'quantity' } },
+                id:          { queryFieldId: 'id',       isPrimary: true },
+                lines_itemId:{ queryFieldId: 'item',     recordFieldId: 'item', updateMapping: { kind: 'body', fieldId: 'item' } },
+                lines_qty:   { queryFieldId: 'quantity', recordFieldId: 'quantity', updateMapping: { kind: 'body', fieldId: 'quantity' } },
             },
         });
         // nested flat object patch (not a sublist)
@@ -1133,10 +807,9 @@ describe('RecordUpdater – flattenPatchUpdates', () => {
     it('queues sublist patch from array field', () => {
         const cfg = defineQueryConfig<any>({
             recordType: 'salesorder',
-            query: { from: { name: 'transaction', alias: 'txn' } },
             fields: {
-                id:       { queryFieldId: 'id',       tableAlias: 'txn', isPrimary: true },
-                lines_qty:{ queryFieldId: 'quantity', tableAlias: 'tl',  recordFieldId: 'quantity',
+                id:       { queryFieldId: 'id',       isPrimary: true },
+                lines_qty:{ queryFieldId: 'quantity', recordFieldId: 'quantity',
                     recordAccess: 'sublist', recordAccessId: 'item', nestPath: 'lines.qty',
                     updateMapping: { kind: 'sublist', sublistId: 'item', fieldId: 'quantity' } },
             },
@@ -1148,10 +821,9 @@ describe('RecordUpdater – flattenPatchUpdates', () => {
     it('throws non-object item in sublist array patch', () => {
         const cfg = defineQueryConfig<any>({
             recordType: 'salesorder',
-            query: { from: { name: 'transaction', alias: 'txn' } },
             fields: {
-                id:       { queryFieldId: 'id',       tableAlias: 'txn', isPrimary: true },
-                lines_qty:{ queryFieldId: 'quantity', tableAlias: 'tl',  recordFieldId: 'quantity',
+                id:       { queryFieldId: 'id',       isPrimary: true },
+                lines_qty:{ queryFieldId: 'quantity', recordFieldId: 'quantity',
                     recordAccess: 'sublist', recordAccessId: 'item', nestPath: 'lines.qty',
                     updateMapping: { kind: 'sublist', sublistId: 'item', fieldId: 'quantity' } },
             },
@@ -1164,10 +836,9 @@ describe('RecordUpdater – flattenPatchUpdates', () => {
     it('throws when sublist array has no line identity', () => {
         const cfg = defineQueryConfig<any>({
             recordType: 'salesorder',
-            query: { from: { name: 'transaction', alias: 'txn' } },
             fields: {
-                id:       { queryFieldId: 'id',       tableAlias: 'txn', isPrimary: true },
-                lines_qty:{ queryFieldId: 'quantity', tableAlias: 'tl',  recordFieldId: 'quantity',
+                id:       { queryFieldId: 'id',       isPrimary: true },
+                lines_qty:{ queryFieldId: 'quantity', recordFieldId: 'quantity',
                     recordAccess: 'sublist', recordAccessId: 'item', nestPath: 'lines.qty',
                     updateMapping: { kind: 'sublist', sublistId: 'item', fieldId: 'quantity' } },
             },
@@ -1180,13 +851,12 @@ describe('RecordUpdater – flattenPatchUpdates', () => {
     it('resolves sublist by matchBy field', () => {
         const cfg = defineQueryConfig<any>({
             recordType: 'salesorder',
-            query: { from: { name: 'transaction', alias: 'txn' } },
             fields: {
-                id:          { queryFieldId: 'id',       tableAlias: 'txn', isPrimary: true },
-                lines_itemId:{ queryFieldId: 'item',     tableAlias: 'tl',  recordFieldId: 'item',
+                id:          { queryFieldId: 'id',       isPrimary: true },
+                lines_itemId:{ queryFieldId: 'item',     recordFieldId: 'item',
                     recordAccess: 'sublist', recordAccessId: 'item', nestPath: 'lines.itemId',
                     updateMapping: { kind: 'sublist', sublistId: 'item', fieldId: 'item' } },
-                lines_qty:   { queryFieldId: 'quantity', tableAlias: 'tl',  recordFieldId: 'quantity',
+                lines_qty:   { queryFieldId: 'quantity', recordFieldId: 'quantity',
                     recordAccess: 'sublist', recordAccessId: 'item', nestPath: 'lines.qty',
                     updateMapping: { kind: 'sublist', sublistId: 'item', fieldId: 'quantity', matchBy: 'item' } },
             },
@@ -1198,10 +868,9 @@ describe('RecordUpdater – flattenPatchUpdates', () => {
     it('throws on explicit composite array non-object item', () => {
         const cfg = defineQueryConfig<{ id: number }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             composite: { updateMode: 'explicit' },
             fields: {
-                id: { queryFieldId: 'id', tableAlias: 't', isPrimary: true, updateMapping: { kind: 'body' } },
+                id: { queryFieldId: 'id', isPrimary: true, updateMapping: { kind: 'body' } },
             },
         });
         expect(() =>
@@ -1228,77 +897,6 @@ describe('updateRecord()', () => {
     });
 });
 
-// ── Coverage: toQueryFieldType via REST metadata fields not in config.fields ──
-
-describe('RecordUpdater – toQueryFieldType via REST metadata', () => {
-    function restOnlyCfg(kind: string) {
-        return defineQueryConfig<{ id: number }>({
-            recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
-            fields: { id: { queryFieldId: 'id', tableAlias: 't', isPrimary: true } },
-            restRecordMetadata: {
-                recordType: 'test',
-                fields: { myfield: { id: 'myfield', kind: kind as any, writable: true } },
-            },
-        });
-    }
-
-    it('resolves integer kind from REST metadata', () => {
-        const plan = updater(restOnlyCfg('integer')).id(1).set('myfield' as any, 1).plan();
-        expect(plan.details.bodyFieldsUpdated).toBe(1);
-    });
-
-    it('resolves currency kind from REST metadata', () => {
-        const plan = updater(restOnlyCfg('currency')).id(1).set('myfield' as any, 9.99).plan();
-        expect(plan.details.bodyFieldsUpdated).toBe(1);
-    });
-
-    it('resolves boolean kind from REST metadata', () => {
-        const plan = updater(restOnlyCfg('boolean')).id(1).set('myfield' as any, true).plan();
-        expect(plan.details.bodyFieldsUpdated).toBe(1);
-    });
-
-    it('resolves date kind from REST metadata', () => {
-        const plan = updater(restOnlyCfg('date')).id(1).set('myfield' as any, '2026-01-01').plan();
-        expect(plan.details.bodyFieldsUpdated).toBe(1);
-    });
-
-    it('resolves datetime kind from REST metadata', () => {
-        const plan = updater(restOnlyCfg('datetime')).id(1).set('myfield' as any, '2026-01-01T00:00:00Z').plan();
-        expect(plan.details.bodyFieldsUpdated).toBe(1);
-    });
-
-    it('resolves multiselect kind from REST metadata', () => {
-        const plan = updater(restOnlyCfg('multiselect')).id(1).set('myfield' as any, ['a']).plan();
-        expect(plan.details.bodyFieldsUpdated).toBe(1);
-    });
-
-    it('resolves reference kind from REST metadata', () => {
-        const plan = updater(restOnlyCfg('reference')).id(1).set('myfield' as any, 42).plan();
-        expect(plan.details.bodyFieldsUpdated).toBe(1);
-    });
-});
-
-// ── Coverage: valid object for object-kind REST metadata field ────────────────
-
-describe('RecordUpdater – REST metadata object kind validation pass', () => {
-    it('passes validation when valid object is set for object-kind field', () => {
-        const cfg = defineQueryConfig<{ id: number; meta: any }>({
-            recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
-            fields: {
-                id:   { queryFieldId: 'id',   tableAlias: 't', isPrimary: true },
-                meta: { queryFieldId: 'meta', tableAlias: 't' },
-            },
-            restRecordMetadata: {
-                recordType: 'test',
-                fields: { meta: { id: 'meta', kind: 'object', writable: true } },
-            },
-        });
-        expect(() => updater(cfg).id(1).set('meta', { key: 'value' })).not.toThrow();
-    });
-});
-
 // ── Coverage: flattenUpdates nested object (via updateLine) ───────────────────
 
 describe('RecordUpdater – flattenUpdates nested object', () => {
@@ -1316,29 +914,15 @@ describe('RecordUpdater – flattenPatchUpdates plain object recursion', () => {
     it('flattens nested plain object in patch by concatenating keys', () => {
         const cfg = defineQueryConfig<{ id: number; billing_addr1: string }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:            { queryFieldId: 'id',    tableAlias: 't', isPrimary: true },
-                billing_addr1: { queryFieldId: 'addr1', tableAlias: 't', recordFieldId: 'addr1' },
+                id:            { queryFieldId: 'id',    isPrimary: true },
+                billing_addr1: { queryFieldId: 'addr1', recordFieldId: 'addr1' },
             },
         });
         const plan = updater(cfg).id(1).patch({ billing: { addr1: 'Main St' } } as any).plan();
         expect(plan.details.bodyFieldsUpdated).toBe(1);
     });
 
-    it('keeps root-level unresolved scalar in output for later resolution via REST metadata', () => {
-        const cfg = defineQueryConfig<{ id: number }>({
-            recordType: 'customer',
-            query: { from: { name: 'customer', alias: 'cust' } },
-            fields: { id: { queryFieldId: 'id', tableAlias: 'cust', isPrimary: true } },
-            restRecordMetadata: {
-                recordType: 'customer',
-                fields: { memo: { id: 'memo', kind: 'string', writable: true } },
-            },
-        });
-        const plan = updater(cfg).id(1).patch({ memo: 'hello' } as any).plan();
-        expect(plan.details.bodyFieldsUpdated).toBe(1);
-    });
 });
 
 // ── Coverage: queueSublistArrayPatch edge cases ───────────────────────────────
@@ -1347,13 +931,12 @@ describe('RecordUpdater – queueSublistArrayPatch: multiple sublists throws', (
     it('throws when array path maps to multiple sublists', () => {
         const cfg = defineQueryConfig<any>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:       { queryFieldId: 'id',       tableAlias: 't', isPrimary: true },
-                lines_qty:{ queryFieldId: 'quantity', tableAlias: 't', recordFieldId: 'quantity',
+                id:       { queryFieldId: 'id',       isPrimary: true },
+                lines_qty:{ queryFieldId: 'quantity', recordFieldId: 'quantity',
                     recordAccess: 'sublist', recordAccessId: 'item', nestPath: 'lines.qty',
                     updateMapping: { kind: 'sublist', sublistId: 'item', fieldId: 'quantity' } },
-                lines_tax:{ queryFieldId: 'taxrate',  tableAlias: 't', recordFieldId: 'taxrate',
+                lines_tax:{ queryFieldId: 'taxrate',  recordFieldId: 'taxrate',
                     recordAccess: 'sublist', recordAccessId: 'tax',  nestPath: 'lines.tax',
                     updateMapping: { kind: 'sublist', sublistId: 'tax',  fieldId: 'taxrate' } },
             },
@@ -1368,13 +951,12 @@ describe('RecordUpdater – queueSublistArrayPatch: multiple matchBy fields thro
     it('throws when array path has multiple matchBy fields', () => {
         const cfg = defineQueryConfig<any>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:          { queryFieldId: 'id',       tableAlias: 't', isPrimary: true },
-                lines_itemA: { queryFieldId: 'itemA',    tableAlias: 't', recordFieldId: 'itemA',
+                id:          { queryFieldId: 'id',       isPrimary: true },
+                lines_itemA: { queryFieldId: 'itemA',    recordFieldId: 'itemA',
                     recordAccess: 'sublist', recordAccessId: 'item', nestPath: 'lines.itemA',
                     updateMapping: { kind: 'sublist', sublistId: 'item', fieldId: 'itemA', matchBy: 'itemA' } },
-                lines_qty:   { queryFieldId: 'quantity', tableAlias: 't', recordFieldId: 'quantity',
+                lines_qty:   { queryFieldId: 'quantity', recordFieldId: 'quantity',
                     recordAccess: 'sublist', recordAccessId: 'item', nestPath: 'lines.qty',
                     updateMapping: { kind: 'sublist', sublistId: 'item', fieldId: 'quantity', matchBy: 'itemB' } },
             },
@@ -1389,13 +971,12 @@ describe('RecordUpdater – queueSublistArrayPatch: missing matchBy value throws
     it('throws when patch item is missing the matchBy field value', () => {
         const cfg = defineQueryConfig<any>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:         { queryFieldId: 'id',       tableAlias: 't', isPrimary: true },
-                lines_item: { queryFieldId: 'item',     tableAlias: 't', recordFieldId: 'item',
+                id:         { queryFieldId: 'id',       isPrimary: true },
+                lines_item: { queryFieldId: 'item',     recordFieldId: 'item',
                     recordAccess: 'sublist', recordAccessId: 'item', nestPath: 'lines.item',
                     updateMapping: { kind: 'sublist', sublistId: 'item', fieldId: 'item' } },
-                lines_qty:  { queryFieldId: 'quantity', tableAlias: 't', recordFieldId: 'quantity',
+                lines_qty:  { queryFieldId: 'quantity', recordFieldId: 'quantity',
                     recordAccess: 'sublist', recordAccessId: 'item', nestPath: 'lines.qty',
                     updateMapping: { kind: 'sublist', sublistId: 'item', fieldId: 'quantity', matchBy: 'item' } },
             },
@@ -1410,10 +991,9 @@ describe('RecordUpdater – queueSublistArrayPatch: matchBy field not in config 
     it('throws when matchBy field is not mapped in config', () => {
         const cfg = defineQueryConfig<any>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:       { queryFieldId: 'id',       tableAlias: 't', isPrimary: true },
-                lines_qty:{ queryFieldId: 'quantity', tableAlias: 't', recordFieldId: 'quantity',
+                id:       { queryFieldId: 'id',       isPrimary: true },
+                lines_qty:{ queryFieldId: 'quantity', recordFieldId: 'quantity',
                     recordAccess: 'sublist', recordAccessId: 'item', nestPath: 'lines.qty',
                     updateMapping: { kind: 'sublist', sublistId: 'item', fieldId: 'quantity', matchBy: 'nonExistentField' } },
             },
@@ -1428,13 +1008,12 @@ describe('RecordUpdater – queueSublistArrayPatch: match field skipped during u
     it('omits the match field itself from the pending field updates', () => {
         const cfg = defineQueryConfig<any>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:         { queryFieldId: 'id',       tableAlias: 't', isPrimary: true },
-                lines_item: { queryFieldId: 'item',     tableAlias: 't', recordFieldId: 'item',
+                id:         { queryFieldId: 'id',       isPrimary: true },
+                lines_item: { queryFieldId: 'item',     recordFieldId: 'item',
                     recordAccess: 'sublist', recordAccessId: 'item', nestPath: 'lines.item',
                     updateMapping: { kind: 'sublist', sublistId: 'item', fieldId: 'item' } },
-                lines_qty:  { queryFieldId: 'quantity', tableAlias: 't', recordFieldId: 'quantity',
+                lines_qty:  { queryFieldId: 'quantity', recordFieldId: 'quantity',
                     recordAccess: 'sublist', recordAccessId: 'item', nestPath: 'lines.qty',
                     updateMapping: { kind: 'sublist', sublistId: 'item', fieldId: 'quantity', matchBy: 'item' } },
             },
@@ -1451,15 +1030,14 @@ describe('RecordUpdater – queueSublistArrayPatch: explicit composite wrong sub
     it('throws when explicit composite field maps to a different sublist', () => {
         const cfg = defineQueryConfig<any>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             composite: { updateMode: 'explicit' },
             fields: {
-                id:        { queryFieldId: 'id',       tableAlias: 't', isPrimary: true, updateMapping: { kind: 'body' } },
-                lines_qty: { queryFieldId: 'quantity', tableAlias: 't', recordFieldId: 'quantity',
+                id:        { queryFieldId: 'id',       isPrimary: true, updateMapping: { kind: 'body' } },
+                lines_qty: { queryFieldId: 'quantity', recordFieldId: 'quantity',
                     nestPath: 'lines.qty',
                     recordAccess: 'sublist', recordAccessId: 'item',
                     updateMapping: { kind: 'sublist', sublistId: 'item', fieldId: 'quantity' } },
-                body_prop: { queryFieldId: 'prop',     tableAlias: 't', recordFieldId: 'prop',
+                body_prop: { queryFieldId: 'prop',     recordFieldId: 'prop',
                     nestPath: 'lines.prop',
                     updateMapping: { kind: 'body', fieldId: 'prop' } },
             },
@@ -1472,14 +1050,13 @@ describe('RecordUpdater – queueSublistArrayPatch: explicit composite wrong sub
     it('silently skips field that does not map to the patched sublist in non-explicit config', () => {
         const cfg = defineQueryConfig<any>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:        { queryFieldId: 'id',       tableAlias: 't', isPrimary: true },
-                lines_qty: { queryFieldId: 'quantity', tableAlias: 't', recordFieldId: 'quantity',
+                id:        { queryFieldId: 'id',       isPrimary: true },
+                lines_qty: { queryFieldId: 'quantity', recordFieldId: 'quantity',
                     nestPath: 'lines.qty',
                     recordAccess: 'sublist', recordAccessId: 'item',
                     updateMapping: { kind: 'sublist', sublistId: 'item', fieldId: 'quantity' } },
-                body_prop: { queryFieldId: 'prop',     tableAlias: 't', recordFieldId: 'prop',
+                body_prop: { queryFieldId: 'prop',     recordFieldId: 'prop',
                     nestPath: 'lines.prop',
                     updateMapping: { kind: 'body', fieldId: 'prop' } },
             },
@@ -1493,13 +1070,12 @@ describe('RecordUpdater – getValueByPathOrKey regex path', () => {
     it('resolves matchBy via regex strip when direct lookup fails', () => {
         const cfg = defineQueryConfig<any>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:         { queryFieldId: 'id',       tableAlias: 't', isPrimary: true },
-                lines_item: { queryFieldId: 'item',     tableAlias: 't', recordFieldId: 'item',
+                id:         { queryFieldId: 'id',       isPrimary: true },
+                lines_item: { queryFieldId: 'item',     recordFieldId: 'item',
                     recordAccess: 'sublist', recordAccessId: 'item', nestPath: 'lines.item',
                     updateMapping: { kind: 'sublist', sublistId: 'item', fieldId: 'item' } },
-                lines_qty:  { queryFieldId: 'quantity', tableAlias: 't', recordFieldId: 'quantity',
+                lines_qty:  { queryFieldId: 'quantity', recordFieldId: 'quantity',
                     recordAccess: 'sublist', recordAccessId: 'item', nestPath: 'lines.qty',
                     updateMapping: { kind: 'sublist', sublistId: 'item', fieldId: 'quantity', matchBy: 'lines.item' } },
             },
@@ -1513,10 +1089,9 @@ describe('RecordUpdater – flattenRelationshipUpdates nested object', () => {
     it('recursively flattens nested objects in relationship setMany', () => {
         const cfg = defineQueryConfig<{ id: number; myrel_x_y: string }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:        { queryFieldId: 'id',  tableAlias: 't', isPrimary: true },
-                myrel_x_y: { queryFieldId: 'xy',  tableAlias: 't', recordAccess: 'subrecord', recordAccessId: 'myrel', recordFieldId: 'xy' },
+                id:        { queryFieldId: 'id',  isPrimary: true },
+                myrel_x_y: { queryFieldId: 'xy',  recordAccess: 'subrecord', recordAccessId: 'myrel', recordFieldId: 'xy' },
             },
             relationships: {
                 myrel: { kind: 'subrecord', recordAccessId: 'myrel' },
@@ -1535,12 +1110,25 @@ describe('RecordUpdater – requireRecordAccessId throws', () => {
     it('throws when field has recordAccess but no recordAccessId', () => {
         const cfg = defineQueryConfig<{ id: number; badField: string }>({
             recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
             fields: {
-                id:       { queryFieldId: 'id',    tableAlias: 't', isPrimary: true },
-                badField: { queryFieldId: 'field', tableAlias: 't', recordAccess: 'subrecord' },
+                id:       { queryFieldId: 'id',    isPrimary: true },
+                badField: { queryFieldId: 'field', recordAccess: 'subrecord' },
             },
         });
         expect(() => updater(cfg).id(1).set('badField', 'x')).toThrow("has recordAccess='subrecord' but no recordAccessId");
+    });
+});
+
+// ── Fields the config does not declare ───────────────────────────────────────
+
+describe('RecordUpdater – fields the config does not declare', () => {
+    it('writes null through for a declared field', () => {
+        const plan = updater().id(1).set('name', null as any).plan();
+        expect(plan.operations).toContainEqual(expect.objectContaining({ kind: 'submitFields', fields: [{ key: 'name', fieldId: 'companyname' }] }));
+    });
+
+    it('rejects an undeclared root field in a patch and in a line update', () => {
+        expect(() => updater().id(1).patch({ memo: 'hello' } as any)).toThrow("Field 'memo' is not defined in query config for 'customer'.");
+        expect(() => updater(salesOrderConfig).id(1).updateLine('item', 0, { unknown: 1 } as any)).toThrow("Field 'unknown' is not defined in query config for 'salesorder'.");
     });
 });

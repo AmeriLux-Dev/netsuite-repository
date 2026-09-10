@@ -1,14 +1,13 @@
 import { createNetSuiteContext } from '../context';
 import { EntityState } from '../tracking';
-import * as NsQuery from 'N/query';
 import * as NsRecord from 'N/record';
+import { fakeNQuery } from '../testing';
 import { createMockRecord } from '../__mocks__/netsuite/record';
 import { customerConfig } from './fixtures';
 import type { Customer } from './fixtures';
 import { salesOrderModelConfig } from './model-fixtures';
 import type { SalesOrderModel } from './model-fixtures';
 
-const mockRunSuiteQL = NsQuery.runSuiteQL as unknown as jest.Mock;
 const mockSubmitFields = NsRecord.submitFields as unknown as jest.Mock;
 const mockLoad = NsRecord.load as unknown as jest.Mock;
 const mockCreate = NsRecord.create as unknown as jest.Mock;
@@ -25,7 +24,8 @@ function createContext(tracking = true) {
 
 beforeEach(() => {
     jest.clearAllMocks();
-    mockRunSuiteQL.mockReturnValue({ asMappedResults: () => orderRows });
+    fakeNQuery.reset();
+    fakeNQuery.queueRows('salesorder', orderRows, { repeat: true });
 });
 
 describe('NetSuiteContext.saveChanges() – end to end', () => {
@@ -79,7 +79,7 @@ describe('NetSuiteContext.saveChanges() – end to end', () => {
         expect(mockDelete).toHaveBeenCalledWith({ type: 'customer', id: 7 });
         expect(customer.id).toBe(500);
         expect(db.customers.find(500)).toBe(customer);
-        expect(mockRunSuiteQL).not.toHaveBeenCalled();
+        expect(fakeNQuery.calls).toHaveLength(0);
     });
 
     it('stops after the first failure by default and keeps failed snapshots for retry', () => {

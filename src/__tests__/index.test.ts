@@ -4,10 +4,8 @@ import { RecordUpdater } from '../record-updater';
 import { QueryBuilder } from '../query';
 import { customerConfig } from './fixtures';
 import * as NsRecord from 'N/record';
-import * as NsQuery from 'N/query';
 
 const mockSubmitFields = NsRecord.submitFields as unknown as jest.Mock;
-const mockRunSuiteQL = NsQuery.runSuiteQL as unknown as jest.Mock;
 
 beforeEach(() => {
     jest.clearAllMocks();

@@ -1,4 +1,4 @@
-import { Field, ReadOnly, RecordType, SetFirst, Sublist, Subrecord, Transform } from '@amerilux/netsuite-repository';
+import { Field, InternalId, ParentId, ReadOnly, RecordType, SetFirst, Sublist, Subrecord, Transform } from '@amerilux/netsuite-repository';
 import type { Customer } from './Customer';
 
 /** linesequencenumber is one-based in SuiteQL; sublist line indexes are zero-based. */
@@ -13,10 +13,14 @@ export class TransactionAddress {
     zip!: string | null;
 }
 
-/** One line of the item sublist, read from the transactionline table. `id` is matched to the sublist field 'line' on write. */
+/**
+ * One line of the item sublist. The line's id is queried as `id` and written through the sublist field `line`;
+ * `transaction` points at the parent, which is how N/query joins the lines to the order.
+ */
 @RecordType('transactionline')
 export class TransactionLine {
-    id!: number;
+    @InternalId() @Field('line', { queryFieldId: 'id' }) id!: number;
+    @ParentId() @Field('transaction') @ReadOnly() transactionId!: number;
     @Field('linesequencenumber') @Transform(toZeroBasedLine) @ReadOnly() line!: number;
     @Field('item') itemId!: number;
     quantity!: number;
@@ -29,18 +33,25 @@ export abstract class Transaction {
     id!: number;
     @Field('tranid') tranId!: string;
     @Field('trandate') tranDate!: Date;
-    @Field({ column: 'status', text: true }) statusText!: string;
-    status!: string;
+    /** The display text of the status; read-only. */
+    @Field({ queryFieldId: 'status', text: true }) statusText!: string;
+    /** The status code, queried as `status` and written through the record field `orderstatus`. */
+    @Field('orderstatus', { queryFieldId: 'status' }) status!: string;
     memo?: string | null;
     @Field('entity') @SetFirst() customerId!: number;
     customer?: Pick<Customer, 'id' | 'companyName' | 'email'>;
-    @Subrecord('shippingaddress') shippingAddress!: TransactionAddress;
+    /** The subrecord 'shippingaddress': N/query resolves the join; the list field must be cleared before an edit. */
+    @Subrecord({ clearListField: 'shipaddresslist' }) shippingAddress!: TransactionAddress;
 }
 
 @RecordType('salesorder')
 export class SalesOrder extends Transaction {
     @Field('foreigntotal') @ReadOnly() total!: number;
     @Field('custbody_auto_approved') autoApproved!: boolean;
-    @Field('shipmethod', { table: 'salesorder' }) shipMethodId!: number | null;
-    @Sublist('item') lines!: TransactionLine[];
+    @Field('shipmethod') shipMethodId!: number | null;
+    /**
+     * The item lines. A `salesorder` root has no join to its lines in N/query; the `transaction` root reaches them through
+     * `transactionlines`, so the lines run as their own query on that root, matched to the order by id.
+     */
+    @Sublist('item', { queryType: 'transaction', relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }) lines!: TransactionLine[];
 }

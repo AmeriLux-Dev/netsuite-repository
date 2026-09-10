@@ -1,211 +1,184 @@
 import { QueryBuilder, query, runQuery } from '../query';
 import { customerConfig, orderConfig } from './fixtures';
-import * as NsQuery from 'N/query';
+import { fakeNQuery } from '../testing';
 
-const mockRunSuiteQL = NsQuery.runSuiteQL as unknown as jest.Mock;
-const mockRunSuiteQLPaged = NsQuery.runSuiteQLPaged as unknown as jest.Mock;
-
-function mockRows(rows: Record<string, unknown>[]) {
-    mockRunSuiteQL.mockReturnValue({ asMappedResults: () => rows });
-}
+const customers = Array.from({ length: 10 }, (_, index) => ({ id: index + 1, name: `C${index + 1}`, email: '', isactive: false, score: 0 }));
 
 beforeEach(() => {
-    jest.clearAllMocks();
+    fakeNQuery.reset();
+});
+
+describe('QueryBuilder – N/query errors', () => {
+    it('rethrows an N/query failure with the rendered query appended, keeping the original as the cause', () => {
+        const failure = Object.assign(new Error('Search error occurred: Operator EQUAL is not valid for given search filter.'), { name: 'SSS_SEARCH_ERROR_OCCURRED' });
+        jest.spyOn(fakeNQuery, 'create').mockImplementationOnce(() => { throw failure; });
+        let caught: (Error & { cause?: unknown }) | undefined;
+        try {
+            QueryBuilder.from(customerConfig).where('name', '=', 'Acme').executeTyped();
+        } catch (error) {
+            caught = error as Error & { cause?: unknown };
+        }
+        expect(caught?.message).toBe("SSS_SEARCH_ERROR_OCCURRED: Search error occurred: Operator EQUAL is not valid for given search filter.\nQuery:\nFROM customer\nSELECT id AS id, companyname AS name, email AS email, isinactive AS isActive, custentity_score AS score\nWHERE companyname IS ['Acme']");
+        expect(caught?.cause).toBe(failure);
+    });
+
+    it('reports a plain failure as it is, including one that is not an Error', () => {
+        jest.spyOn(fakeNQuery, 'create').mockImplementationOnce(() => { throw new Error('boom'); });
+        expect(() => QueryBuilder.from(customerConfig).toSQL()).toThrow('boom\nQuery:\nFROM customer');
+        jest.spyOn(fakeNQuery, 'create').mockImplementationOnce(() => { throw 'text failure'; });
+        expect(() => QueryBuilder.from(customerConfig).count()).toThrow('text failure\nQuery:\nFROM customer');
+    });
 });
 
 describe('QueryBuilder.execute()', () => {
-    it('passes SQL and params to runSuiteQL', () => {
-        mockRows([]);
-        const builder = QueryBuilder.from(customerConfig).where('id', '=', 1);
-        builder.execute();
-        expect(mockRunSuiteQL).toHaveBeenCalledWith(
-            expect.objectContaining({ query: expect.stringContaining('WHERE'), params: [1] })
-        );
-    });
-
-    it('slices rows by offset in top pagination mode', () => {
-        mockRows([{ id: 1 }, { id: 2 }, { id: 3 }]);
-        const result = QueryBuilder.from(customerConfig).pagination('top').limit(2).offset(1).execute();
+    it('runs the query and returns the rows with the description', () => {
+        fakeNQuery.queueRows('customer', customers.slice(0, 2));
+        const result = QueryBuilder.from(customerConfig).where('id', '=', 1).execute();
         expect(result.data).toHaveLength(2);
-        expect(result.data[0]).toMatchObject({ id: 2 });
+        expect(result.query.condition).toEqual({ kind: 'field', fieldId: 'id', operator: 'ANY_OF', values: [1] });
+        expect(fakeNQuery.calls[0]).toEqual(expect.objectContaining({ type: 'customer', execution: 'run' }));
+        expect(fakeNQuery.calls[0].text).toContain('WHERE id ANY_OF [1]');
     });
 
-    it('does not slice when no offset', () => {
-        mockRows([{ id: 1 }, { id: 2 }]);
-        const result = QueryBuilder.from(customerConfig).execute();
-        expect(result.data).toHaveLength(2);
+    it('reads a row window through runPaged with pages sized to the window', () => {
+        fakeNQuery.queueRows('customer', customers);
+        const result = QueryBuilder.from(customerConfig).limit(2).execute();
+        expect(result.data.map((row) => row.id)).toEqual([1, 2]);
+        expect(fakeNQuery.calls[0]).toEqual(expect.objectContaining({ execution: 'runPaged', pageSize: 5 }));
     });
-});
 
-describe('QueryBuilder.executeRaw()', () => {
-    it('returns raw row records', () => {
-        mockRows([{ id: 5, companyname: 'Test' }]);
-        const rows = QueryBuilder.from(customerConfig).executeRaw();
-        expect(rows[0]).toMatchObject({ id: 5 });
+    it('starts at the page that overlaps the offset and slices the remainder', () => {
+        fakeNQuery.queueRows('customer', customers);
+        expect(QueryBuilder.from(customerConfig).offset(7).limit(3).executeRaw().map((row) => row.id)).toEqual([8, 9, 10]);
+        fakeNQuery.queueRows('customer', customers);
+        expect(QueryBuilder.from(customerConfig).offset(1).limit(2).executeRaw().map((row) => row.id)).toEqual([2, 3]);
+    });
+
+    it('reads to the last page when only an offset is given, and nothing when the window is past the data', () => {
+        fakeNQuery.queueRows('customer', customers);
+        expect(QueryBuilder.from(customerConfig).offset(6).executeRaw().map((row) => row.id)).toEqual([7, 8, 9, 10]);
+        expect(fakeNQuery.calls[0].pageSize).toBe(1000);
+        fakeNQuery.queueRows('customer', customers.slice(0, 3));
+        expect(QueryBuilder.from(customerConfig).offset(20).limit(5).executeRaw()).toEqual([]);
+        fakeNQuery.queueRows('customer', customers);
+        expect(QueryBuilder.from(customerConfig).limit(0).executeRaw()).toEqual([]);
+    });
+
+    it('clamps the page size to what N/query accepts', () => {
+        fakeNQuery.queueRows('customer', customers);
+        QueryBuilder.from(customerConfig).limit(5000).executeRaw();
+        expect(fakeNQuery.calls[0].pageSize).toBe(1000);
     });
 });
 
 describe('QueryBuilder.executeTyped()', () => {
     it('returns mapped typed results', () => {
-        mockRows([{ id: 1, name: 'Acme', email: 'a@b.com', isactive: false, score: 10 }]);
+        fakeNQuery.queueRows('customer', [{ id: 1, name: 'Acme', email: 'a@b.com', isactive: false, score: 10 }]);
         const result = QueryBuilder.from(customerConfig).executeTyped();
         expect(result[0].name).toBe('Acme');
+    });
+
+    it('pages over records, not rows, when a joined sublist fans the rows out', () => {
+        fakeNQuery.queueRows('salesorder', [
+            { id: 1, entityid: 5, lines_itemid: 10, lines_qty: 1, lines_amount: 5 },
+            { id: 1, entityid: 5, lines_itemid: 11, lines_qty: 2, lines_amount: 6 },
+            { id: 2, entityid: 5, lines_itemid: 12, lines_qty: 3, lines_amount: 7 },
+        ]);
+        const result = QueryBuilder.from(orderConfig).offset(1).limit(1).executeTyped();
+        expect(result).toEqual([{ id: 2, entityId: 5, lines: [{ itemId: 12, qty: 3, amount: 7 }] }]);
+        expect(fakeNQuery.calls[0].execution).toBe('run');
+    });
+
+    it('falls back to the original row when postProcess returns undefined', () => {
+        fakeNQuery.queueRows('customer', [{ id: 1, name: 'Test', email: '', isactive: false, score: 0 }]);
+        const result = QueryBuilder.from({ ...customerConfig, postProcess: () => undefined } as any).executeTyped();
+        expect(result[0]).toMatchObject({ id: 1 });
+    });
+
+    it('uses the field key as the array path when a cardinality: many field has no nestPath', () => {
+        const cfg = { recordType: 'test', fields: { id: { queryFieldId: 'id', isPrimary: true }, items: { queryFieldId: 'item', cardinality: 'many' as const } } };
+        fakeNQuery.queueRows('test', [{ id: 1, items: 10 }, { id: 1, items: 20 }]);
+        const result = QueryBuilder.from(cfg as any).executeTyped();
+        expect((result[0] as any).items).toEqual([{ items: 10 }, { items: 20 }]);
+    });
+
+    it('groups rows by the primary field alias', () => {
+        const cfg = { recordType: 'test', fields: { id: { queryFieldId: 'id', isPrimary: true, alias: 'recordId' }, items: { queryFieldId: 'name', cardinality: 'many' as const } } };
+        fakeNQuery.queueRows('test', [{ recordid: 1, items: 'A' }, { recordid: 1, items: 'B' }]);
+        expect(QueryBuilder.from(cfg as any).executeTyped()).toHaveLength(1);
     });
 });
 
 describe('QueryBuilder.executePaged()', () => {
-    it('calls runSuiteQLPaged with default pageSize 1000', () => {
-        mockRunSuiteQLPaged.mockReturnValue({ fetch: jest.fn() });
-        QueryBuilder.from(customerConfig).executePaged();
-        expect(mockRunSuiteQLPaged).toHaveBeenCalledWith(
-            expect.objectContaining({ pageSize: 1000 })
-        );
+    it('hands back N/query pages with the default page size', () => {
+        fakeNQuery.queueRows('customer', customers);
+        const paged = QueryBuilder.from(customerConfig).executePaged();
+        expect(paged.count).toBe(10);
+        expect(fakeNQuery.calls[0].pageSize).toBe(1000);
     });
 
-    it('passes custom pageSize', () => {
-        mockRunSuiteQLPaged.mockReturnValue({ fetch: jest.fn() });
+    it('passes a custom page size, clamped', () => {
         QueryBuilder.from(customerConfig).executePaged({ pageSize: 50 });
-        expect(mockRunSuiteQLPaged).toHaveBeenCalledWith(
-            expect.objectContaining({ pageSize: 50 })
-        );
+        QueryBuilder.from(customerConfig).executePaged({ pageSize: 1 });
+        expect(fakeNQuery.calls.map((call) => call.pageSize)).toEqual([50, 5]);
     });
 });
 
-describe('QueryBuilder.first()', () => {
-    it('returns the first raw row', () => {
-        mockRows([{ id: 7 }, { id: 8 }]);
-        const result = QueryBuilder.from(customerConfig).first();
-        expect(result).toMatchObject({ id: 7 });
-    });
-
-    it('returns null when no rows', () => {
-        mockRows([]);
-        expect(QueryBuilder.from(customerConfig).first()).toBeNull();
-    });
-
-    it('restores original limitValue after first()', () => {
-        mockRows([{ id: 1 }]);
+describe('QueryBuilder.first() and firstTyped()', () => {
+    it('return the first row or record and restore the builder afterwards', () => {
+        fakeNQuery.queueRows('customer', customers.slice(6, 8));
         const builder = QueryBuilder.from(customerConfig).limit(50);
-        builder.first();
-        const { sql } = builder.build();
-        expect(sql).toContain('FETCH NEXT 50 ROWS ONLY');
-    });
-});
+        expect(builder.first()).toMatchObject({ id: 7 });
+        expect(fakeNQuery.calls[0].pageSize).toBe(5);
+        expect(builder.describe().page).toEqual({ offset: 0, limit: 50 });
 
-describe('QueryBuilder.firstTyped()', () => {
-    it('returns first typed result', () => {
-        mockRows([{ id: 1, name: 'X', email: '', isactive: false, score: 0 }]);
-        const result = QueryBuilder.from(customerConfig).firstTyped();
-        expect(result?.name).toBe('X');
-    });
-
-    it('returns null when no rows', () => {
-        mockRows([]);
+        fakeNQuery.queueRows('customer', [{ id: 1, name: 'X', email: '', isactive: false, score: 0 }]);
+        expect(QueryBuilder.from(customerConfig).firstTyped()?.name).toBe('X');
+        expect(QueryBuilder.from(customerConfig).first()).toBeNull();
         expect(QueryBuilder.from(customerConfig).firstTyped()).toBeNull();
-    });
-
-    it('restores original limitValue after firstTyped()', () => {
-        mockRows([{ id: 1 }]);
-        const builder = QueryBuilder.from(customerConfig).limit(25);
-        builder.firstTyped();
-        const { sql } = builder.build();
-        expect(sql).toContain('FETCH NEXT 25 ROWS ONLY');
     });
 });
 
 describe('QueryBuilder.count()', () => {
-    it('returns the count value', () => {
-        mockRunSuiteQL.mockReturnValue({ asMappedResults: () => [{ count: 42 }] });
-        const count = QueryBuilder.from(customerConfig).count();
-        expect(count).toBe(42);
-        expect(mockRunSuiteQL).toHaveBeenCalledWith(
-            expect.objectContaining({ query: expect.stringContaining('COUNT(*)') })
-        );
+    it('counts records with COUNT, or COUNT_DISTINCT when a component is joined', () => {
+        fakeNQuery.queueRows('customer', [{ count: 42 }]);
+        expect(QueryBuilder.from(customerConfig).where('id', '=', 1).count()).toBe(42);
+        expect(fakeNQuery.calls[0].text).toContain('SELECT COUNT(id) AS count');
+        expect(fakeNQuery.calls[0].text).toContain('WHERE id ANY_OF [1]');
+
+        fakeNQuery.queueRows('salesorder', [{ count: '3' }]);
+        expect(QueryBuilder.from(orderConfig).count()).toBe(3);
+        expect(fakeNQuery.calls[1].text).toContain('SELECT COUNT_DISTINCT(id) AS count');
     });
 
-    it('returns 0 when no result row', () => {
-        mockRunSuiteQL.mockReturnValue({ asMappedResults: () => [] });
+    it('returns 0 when no row comes back and refuses configs without a primary key', () => {
         expect(QueryBuilder.from(customerConfig).count()).toBe(0);
-    });
-
-    it('includes WHERE clause in count query', () => {
-        mockRunSuiteQL.mockReturnValue({ asMappedResults: () => [{ count: 1 }] });
-        QueryBuilder.from(customerConfig).where('id', '=', 1).count();
-        const call = mockRunSuiteQL.mock.calls[0][0];
-        expect(call.query).toContain('WHERE');
+        expect(() => QueryBuilder.from({ recordType: 'x', fields: { name: { queryFieldId: 'name' } } }).count()).toThrow("A primary key field is required to count 'x'.");
     });
 });
 
 describe('QueryBuilder.exists()', () => {
-    it('returns true when rows exist', () => {
-        mockRunSuiteQL.mockReturnValue({ asMappedResults: () => [{ exists: 1 }] });
-        expect(QueryBuilder.from(customerConfig).exists()).toBe(true);
-        expect(mockRunSuiteQL).toHaveBeenCalledWith(
-            expect.objectContaining({ query: expect.stringContaining('TOP 1 1') })
-        );
-    });
-
-    it('returns false when no rows', () => {
-        mockRunSuiteQL.mockReturnValue({ asMappedResults: () => [] });
+    it('asks for one row and reports whether it came back', () => {
+        fakeNQuery.queueRows('customer', [{ id: 1 }]);
+        expect(QueryBuilder.from(customerConfig).where('id', '=', 99).exists()).toBe(true);
+        expect(fakeNQuery.calls[0]).toEqual(expect.objectContaining({ execution: 'runPaged', pageSize: 5 }));
+        expect(fakeNQuery.calls[0].text).toContain('WHERE id ANY_OF [99]');
         expect(QueryBuilder.from(customerConfig).exists()).toBe(false);
     });
+});
 
-    it('includes WHERE clause in exists query', () => {
-        mockRunSuiteQL.mockReturnValue({ asMappedResults: () => [] });
-        QueryBuilder.from(customerConfig).where('id', '=', 99).exists();
-        const call = mockRunSuiteQL.mock.calls[0][0];
-        expect(call.query).toContain('WHERE');
+describe('QueryBuilder.toSQL()', () => {
+    it('renders through N/query without executing', () => {
+        const sql = QueryBuilder.from(customerConfig).where('name', '=', "O'Brien").toSQL();
+        expect(sql).toContain("companyname IS ['O'Brien']");
+        expect(fakeNQuery.calls[0].execution).toBe('toSuiteQL');
     });
 });
 
-describe('runQuery()', () => {
-    it('executes the config and returns typed results', () => {
-        mockRows([{ id: 1, name: 'Z', email: '', isactive: false, score: 0 }]);
-        const result = runQuery(customerConfig);
-        expect(result[0].name).toBe('Z');
-    });
-});
-
-// ── Coverage: uncovered branches ───────────────────────────────────────────────
-
-describe('QueryBuilder – postProcess returns undefined', () => {
-    it('falls back to original row when postProcess returns undefined', () => {
-        mockRows([{ id: 1, name: 'Test', email: '', isactive: false, score: 0 }]);
-        const cfg = { ...customerConfig, postProcess: () => undefined };
-        const result = QueryBuilder.from(cfg as any).executeTyped();
-        expect(result[0]).toMatchObject({ id: 1 });
-    });
-});
-
-describe('QueryBuilder – cardinality many with no nestPath', () => {
-    it('uses field key as array path when cardinality:many has no nestPath', () => {
-        const cfg = {
-            recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
-            fields: {
-                id:    { queryFieldId: 'id',   tableAlias: 't', isPrimary: true },
-                items: { queryFieldId: 'item', tableAlias: 't', cardinality: 'many' as const },
-            },
-        };
-        mockRows([{ id: 1, items: 10 }, { id: 1, items: 20 }]);
-        const result = QueryBuilder.from(cfg as any).executeTyped();
-        expect(Array.isArray((result[0] as any).items)).toBe(true);
-        expect((result[0] as any).items).toHaveLength(2);
-    });
-});
-
-describe('QueryBuilder – primary field alias used for grouping', () => {
-    it('groups rows by the primary field alias', () => {
-        const cfg = {
-            recordType: 'test',
-            query: { from: { name: 'test', alias: 't' } },
-            fields: {
-                id:    { queryFieldId: 'id',   tableAlias: 't', isPrimary: true, alias: 'recordId' },
-                items: { queryFieldId: 'name', tableAlias: 't', cardinality: 'many' as const },
-            },
-        };
-        mockRows([{ recordid: 1, items: 'A' }, { recordid: 1, items: 'B' }]);
-        const result = QueryBuilder.from(cfg as any).executeTyped();
-        expect(result).toHaveLength(1);
+describe('runQuery() and query()', () => {
+    it('execute the config and return typed results', () => {
+        fakeNQuery.queueRows('customer', [{ id: 1, name: 'Z', email: '', isactive: false, score: 0 }]);
+        expect(runQuery(customerConfig)[0].name).toBe('Z');
+        expect(query(customerConfig)).toBeInstanceOf(QueryBuilder);
     });
 });

@@ -303,3 +303,45 @@ Preferred project convention (decided 2026-09-04 after comparing both): **module
 Rejected: discovering `repositories/<Model>Repository.ts` by convention (needs a config key, and ties one subclass to a model when different scripts may want different repositories over the same model), and scaffolding the subclass (EF does not).
 
 Runtime constraint, restated because it decides the shape: all of this runs in SuiteScript. The base and the subclasses are plain classes; the only Node code is the build step that writes them.
+
+## 1.0.0: queries through the N/query object model
+
+Applied 2026-09-09. The runtime no longer renders SuiteQL text. A query is built with `query.create`, the joins with
+`autoJoin`, `joinTo`, and `joinFrom`, the columns, conditions, and sorts with the matching `create*` calls, and it
+runs with `run` or `runPaged`. `toSuiteQL` is kept only as a debugging view. Three sandbox probes (`experiments/`)
+established what the object model resolves on its own; the rest of the design follows from one rule the user set:
+**the library carries no NetSuite metadata or schema**. Types that mirror the N/query API are fine; anything that
+would have to change when NetSuite changes a table, field, relationship, or sublist is not.
+
+Decisions:
+
+- The conventions table is gone. Every NetSuite fact is declared in the model: `@ParentId()` on a line class marks
+  the field `joinFrom` goes through; `@Sublist('item', { filter })` carries the main-line filter; `@Field('orderstatus',
+  { queryFieldId: 'status' })` and `@InternalId() @Field('line', { queryFieldId: 'id' })` replace the field-id mismatch
+  table and the line key concept; `@Subrecord({ clearListField })` declares the list field cleared before an edit.
+  A shared base class carries these once.
+- The record type is the query type. Discriminators, type tables, and `@Field({ table })` are gone; `@RecordType`
+  keeps `queryType` and `filter` as overrides.
+- REST metadata is gone: the `rest` option, the write validation that read it, and the scaffold with its CLI commands.
+  The updater trusts the model; a wrong field id surfaces as an N/record error at save time.
+- N/query has no join-type option; NetSuite decides inner or outer per relationship. `load: 'join' | 'separate'` on
+  every relation decorator is the control: `join` (the default) reads the relation in the parent's query; `separate`
+  runs a second query keyed by the parent ids in batches, which guarantees parents come back, removes row fan-out,
+  pages over records, and is the only way to load a reference matched on a field other than the target's internal id
+  (`targetKey`). A `where` on a separately loaded relation narrows that relation's rows, not the parents.
+- `where()` keeps the SQL-style operators and translates them per field type (`=` is `IS` on a checkbox, `ON` on a
+  date, `EQUAL` otherwise; `LIKE 'x%'` is `START_WITH`; `IN` is `ANY_OF`; `IS NULL` is `EMPTY`). N/query operator
+  names are accepted directly. Enum values are read off the loaded module by name.
+- Formula columns and formula conditions (`selectFormula`, `whereFormula`) are the only escape hatch; raw SQL, `?`
+  parameters, and dynamic table joins are gone.
+- The library ships a test double for N/query (`@amerilux/netsuite-repository/testing`) that records every query as
+  a `QueryDescription` with a rendered text form and answers with queued rows, so consumers assert on what was asked
+  rather than on SQL strings.
+- A has-many keyed by a field on the child (2026-09-10, from the labels page port in the order-processing test
+  project): `@Sublist({ load: 'separate' })` on the owner with `@ParentId()` on the child's field emits a `separate`
+  block whose query type is the child's own record type and whose target key is that field. The planner reroots the
+  relation at the child (columns, conditions, sorts, nested joins), turns the sublist filter into a root condition,
+  and batches on the child field with ANY_OF; rows map one item each. It exists because `joinFrom` is not registered
+  for every reverse relationship N/query knows (a fulfillment's SPS contents, keyed by `custrecord_pack_content_fulfillment`),
+  while a query on the child type filtered by that field always is. A separate relation nested inside a separately
+  loaded relation is still not planned; repositories compose those (fulfillments onto orders).

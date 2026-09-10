@@ -14,8 +14,6 @@ import type {
     RecordGraphPatch,
     RecordId,
     RecordUpdaterOptions,
-    RestRecordFieldKind,
-    RestRecordFieldMetadata,
     SublistRelationship,
     SubrecordReloadConfig,
     UpdateDetails,
@@ -75,29 +73,6 @@ function formatError(error: unknown): string {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function toQueryFieldType(kind: RestRecordFieldKind | undefined): QueryField['type'] {
-    switch (kind) {
-        case 'integer':
-            return 'integer';
-        case 'float':
-            return 'float';
-        case 'currency':
-            return 'currency';
-        case 'boolean':
-            return 'boolean';
-        case 'date':
-            return 'date';
-        case 'datetime':
-            return 'datetime';
-        case 'multiselect':
-            return 'multiselect';
-        case 'reference':
-            return 'key';
-        default:
-            return 'string';
-    }
 }
 
 export class OwnedSubrecordUpdater<TResult, TUpdate extends Record<string, unknown> = Partial<TResult> & Record<string, unknown>> {
@@ -773,7 +748,7 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
     }
 
     private findSublistField(sublistId: string, fieldKey: string): QueryField {
-        const field = this.resolveWritableField(fieldKey, { recordAccess: 'sublist', recordAccessId: sublistId });
+        const field = this.resolveWritableField(fieldKey);
         if ((field.recordAccess ?? 'body') !== 'sublist' || field.recordAccessId !== sublistId) {
             throw new Error(`Field '${fieldKey}' is not configured for sublist '${sublistId}'.`);
         }
@@ -783,7 +758,7 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
     private resolveCollectionFields(relationshipName: string, relationship: SublistRelationship, updates: Record<string, unknown>): PendingFieldUpdate[] {
         return Object.entries(this.flattenRelationshipUpdates(updates)).map(([fieldKey, value]) => {
             const configFieldKey = this.resolveRelationshipFieldKey(relationshipName, relationship, fieldKey);
-            const field = this.resolveWritableField(configFieldKey, { recordAccess: 'sublist', recordAccessId: relationship.recordAccessId, fieldId: fieldKey });
+            const field = this.resolveWritableField(configFieldKey);
             return this.toPendingUpdate(configFieldKey, field, value);
         });
     }
@@ -894,11 +869,11 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
         }
     }
 
-    private resolveWritableField(fieldKey: string, accessHint?: { recordAccess?: 'body' | 'subrecord' | 'sublist'; recordAccessId?: string; fieldId?: string }): QueryField {
+    private resolveWritableField(fieldKey: string): QueryField {
         const configuredField = this.config.fields[fieldKey];
-        const field = configuredField ? this.applyUpdateMapping(fieldKey, configuredField) : this.createRestRecordMetadataField(fieldKey, accessHint);
+        const field = configuredField ? this.applyUpdateMapping(fieldKey, configuredField) : undefined;
         if (!field) {
-            throw new Error(`Field '${fieldKey}' is not defined in query config or REST record metadata for '${this.config.recordType}'.`);
+            throw new Error(`Field '${fieldKey}' is not defined in query config for '${this.config.recordType}'.`);
         }
         if (this.config.composite?.updateMode === 'explicit' && configuredField && !configuredField.updateMapping) {
             throw new Error(`Field '${fieldKey}' belongs to an explicit composite config and does not declare an updateMapping.`);
@@ -906,7 +881,6 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
         if (field.readonly) {
             throw new Error(`Field '${fieldKey}' is readonly.`);
         }
-        this.assertRestRecordMetadataAllowsField(fieldKey, field);
         return field;
     }
 
@@ -958,76 +932,18 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
         }
     }
 
-    private createRestRecordMetadataField(fieldKey: string, accessHint?: { recordAccess?: 'body' | 'subrecord' | 'sublist'; recordAccessId?: string; fieldId?: string }): QueryField | undefined {
-        const metadata = this.config.restRecordMetadata;
-        if (!metadata) return undefined;
-
-        const fieldId = accessHint?.fieldId ?? fieldKey;
-        if (accessHint?.recordAccess === 'sublist' && accessHint.recordAccessId) {
-            const fieldSchema = metadata.sublists?.[accessHint.recordAccessId]?.fields?.[fieldId] ?? metadata.sublists?.[accessHint.recordAccessId]?.fields?.[fieldKey];
-            if (!fieldSchema) return undefined;
-            return {
-                queryFieldId: fieldSchema.id,
-                tableAlias: this.config.query.from.alias,
-                type: toQueryFieldType(fieldSchema.kind),
-                recordFieldId: fieldSchema.id,
-                readonly: fieldSchema.writable === false,
-                recordAccess: 'sublist',
-                recordAccessId: accessHint.recordAccessId,
-            };
-        }
-
-        if (accessHint?.recordAccess === 'subrecord' && accessHint.recordAccessId) {
-            // No public API currently passes recordAccess:'subrecord' as an accessHint; defensive branch for future use
-            /* istanbul ignore next */
-            const fieldSchema = metadata.subrecords?.[accessHint.recordAccessId]?.fields?.[fieldId] ?? metadata.subrecords?.[accessHint.recordAccessId]?.fields?.[fieldKey];
-            /* istanbul ignore next */
-            if (!fieldSchema) return undefined;
-            /* istanbul ignore next */
-            return {
-                queryFieldId: fieldSchema.id,
-                tableAlias: this.config.query.from.alias,
-                type: toQueryFieldType(fieldSchema.kind),
-                recordFieldId: fieldSchema.id,
-                readonly: fieldSchema.writable === false,
-                recordAccess: 'subrecord',
-                recordAccessId: accessHint.recordAccessId,
-            };
-        }
-
-        const fieldSchema = metadata.fields?.[fieldId] ?? metadata.fields?.[fieldKey];
-        if (!fieldSchema) return undefined;
-        return {
-            queryFieldId: fieldSchema.id,
-            tableAlias: this.config.query.from.alias,
-            type: toQueryFieldType(fieldSchema.kind),
-            recordFieldId: fieldSchema.id,
-            readonly: fieldSchema.writable === false,
-            recordAccess: fieldSchema.kind === 'sublist' ? 'sublist' : fieldSchema.kind === 'subrecord' ? 'subrecord' : 'body',
-            recordAccessId: fieldSchema.kind === 'sublist' || fieldSchema.kind === 'subrecord' ? fieldSchema.id : undefined,
-        };
-    }
-
     private toPendingUpdate(key: string, field: QueryField, value: unknown): PendingFieldUpdate {
-        this.assertRestRecordMetadataAllowsValue(key, field, value);
-        const schema = this.getRestRecordFieldMetadata(key, field);
         return {
             key,
             field,
             recordFieldId: field.recordFieldId ?? field.queryFieldId,
-            value: this.convertValue(value as RecordFieldValue, field, schema),
+            value: this.convertValue(value as RecordFieldValue, field),
         };
     }
 
-    private convertValue(value: RecordFieldValue, field: QueryField, schema?: RestRecordFieldMetadata): NsRecord.FieldValue {
+    private convertValue(value: RecordFieldValue, field: QueryField): NsRecord.FieldValue {
         if (value === undefined || value === null) {
             return null;
-        }
-
-        if (schema?.kind === 'reference' && isPlainObject(value)) {
-            if ('id' in value) return value.id as NsRecord.FieldValue;
-            if ('externalId' in value) return value.externalId as NsRecord.FieldValue;
-            if ('refName' in value) return value.refName as NsRecord.FieldValue;
         }
 
         switch (field.type) {
@@ -1045,136 +961,6 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
             default:
                 return value as NsRecord.FieldValue;
         }
-    }
-
-    private assertRestRecordMetadataAllowsField(fieldKey: string, field: QueryField): void {
-        const schema = this.getRestRecordFieldMetadata(fieldKey, field);
-        if (!schema) return;
-        if (schema.writable === false) {
-            throw new Error(`Field '${fieldKey}' is not writable according to REST record metadata.`);
-        }
-
-        const access = field.recordAccess ?? 'body';
-        if (access === 'subrecord') {
-            const subrecordId = this.requireRecordAccessId(fieldKey, field, 'subrecord');
-            const subrecordSchema = this.config.restRecordMetadata?.subrecords?.[subrecordId];
-            if (subrecordSchema?.writable === false) {
-                throw new Error(`Subrecord '${subrecordId}' is not writable according to REST record metadata.`);
-            }
-            const clearBeforeUpdateFieldId = subrecordSchema?.clearBeforeUpdateFieldId;
-            if (clearBeforeUpdateFieldId && !this.subrecordReloads.has(subrecordId)) {
-                this.subrecordReloads.set(subrecordId, {
-                    subrecordFieldId: subrecordId,
-                    listFieldToClear: clearBeforeUpdateFieldId,
-                });
-            }
-        }
-
-        if (access === 'sublist') {
-            const sublistId = this.requireRecordAccessId(fieldKey, field, 'sublist');
-            const sublistSchema = this.config.restRecordMetadata?.sublists?.[sublistId];
-            if (sublistSchema?.writable === false) {
-                throw new Error(`Sublist '${sublistId}' is not writable according to REST record metadata.`);
-            }
-        }
-    }
-
-    private assertRestRecordMetadataAllowsValue(fieldKey: string, field: QueryField, value: unknown): void {
-        const schema = this.getRestRecordFieldMetadata(fieldKey, field);
-        if (value === undefined) return;
-        if (value === null) {
-            if (schema?.required && schema.nullable === false) {
-                throw new Error(`Field '${fieldKey}' is required and not nullable according to REST record metadata.`);
-            }
-            return;
-        }
-        if (!schema?.kind || schema.kind === 'unknown') return;
-
-        if (schema.enumValues?.length && !schema.enumValues.some((enumValue) => enumValue === value || String(enumValue) === String(value))) {
-            throw new Error(`Field '${fieldKey}' expects one of ${schema.enumValues.map(String).join(', ')} according to REST record metadata.`);
-        }
-
-        if (typeof value === 'string') {
-            if (schema.minLength !== undefined && value.length < schema.minLength) {
-                throw new Error(`Field '${fieldKey}' expects at least ${schema.minLength} characters according to REST record metadata.`);
-            }
-            if (schema.maxLength !== undefined && value.length > schema.maxLength) {
-                throw new Error(`Field '${fieldKey}' expects no more than ${schema.maxLength} characters according to REST record metadata.`);
-            }
-            if (schema.pattern && !new RegExp(schema.pattern).test(value)) {
-                throw new Error(`Field '${fieldKey}' does not match the REST record metadata pattern.`);
-            }
-        }
-
-        const isReferenceValue = isPlainObject(value) && ('id' in value || 'refName' in value || 'externalId' in value);
-        switch (schema.kind) {
-            case 'integer':
-            case 'float':
-            case 'currency':
-                if (typeof value !== 'number' && (typeof value !== 'string' || value.trim() === '' || Number.isNaN(Number(value)))) {
-                    throw new Error(`Field '${fieldKey}' expects a numeric value according to REST record metadata.`);
-                }
-                if (schema.minimum !== undefined && Number(value) < schema.minimum) {
-                    throw new Error(`Field '${fieldKey}' expects a value greater than or equal to ${schema.minimum} according to REST record metadata.`);
-                }
-                if (schema.maximum !== undefined && Number(value) > schema.maximum) {
-                    throw new Error(`Field '${fieldKey}' expects a value less than or equal to ${schema.maximum} according to REST record metadata.`);
-                }
-                return;
-            case 'boolean':
-                if (typeof value !== 'boolean' && !['t', 'f', 'true', 'false'].includes(String(value).toLowerCase())) {
-                    throw new Error(`Field '${fieldKey}' expects a boolean value according to REST record metadata.`);
-                }
-                return;
-            case 'date':
-            case 'datetime':
-                if (!(value instanceof Date) && (typeof value !== 'string' || value.trim() === '' || Number.isNaN(Date.parse(value)))) {
-                    throw new Error(`Field '${fieldKey}' expects a date value according to REST record metadata.`);
-                }
-                return;
-            case 'multiselect':
-                if (!Array.isArray(value)) {
-                    throw new Error(`Field '${fieldKey}' expects an array value according to REST record metadata.`);
-                }
-                return;
-            case 'reference':
-                if (typeof value !== 'string' && typeof value !== 'number' && !isReferenceValue) {
-                    throw new Error(`Field '${fieldKey}' expects a record reference value according to REST record metadata.`);
-                }
-                return;
-            case 'object':
-            case 'subrecord':
-            case 'sublist':
-                if (!isPlainObject(value) && !Array.isArray(value)) {
-                    throw new Error(`Field '${fieldKey}' expects an object value according to REST record metadata.`);
-                }
-                return;
-            default:
-                return;
-        }
-    }
-
-    private getRestRecordFieldMetadata(fieldKey: string, field: QueryField): RestRecordFieldMetadata | undefined {
-        const metadata = this.config.restRecordMetadata;
-        if (!metadata) return undefined;
-
-        const recordFieldId = field.recordFieldId ?? field.queryFieldId;
-        const access = field.recordAccess ?? 'body';
-        if (access === 'subrecord' && field.recordAccessId) {
-            return metadata.subrecords?.[field.recordAccessId]?.fields?.[recordFieldId]
-                ?? metadata.subrecords?.[field.recordAccessId]?.fields?.[fieldKey]
-                ?? metadata.fields?.[recordFieldId]
-                ?? metadata.fields?.[fieldKey];
-        }
-
-        if (access === 'sublist' && field.recordAccessId) {
-            return metadata.sublists?.[field.recordAccessId]?.fields?.[recordFieldId]
-                ?? metadata.sublists?.[field.recordAccessId]?.fields?.[fieldKey]
-                ?? metadata.fields?.[recordFieldId]
-                ?? metadata.fields?.[fieldKey];
-        }
-
-        return metadata.fields?.[recordFieldId] ?? metadata.fields?.[fieldKey];
     }
 
     private flattenUpdates(updates: Record<string, unknown>, prefix = ''): Record<string, unknown> {
@@ -1268,7 +1054,7 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
             const fields: PendingFieldUpdate[] = [];
 
             for (const [fieldKey, fieldValue] of Object.entries(flattened)) {
-                const field = this.resolveWritableField(fieldKey, { recordAccess: 'sublist', recordAccessId: sublistId });
+                const field = this.resolveWritableField(fieldKey);
                 if ((field.recordAccess ?? 'body') !== 'sublist' || field.recordAccessId !== sublistId) {
                     if (this.isExplicitCompositeUpdate()) {
                         throw new Error(`Patch field '${fieldKey}' does not map to sublist '${sublistId}'.`);

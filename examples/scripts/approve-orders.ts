@@ -46,10 +46,9 @@ export function map(context: { value: string; write(key: string, value: string):
 
 export function summarize(summary: { output: { iterator(): { each(callback: (key: string, value: string) => boolean): void } } }): void {
     const db = createErpContext({ tracking: false });
-    const report = db.salesOrders.asNoTracking()
-        .leftJoin('transactionline', 'l', 'l.transaction = transaction.id AND l.mainline = ?', { params: ['F'] })
-        .selectRaw('COUNT(l.id)', 'lineCount', { type: 'integer' })
-        .where('autoApproved', '=', 'T')
+    const recentlyApproved = db.salesOrders.asNoTracking()
+        .exclude('customer', 'shippingAddress')
+        .where('autoApproved', '=', true)
         .orderByDesc('tranDate')
         .limit(10)
         .executeTyped();
@@ -58,7 +57,7 @@ export function summarize(summary: { output: { iterator(): { each(callback: (key
         log.audit('order', `${key}: ${value}`);
         return true;
     });
-    log.audit('recently approved', JSON.stringify(report));
+    log.audit('recently approved', JSON.stringify(recentlyApproved.map((order) => ({ tranId: order.tranId, lineCount: order.lines.length }))));
 }
 
 declare const log: { audit(title: string, details: string): void };
