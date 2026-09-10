@@ -216,6 +216,8 @@ describe('emitContextFile()', () => {
         expect(output).toContain('export type AppRepositoryMap = RepositoryMap<typeof AppSchema>;');
         expect(output).toContain('export type AppContext<TRepositories extends AppRepositoryMap = {}> = NetSuiteContextInstance<typeof AppSchema, MergeRepositories<typeof AppRepositories, TRepositories>>;');
         expect(output).toContain('export function createAppContext<TRepositories extends AppRepositoryMap = {}>(options: ContextFactoryOptions<TRepositories> = {}): AppContext<TRepositories> {\n    return createNetSuiteContext(AppSchema, { ...options, repositories: { ...AppRepositories, ...options.repositories } }) as unknown as AppContext<TRepositories>;\n}');
+        expect(output).toContain('export type UnitOfWork<TRepositories extends AppRepositoryMap = {}> = AppContext<TRepositories>;');
+        expect(output).toContain('export function openUnitOfWork<TRepositories extends AppRepositoryMap = {}>(options: ContextFactoryOptions<TRepositories> = {}): UnitOfWork<TRepositories> {\n    return createAppContext(options);\n}');
     });
 
     it('emits the plain schema, context type, and factory without repositories', () => {
@@ -231,5 +233,7 @@ describe('emitContextFile()', () => {
         expect(output).not.toContain('RepositoryBase');
         expect(output).toContain('export type AppContext = NetSuiteContextInstance<typeof AppSchema>;');
         expect(output).toContain('export function createAppContext(options?: NetSuiteContextOptions): AppContext {\n    return createNetSuiteContext(AppSchema, options);\n}');
+        expect(output).toContain('export type UnitOfWork = AppContext;');
+        expect(output).toContain('export function openUnitOfWork(options?: NetSuiteContextOptions): UnitOfWork {\n    return createAppContext(options);\n}');
     });
 });

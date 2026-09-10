@@ -194,8 +194,8 @@ Add a config file at the project root (every key is optional; the file itself is
 
 ```json
 {
-  "models": ["src/models/**/*.ts", "!src/models/generated/**"],
-  "outDir": "src/models/generated",
+  "models": ["src/models/**/*.ts"],
+  "outDir": "src/repositories/generated",
   "context": { "name": "App", "fileName": "context.gen.ts" },
   "tsconfig": "tsconfig.json",
   "repositories": "none"
@@ -215,7 +215,7 @@ npx netsuite-repository watch        # regenerate whenever a model file changes
 It writes:
 
 - `generated/<Class>.gen.ts` for every exported class, with everything for that class as named exports: the interface, extending the base class's interface and importing the referenced ones; and for record types also `<Class>Patch`, `<Class>Create`, the `<Class>Config` literal the runtime reads, and `<Class>Fields`, a constant whose properties mirror the model and hold its field paths (`SalesOrderFields.lines.item.type` is `'lines.item.type'`) for `where()`, `orderBy()`, and `select()`.
-- `generated/context.gen.ts` with `AppSchema`, the `AppContext` type, and `createAppContext()`.
+- `generated/context.gen.ts` with `AppSchema`, the `AppContext` type, `createAppContext()`, and the unit-of-work names `UnitOfWork` and `openUnitOfWork()` (the same context under the name the layering below uses).
 - With `"repositories": "classes"`, each record type's file also exports `<Class>RepositoryBase`, a `RecordSet` bound to the config, and the context factory accepts subclasses through `createAppContext({ repositories })`.
 
 The build step reads the classes with the TypeScript type checker, so it sees every property, its declared type, `Pick` projections, and inheritance. Model files are also evaluated in a sandbox to collect the decorators; they may import the library and other model files by relative path, and nothing else. Anything that cannot be mapped is reported with the file, class, and property.
@@ -233,7 +233,7 @@ Other bundlers can call `createModelWatcher()` from `@amerilux/netsuite-reposito
 ## Use the context
 
 ```ts
-import { createAppContext } from './models/generated/context.gen';
+import { createAppContext } from './repositories/generated/context.gen';
 
 const db = createAppContext();
 
@@ -269,7 +269,7 @@ A patch is the entity's own shape made partial (`<Model>Patch` in the generated 
 
 Entities returned by `find()`, `getById()`, `list()`, `first()`, and `executeTyped()` are tracked. `saveChanges()` diffs each one against its snapshot and writes the difference through the record updater: body-only changes use `submitFields`, and anything touching a subrecord or sublist loads, mutates, and saves. Lines are matched by their line key. Added entities get their new id written back. `planChanges()` shows what would happen without calling NetSuite, and both take `{ entities }` to work on a subset. Changes to a referenced record's fields are reported as ignored, never written.
 
-Use `asNoTracking()` for reporting reads, and `{ tracking: false }` on `createAppContext()` for contexts that never write. Contexts hold tracked entities strongly, so create one per script execution.
+Use `asNoTracking()` for reporting reads, and `{ tracking: false }` on `createAppContext()` for contexts that never write. Contexts hold tracked entities strongly, so create one per script execution: that is what `openUnitOfWork()` in the generated file is for, and the Layering section below says who calls it.
 
 ## Repositories
 
@@ -278,28 +278,37 @@ The record set on the context is the repository, the way a DbSet is in Entity Fr
 The simplest home for them is a module of functions that take the context:
 
 ```ts
-// queries/salesOrders.ts
+// specifications/salesOrders.ts
 import type { Specification } from '@amerilux/netsuite-repository';
-import type { AppContext } from '../models/generated/context.gen';
-import type { SalesOrder } from '../models/generated/SalesOrder.gen';
-
-import { SalesOrderFields as so } from '../models/generated/SalesOrder.gen';
+import type { SalesOrder } from '../repositories/generated/SalesOrder.gen';
+import { SalesOrderFields as so } from '../repositories/generated/SalesOrder.gen';
 
 export const forCustomer = (customerId: number): Specification<SalesOrder> => (query) => query.where(so.customerId, '=', customerId);
 export const pendingFulfillment = (): Specification<SalesOrder> => (query) => query.where(so.status, '=', 'SalesOrd:B');
 
-export function listPendingSalesOrders(db: AppContext, customerId: number): SalesOrder[] {
-    return db.salesOrders.list(forCustomer(customerId), pendingFulfillment(), (query) => query.orderByAsc(so.tranDate));
+// repositories/salesOrders.ts
+import type { UnitOfWork } from './generated/context.gen';
+import type { SalesOrder } from './generated/SalesOrder.gen';
+import { SalesOrderFields as so } from './generated/SalesOrder.gen';
+import { forCustomer, pendingFulfillment } from '../specifications/salesOrders';
+
+export function listPendingSalesOrders(work: UnitOfWork, customerId: number): SalesOrder[] {
+    return work.salesOrders.list(forCustomer(customerId), pendingFulfillment(), (query) => query.orderByAsc(so.tranDate));
 }
 
-export function approveSalesOrder(db: AppContext, salesOrderId: number, memo: string): SalesOrder {
-    return db.salesOrders.update(salesOrderId, { memo }, { beforeSave: (plan) => log.debug('approve plan', plan.entries) });
+export function approveSalesOrder(work: UnitOfWork, salesOrderId: number, memo: string): SalesOrder {
+    return work.salesOrders.update(salesOrderId, { memo }, { beforeSave: (plan) => log.debug('approve plan', plan.entries) });
 }
 
-// a script
-const db = createAppContext();
-const pending = listPendingSalesOrders(db, 12);
-approveSalesOrder(db, pending[0].id, 'Auto-approved');
+// services/salesOrders.ts
+import { openUnitOfWork } from '../repositories/generated/context.gen';
+import { approveSalesOrder, listPendingSalesOrders } from '../repositories/salesOrders';
+
+export function approveOldestPendingSalesOrder(customerId: number): SalesOrder | undefined {
+    const work = openUnitOfWork();
+    const pending = listPendingSalesOrders(work, customerId);
+    return pending.length > 0 ? approveSalesOrder(work, pending[0].id, 'Auto-approved') : undefined;
+}
 ```
 
 Nothing is registered, a function can read several record sets, and a test can pass any object with the sets it needs. Writes wrap the set's `create()`, `update()`, and `delete()` the same way: the module adds the validation and the domain name, the set does the loading, planning, and saving. This is the style to reach for first. Keep the specifications in a module of their own, one per record type, and the query functions in another; the predicates then read as a vocabulary and the functions as sentences built from it.
@@ -324,6 +333,23 @@ Either way:
 - `first()` and `find()` read every matching row on a model with a joined sublist, so the record comes back with all of its lines; a separately loaded sublist pages over records instead.
 - A registered repository is constructed with the context's change tracker, so the entities it returns are tracked and `saveChanges()` writes them.
 - Repositories and specifications are plain functions and classes with no Node dependencies. They bundle into SuiteScript like the rest of the runtime; only the build step runs in Node.
+
+### Layering
+
+The generated file names the context `UnitOfWork` and exports `openUnitOfWork()` so a project can keep data access in one layer without writing any unit-of-work code of its own. The layout the defaults assume, and what each layer may import:
+
+| Folder | Holds | Imports |
+|---|---|---|
+| `src/models/` | The decorated model classes (source, hand-written) | This package's decorators |
+| `src/repositories/generated/` | The build step's output: `<Class>.gen.ts` and `context.gen.ts` | Never edited |
+| `src/specifications/` | One module per record type of `Specification` builders: the query vocabulary | `generated/`, this package's types |
+| `src/repositories/` | Query and write functions that take the `UnitOfWork` and compose specifications | `generated/`, `specifications/` |
+| `src/services/` | Decisions: open the unit of work, call repository functions, `saveChanges()` when something was written | `repositories/` only |
+| Endpoints, entry points | Parse the request, call a service, shape the reply | `services/` only |
+
+One unit of work per service call is the rule: it is the request's change tracker, and two repository calls inside one service share it by construction. A service that only reads opens it with `{ tracking: false }`. Nothing is memoized at module scope, so the lifetime is visible in the code and does not depend on how NetSuite instantiates modules.
+
+A repository test passes any object with the sets it needs as the unit of work; a service test mocks the repository module. `N/record`, `N/query`, and `N/search` are never imported above the repositories layer, which a lint rule can enforce per folder.
 
 ## Queries
 

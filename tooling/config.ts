@@ -7,7 +7,7 @@ export interface BuildConfig {
     /** Directory (relative to the config file's directory) receiving the generated files. */
     outDir: string;
     context: {
-        /** Prefix for the generated context: `AppSchema`, `AppContext`, `createAppContext()`. */
+        /** Prefix for the generated context: `AppSchema`, `AppContext`, `createAppContext()`. The unit-of-work names `UnitOfWork` and `openUnitOfWork()` carry no prefix. */
         name: string;
         fileName: string;
     };
@@ -31,8 +31,8 @@ export interface ResolvedBuildConfig extends BuildConfig {
 export const DEFAULT_BUILD_CONFIG_FILE_NAME = 'netsuite-repository.config.json';
 
 export const defaultBuildConfig: BuildConfig = {
-    models: ['src/models/**/*.ts', '!src/models/generated/**'],
-    outDir: 'src/models/generated',
+    models: ['src/models/**/*.ts'],
+    outDir: 'src/repositories/generated',
     context: { name: 'App', fileName: 'context.gen.ts' },
     libraryModule: '@amerilux/netsuite-repository',
     repositories: 'none',

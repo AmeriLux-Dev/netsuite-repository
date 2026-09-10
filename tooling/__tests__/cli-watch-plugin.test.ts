@@ -166,7 +166,7 @@ describe('createModelWatcher()', () => {
         jest.advanceTimersByTime(60);
         expect(generate).toHaveBeenCalledTimes(2);
 
-        fileSystem.emitChange(nodePath.join(cwd, 'src/models/generated/A.config.gen.ts'));
+        fileSystem.emitChange(nodePath.join(cwd, 'src/repositories/generated/A.config.gen.ts'));
         jest.advanceTimersByTime(200);
         expect(generate).toHaveBeenCalledTimes(2);
 

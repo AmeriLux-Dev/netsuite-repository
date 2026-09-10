@@ -16,7 +16,9 @@ export interface ContextFileEmitOptions {
     version?: string;
 }
 
-/** Emits `context.gen.ts`: the schema, the context type, and a factory; with repositories, also the generated bases and the option to swap in subclasses. */
+const unitOfWorkComment = '/** The unit of work: one per script execution. A service opens it, repository functions read and write through it, and saveChanges() closes it. */';
+
+/** Emits `context.gen.ts`: the schema, the context type, a factory, and the unit-of-work names; with repositories, also the generated bases and the option to swap in subclasses. */
 export function emitContextFile(options: ContextFileEmitOptions): string {
     const sortedModels = [...options.models].sort((left, right) => left.setName.localeCompare(right.setName));
     const { contextName, libraryModule } = options;
@@ -42,6 +44,13 @@ export function emitContextFile(options: ContextFileEmitOptions): string {
             `    return createNetSuiteContext(${contextName}Schema, options);`,
             '}',
             '',
+            unitOfWorkComment,
+            `export type UnitOfWork = ${contextName}Context;`,
+            '',
+            'export function openUnitOfWork(options?: NetSuiteContextOptions): UnitOfWork {',
+            `    return create${contextName}Context(options);`,
+            '}',
+            '',
         ].join('\n');
     }
 
@@ -64,6 +73,13 @@ export function emitContextFile(options: ContextFileEmitOptions): string {
         '',
         `export function create${contextName}Context<TRepositories extends ${contextName}RepositoryMap = {}>(options: ContextFactoryOptions<TRepositories> = {}): ${contextName}Context<TRepositories> {`,
         `    return createNetSuiteContext(${contextName}Schema, { ...options, repositories: { ...${contextName}Repositories, ...options.repositories } }) as unknown as ${contextName}Context<TRepositories>;`,
+        '}',
+        '',
+        unitOfWorkComment,
+        `export type UnitOfWork<TRepositories extends ${contextName}RepositoryMap = {}> = ${contextName}Context<TRepositories>;`,
+        '',
+        `export function openUnitOfWork<TRepositories extends ${contextName}RepositoryMap = {}>(options: ContextFactoryOptions<TRepositories> = {}): UnitOfWork<TRepositories> {`,
+        `    return create${contextName}Context(options);`,
         '}',
         '',
     ].join('\n');
