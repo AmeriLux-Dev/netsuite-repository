@@ -230,7 +230,7 @@ describe('QueryBuilder – separately loaded references', () => {
         fakeNQuery.queueRows('salesorder', [{ id: 1, entityid: 7 }]);
         fakeNQuery.queueRows('transaction', [{ __parentkey: 1, lines_itemid: 5, lines_qty: 2, lines_amount: 9 }]);
         expect(query(ownRootLinesOrderConfig).executeTyped()).toEqual([{ id: 1, entityId: 7, lines: [{ itemId: 5, qty: 2, amount: 9 }] }]);
-        expect(fakeNQuery.calls[1].text).toBe('FROM transaction\nJOIN auto transactionlines AS transactionlines\nSELECT transactionlines.item AS lines_itemId, transactionlines.quantity AS lines_qty, transactionlines.amount AS lines_amount, id AS __parentKey\nWHERE transactionlines.mainline IS [false] AND id ANY_OF [1]\nORDER BY transactionlines.linesequencenumber ASC');
+        expect(fakeNQuery.calls[1].text).toBe('FROM transaction\nJOIN auto transactionlines AS transactionlines\nSELECT transactionlines.item AS lines_itemId, transactionlines.quantity AS lines_qty, transactionlines.amount AS lines_amount, id AS __parentKey, transactionlines.linesequencenumber AS __sort0\nWHERE transactionlines.mainline IS [false] AND id ANY_OF [1]\nORDER BY transactionlines.linesequencenumber ASC');
     });
 
     it('refuses a separate reference without separate load facts', () => {

@@ -44,6 +44,10 @@ describe('compileQueryDescriptionToNQuery', () => {
             { alias: 'lines_item_name', component: 'transactionline.transaction.item', fieldId: 'itemid' },
             { alias: 'lineTotal', formula: '{lines.quantity} * {lines.rate}', formulaType: 'FLOAT' },
             { alias: 'count', fieldId: 'id', aggregate: 'COUNT' },
+            // Sorted fields that are not selected get hidden columns; the DISPLAY status sort reuses statusText.
+            { alias: '__sort0', fieldId: 'trandate' },
+            { alias: '__sort1', component: 'transactionline.transaction', fieldId: 'linesequencenumber' },
+            { alias: '__sort2', formula: '{quantity}', formulaType: 'INTEGER' },
         ]);
         expect(described.condition).toEqual({ kind: 'field', component: 'transactionline.transaction', fieldId: 'mainline', operator: 'IS', values: [false] });
         expect(described.sort).toEqual([
@@ -85,8 +89,8 @@ describe('compileQueryDescriptionToNQuery', () => {
         });
     });
 
-    it('sorts on the selected column object when the sorted field is selected, and on its own column otherwise', () => {
-        const { query } = compile({
+    it('sorts on the selected column object when the sorted field is selected, and on a hidden column appended to the query otherwise', () => {
+        const { query, described } = compile({
             queryType: 'salesorder',
             components: [{ path: 'lines', join: { kind: 'auto', fieldId: 'transactionlines' }, conditions: [] }],
             columns: [
@@ -110,11 +114,14 @@ describe('compileQueryDescriptionToNQuery', () => {
         const sortColumns = query.sort.map((sort) => sort.column);
         expect(sortColumns[0]).toBe(query.columns[1]);
         expect(sortColumns[1]).toBe(query.columns[2]);
-        expect(query.columns).not.toContain(sortColumns[2]); // the raw status is not selected, only its display text
         expect(sortColumns[3]).toBe(query.columns[3]);
         expect(sortColumns[4]).toBe(query.columns[0]); // the plain id, never the COUNT aggregate
         expect(sortColumns[5]).toBe(query.columns[4]);
-        expect(query.columns).not.toContain(sortColumns[6]);
+        // The raw status (only its display text is selected) and tranid are not selected: N/query sorts only on the
+        // query's own columns, so each gets a hidden column after the model's, never seen by the mapper.
+        expect(sortColumns[2]).toBe(query.columns[6]);
+        expect(sortColumns[6]).toBe(query.columns[7]);
+        expect(described.columns.slice(6)).toEqual([{ alias: '__sort0', fieldId: 'status' }, { alias: '__sort1', fieldId: 'tranid' }]);
     });
 
     it('leaves the condition empty when nothing filters', () => {

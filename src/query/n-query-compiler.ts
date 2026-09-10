@@ -47,8 +47,8 @@ function createColumn(component: NsQuery.Component, column: DescribedColumn, nsQ
 
 /**
  * The selected column a sort can reuse: same component, field or formula, and context, and no aggregate. N/query
- * documents sorting on one of the query's own columns; a column object created only for the sort is the fallback
- * when the sorted field is not selected.
+ * sorts only on one of the query's own columns (a column object outside `query.columns` fails to render, sandbox
+ * 2026-09-09), so a sort on a field that is not selected gets a hidden column appended to the query instead.
  */
 function selectedColumnForSort(sort: DescribedSort, columns: DescribedColumn[], created: NsQuery.Column[]): NsQuery.Column | undefined {
     const index = columns.findIndex((column) =>
@@ -59,13 +59,18 @@ function selectedColumnForSort(sort: DescribedSort, columns: DescribedColumn[], 
     return index === -1 ? undefined : created[index];
 }
 
-function createSortColumn(component: NsQuery.Component, sort: DescribedSort, nsQuery: NQueryModule): NsQuery.Column {
+/** The hidden column a sort on an unselected field is given; the mapper reads rows by the model's aliases and never sees it. */
+export function hiddenSortColumnAlias(index: number): string {
+    return `__sort${index}`;
+}
+
+function createSortColumn(component: NsQuery.Component, sort: DescribedSort, alias: string, nsQuery: NQueryModule): NsQuery.Column {
     const context = sort.context === undefined ? undefined : resolveNQueryEnumValue(nsQuery.FieldContext, sort.context, 'FieldContext');
     if (sort.formula !== undefined) {
         const type = sort.formulaType === undefined ? undefined : resolveNQueryEnumValue(nsQuery.ReturnType, sort.formulaType, 'ReturnType');
-        return component.createColumn(omitUndefined({ formula: sort.formula, type }) as ColumnOptions);
+        return component.createColumn(omitUndefined({ formula: sort.formula, type, alias }) as ColumnOptions);
     }
-    return component.createColumn(omitUndefined({ fieldId: sort.fieldId, context }) as ColumnOptions);
+    return component.createColumn(omitUndefined({ fieldId: sort.fieldId, context, alias }) as ColumnOptions);
 }
 
 /** Every component's declared conditions, as field nodes on that component. */
@@ -103,7 +108,6 @@ export function compileQueryDescriptionToNQuery(description: QueryDescription, n
     }
 
     const columns = description.columns.map((column) => createColumn(componentAt(column.component), column, nsQuery));
-    query.columns = columns;
 
     const compileConditionNode = (node: ConditionNode): NsQuery.Condition => {
         switch (node.kind) {
@@ -134,11 +138,18 @@ export function compileQueryDescriptionToNQuery(description: QueryDescription, n
         query.condition = compileConditionNode(conditionNodes.length === 1 ? conditionNodes[0] : { kind: 'and', nodes: conditionNodes });
     }
 
-    query.sort = description.sort.map((sort) => {
+    const hiddenSortColumns: NsQuery.Column[] = [];
+    const sorts = description.sort.map((sort) => {
         const component = componentAt(sort.component);
-        const column = selectedColumnForSort(sort, description.columns, columns) ?? createSortColumn(component, sort, nsQuery);
+        let column = selectedColumnForSort(sort, description.columns, columns);
+        if (column === undefined) {
+            column = createSortColumn(component, sort, hiddenSortColumnAlias(hiddenSortColumns.length), nsQuery);
+            hiddenSortColumns.push(column);
+        }
         return component.createSort(omitUndefined({ column, ascending: sort.ascending, nullsLast: sort.nullsLast }));
     });
+    query.columns = [...columns, ...hiddenSortColumns];
+    query.sort = sorts;
 
     return query;
 }
