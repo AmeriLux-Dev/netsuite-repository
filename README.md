@@ -197,6 +197,7 @@ Add a config file at the project root (every key is optional; the file itself is
   "models": ["src/models/**/*.ts"],
   "outDir": "src/repositories/generated",
   "context": { "name": "App", "fileName": "context.gen.ts" },
+  "types": { "fileName": "types.gen.ts" },
   "tsconfig": "tsconfig.json",
   "repositories": "none"
 }
@@ -215,6 +216,7 @@ npx netsuite-repository watch        # regenerate whenever a model file changes
 It writes:
 
 - `generated/<Class>.gen.ts` for every exported class, with everything for that class as named exports: the interface, extending the base class's interface and importing the referenced ones; and for record types also `<Class>Patch`, `<Class>Create`, the `<Class>Config` literal the runtime reads, and `<Class>Fields`, a constant whose properties mirror the model and hold its field paths (`SalesOrderFields.lines.item.type` is `'lines.item.type'`) for `where()`, `orderBy()`, and `select()`.
+- `generated/types.gen.ts`, a barrel of type-only re-exports: every class's interface and, for record types, `<Class>Patch` and `<Class>Create`. Import model types from it wherever the configs must stay out of the bundle, such as DTOs shared with a browser client; a bundler erases `import type` from it entirely. `types.fileName` renames it and `"types": { "emit": false }` leaves it out.
 - `generated/context.gen.ts` with `AppSchema`, the `AppContext` type, `createAppContext()`, and the unit-of-work names `UnitOfWork` and `openUnitOfWork()` (the same context under the name the layering below uses).
 - With `"repositories": "classes"`, each record type's file also exports `<Class>RepositoryBase`, a `RecordSet` bound to the config, and the context factory accepts subclasses through `createAppContext({ repositories })`.
 
@@ -341,7 +343,7 @@ The generated file names the context `UnitOfWork` and exports `openUnitOfWork()`
 | Folder | Holds | Imports |
 |---|---|---|
 | `src/models/` | The decorated model classes (source, hand-written) | This package's decorators |
-| `src/repositories/generated/` | The build step's output: `<Class>.gen.ts` and `context.gen.ts` | Never edited |
+| `src/repositories/generated/` | The build step's output: `<Class>.gen.ts`, `types.gen.ts`, and `context.gen.ts` | Never edited |
 | `src/specifications/` | One module per record type of `Specification` builders: the query vocabulary | `generated/`, this package's types |
 | `src/repositories/` | Query and write functions that take the `UnitOfWork` and compose specifications | `generated/`, `specifications/` |
 | `src/services/` | Decisions: open the unit of work, call repository functions, `saveChanges()` when something was written | `repositories/` only |

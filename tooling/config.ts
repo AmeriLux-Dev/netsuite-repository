@@ -11,6 +11,12 @@ export interface BuildConfig {
         name: string;
         fileName: string;
     };
+    /** The generated type barrel: the interface and helper types of every class, re-exported type-only. */
+    types: {
+        /** Whether to write the barrel at all (default true). */
+        emit: boolean;
+        fileName: string;
+    };
     /** Optional tsconfig path (relative to the config file's directory) used to type-check model files; defaults to sensible compiler options. */
     tsconfig?: string;
     /** Module specifier model files import the library from, and generated files import the runtime from. */
@@ -34,6 +40,7 @@ export const defaultBuildConfig: BuildConfig = {
     models: ['src/models/**/*.ts'],
     outDir: 'src/repositories/generated',
     context: { name: 'App', fileName: 'context.gen.ts' },
+    types: { emit: true, fileName: 'types.gen.ts' },
     libraryModule: '@amerilux/netsuite-repository',
     repositories: 'none',
 };
@@ -54,6 +61,7 @@ function validateBuildConfig(raw: Record<string, unknown>, configPath: string): 
     const config: BuildConfig = {
         ...defaultBuildConfig,
         context: { ...defaultBuildConfig.context },
+        types: { ...defaultBuildConfig.types },
     };
 
     if (raw.models !== undefined) {
@@ -87,6 +95,27 @@ function validateBuildConfig(raw: Record<string, unknown>, configPath: string): 
                     config.context.fileName = context.fileName;
                 } else {
                     problems.push("'context.fileName' must end with '.ts'.");
+                }
+            }
+        }
+    }
+    if (raw.types !== undefined) {
+        const types = raw.types as Record<string, unknown> | null;
+        if (!types || typeof types !== 'object') {
+            problems.push("'types' must be an object.");
+        } else {
+            if (types.emit !== undefined) {
+                if (typeof types.emit === 'boolean') {
+                    config.types.emit = types.emit;
+                } else {
+                    problems.push("'types.emit' must be a boolean.");
+                }
+            }
+            if (types.fileName !== undefined) {
+                if (typeof types.fileName === 'string' && types.fileName.endsWith('.ts')) {
+                    config.types.fileName = types.fileName;
+                } else {
+                    problems.push("'types.fileName' must end with '.ts'.");
                 }
             }
         }
@@ -131,7 +160,7 @@ export function loadBuildConfig(fileSystem: FileSystemAdapter, cwd: string, conf
         if (configPath !== undefined) {
             throw new BuildConfigError(resolvedPath, ['file does not exist.']);
         }
-        return { ...defaultBuildConfig, context: { ...defaultBuildConfig.context }, rootDirectory: cwd };
+        return { ...defaultBuildConfig, context: { ...defaultBuildConfig.context }, types: { ...defaultBuildConfig.types }, rootDirectory: cwd };
     }
 
     let raw: unknown;

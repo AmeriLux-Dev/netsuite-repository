@@ -2,5 +2,6 @@
   "models": ["models/**/*.ts", "!models/generated/**"],
   "outDir": "models/generated",
   "context": { "name": "Erp", "fileName": "context.gen.ts" },
+  "types": { "fileName": "types.gen.ts" },
   "tsconfig": "tsconfig.json"
 }

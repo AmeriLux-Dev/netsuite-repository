@@ -12,6 +12,8 @@ import type { BuildConfig } from './config';
 import { emitContextFile } from './emit/context-file-emitter';
 import { emitModelFile } from './emit/model-file-emitter';
 import type { FieldPathTree, FunctionImport, RecordTypeEmitOptions, TypeFileMember } from './emit/model-file-emitter';
+import { emitTypesFile } from './emit/types-file-emitter';
+import type { TypesFileClassReference } from './emit/types-file-emitter';
 import { resolveGlobs, toPosixPath } from './file-system';
 import type { FileSystemAdapter } from './file-system';
 
@@ -170,6 +172,7 @@ export function planGeneration(options: GenerateOptions): GenerationPlan {
         classesByName.set(model.className, model);
     }
 
+    const typeExports: TypesFileClassReference[] = [];
     for (const model of classesByName.values()) {
         const { members, imports } = buildTypeFileMembers(model, classesByName);
         let record: RecordTypeEmitOptions | undefined;
@@ -198,10 +201,12 @@ export function planGeneration(options: GenerateOptions): GenerationPlan {
             version: options.version,
         });
         let content: string;
+        let helperTypes = false;
         try {
             content = emit(record);
             if (record) {
                 models.push({ modelName: model.className, setName: model.setName ?? toRecordSetName(model.className), filePath: model.filePath });
+                helperTypes = true;
             }
         } catch (error) {
             // The config could not be serialized (an unexported transform, say): report it and still emit the type.
@@ -209,6 +214,15 @@ export function planGeneration(options: GenerateOptions): GenerationPlan {
             content = emit(undefined);
         }
         files.push({ path: nodePath.join(outDir, `${model.className}.gen.ts`), content });
+        typeExports.push({ className: model.className, helperTypes, importPath: `./${model.className}.gen` });
+    }
+
+    // One type-only barrel over every class, so consumers that must not touch the configs (a browser client's DTOs) import from one file.
+    if (config.types.emit && typeExports.length > 0) {
+        files.push({
+            path: nodePath.join(outDir, config.types.fileName),
+            content: emitTypesFile({ classes: typeExports, version: options.version }),
+        });
     }
 
     if (models.length > 0) {

@@ -8,6 +8,7 @@ export * from './emit/serialize';
 export * from './emit/header';
 export * from './emit/model-file-emitter';
 export * from './emit/context-file-emitter';
+export * from './emit/types-file-emitter';
 export * from './generate';
 export * from './watch';
 export * from './plugin';

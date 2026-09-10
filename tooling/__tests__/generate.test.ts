@@ -66,8 +66,23 @@ describe('planGeneration() – model fixtures', () => {
         expect(Array.from(fileByName.keys()).sort()).toEqual([
             'Customer.gen.ts', 'InventoryItem.gen.ts', 'SalesOrder.gen.ts',
             'Transaction.gen.ts', 'TransactionAddress.gen.ts', 'TransactionLine.gen.ts',
-            'context.gen.ts',
+            'context.gen.ts', 'types.gen.ts',
         ]);
+    });
+
+    it('emits a type-only barrel: every interface, plus the helper types of record types, sorted by class name', () => {
+        const types = fileByName.get('types.gen.ts') as string;
+        expect(types).toContain("export type { Customer, CustomerCreate, CustomerPatch } from './Customer.gen';\nexport type { InventoryItem, InventoryItemCreate, InventoryItemPatch } from './InventoryItem.gen';\nexport type { SalesOrder, SalesOrderCreate, SalesOrderPatch } from './SalesOrder.gen';\nexport type { Transaction } from './Transaction.gen';\nexport type { TransactionAddress } from './TransactionAddress.gen';\nexport type { TransactionLine, TransactionLineCreate, TransactionLinePatch } from './TransactionLine.gen';\n");
+        expect(types).not.toContain('import ');
+        expect(types).not.toContain('Config');
+    });
+
+    it('leaves the type barrel out when the config switches it off', () => {
+        const config = buildConfig(['tooling/__tests__/fixtures/models/**/*.ts'], outDir);
+        const withoutBarrel = planGeneration({ config: { ...config, types: { ...config.types, emit: false } }, cwd: repositoryRoot, fileSystem, compilerOptions, version: '0.0.0-test' });
+        expect(withoutBarrel.diagnostics).toEqual([]);
+        expect(withoutBarrel.files.some((file) => file.path.endsWith('types.gen.ts'))).toBe(false);
+        expect(withoutBarrel.files.some((file) => file.path.endsWith('context.gen.ts'))).toBe(true);
     });
 
     it('maps every property from the model: lowercased field id, query field id equal to it, type from the declaration', () => {
@@ -255,13 +270,13 @@ describe('runGenerate() and checkGenerated()', () => {
 
     it('writes every file once and reports them unchanged on the second run', () => {
         const first = runGenerate(options);
-        expect(first.writtenFiles).toHaveLength(7);
+        expect(first.writtenFiles).toHaveLength(8);
         expect(first.unchangedFiles).toEqual([]);
         expect(nodeFileSystem.existsSync(nodePath.join(outDir, 'SalesOrder.gen.ts'))).toBe(true);
 
         const second = runGenerate(options);
         expect(second.writtenFiles).toEqual([]);
-        expect(second.unchangedFiles).toHaveLength(7);
+        expect(second.unchangedFiles).toHaveLength(8);
     });
 
     it('detects drift and missing files without writing', () => {
@@ -320,7 +335,7 @@ describe('planGeneration() – diagnostics', () => {
         expect(plan.diagnostics).toEqual([
             expect.objectContaining({ exportName: 'Unmappable', message: "Property 'Unmappable.extra' has type 'Map<string, string>', which does not map to a NetSuite field type. Declare it with @Field({ type }), type it as a model class, or mark it @NotMapped()." }),
         ]);
-        expect(plan.files.map((file) => nodePath.basename(file.path))).toEqual(['Unmappable.gen.ts']);
+        expect(plan.files.map((file) => nodePath.basename(file.path))).toEqual(['Unmappable.gen.ts', 'types.gen.ts']);
     });
 
     it('reports transforms that are not exported', () => {
