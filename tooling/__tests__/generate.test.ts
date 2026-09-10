@@ -343,7 +343,7 @@ describe('planGeneration() – diagnostics', () => {
             "Property 'BadRelations.tags' is an array; use @Sublist() on it, @Subrecord() and @Reference() apply to object properties.",
             "Sublist 'BadRelationsOwner.parents' ('parents') has no way back to its parent: mark the property of 'BadRelations' holding the parent's internal id with @ParentId(), or name the relationship with @Sublist('parents', { relationship }).",
             "Reference 'BadRelationsOwner.parent' needs a select field: declare 'parentId', name one with @Reference('<property>'), or mark the property @Subrecord() if it is one.",
-            "Sublist 'BadRelationsOwner.joinedElsewhere' ('lines') names a query type ('transaction') for its own query, so it must load separately; add load: 'separate'.",
+            "Sublist 'BadRelationsOwner.joinedElsewhere' ('lines') names a query type ('transaction') for its own query, which cannot be joined into the owner's. Remove load: 'join'.",
             "Reference 'BadTargetKey.owner' matches on 'BadRelationsOwner.ghost', which is not a mapped field.",
             "Reference 'BadTargetKey.joined' matches on 'BadRelationsOwner.id' and must load separately; N/query joins only through the target's internal id. Remove load: 'join'.",
         ]);

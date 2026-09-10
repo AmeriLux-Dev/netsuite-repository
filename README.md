@@ -84,7 +84,7 @@ export class SalesOrder extends Transaction {
     @Field('shipmethod') shipMethodId!: number | null;
     @Field('foreigntotal') @ReadOnly() total!: number;
     /** The item lines: queried from the `transaction` root through `transactionlines` (a `salesorder` root has no join to its lines), without the header line. */
-    @Sublist('item', { load: 'separate', queryType: 'transaction', relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }) lines!: TransactionLine[];
+    @Sublist('item', { queryType: 'transaction', relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }) lines!: TransactionLine[];
 }
 ```
 
@@ -121,7 +121,7 @@ The class decorator is only ever `@RecordType`. A sublist line class is a record
 | Sublist join | `joinFrom` through the line class's `@ParentId()` field | `@Sublist('x', { relationship })` for `autoJoin` on a relationship field; needed when the root has no reverse join for the line's field (a `salesorder` root reaches its lines through `transactionlines`, not through `transactionline.transaction`) |
 | Sublist rows | every row of the line type | `@Sublist('x', { filter: [...] })` |
 | Loading | `join`: read in the parent's query; NetSuite decides inner or outer | `load: 'separate'` on `@Sublist`, `@Subrecord`, `@Reference` |
-| Root of a separate line query | the owner's query type | `@Sublist('item', { load: 'separate', queryType: 'transaction', relationship: 'transactionlines' })` when the lines hang off another record than the owner (a `salesorder` root has no join to its lines; `transaction` has); lines are matched to the owner by internal id |
+| Root of the line query | the owner's query type | `@Sublist('item', { queryType: 'transaction', relationship: 'transactionlines' })` when the lines hang off another record than the owner (a `salesorder` root has no join to its lines; `transaction` has); the lines then run as their own query, matched to the owner by internal id |
 | Record set name | pluralized camel-case class name | `@RecordType('x', { setName })` |
 
 Nothing in the build step knows a NetSuite table, relationship, sublist, or field. What the table does not list is either derived from the class or resolved by N/query when the query runs. A missing declaration the build step needs is a diagnostic naming the decorator that supplies it.
@@ -144,7 +144,7 @@ References are read-only; write the select field (`customerId`) instead. A refer
 N/query has no join-type option: NetSuite decides whether a relationship joins inner or outer. Subrecords come back outer; the line join of a sublist is inner, so a query that reads lines returns only the parents that have matching lines. When parents must come back regardless, load the relation with a query of its own:
 
 ```ts
-@Sublist('item', { load: 'separate', queryType: 'transaction', relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }) lines!: TransactionLine[];
+@Sublist('item', { queryType: 'transaction', relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }) lines!: TransactionLine[];
 ```
 
 `separate` runs one query for the parents and one per batch of parent ids for the relation, then stitches the lines in (`[]` when there are none, `null` for a subrecord or reference). Rows never fan out, `limit()` and `page()` count records, and a `where` on a field of the relation narrows the relation's rows rather than the parents. It costs one extra `run` per batch. A reference matched on a field other than the target's internal id (`targetKey`) always loads this way, because N/query joins only through internal ids.

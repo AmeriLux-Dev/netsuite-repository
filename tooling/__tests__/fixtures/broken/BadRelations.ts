@@ -33,8 +33,8 @@ export class BadRelationsOwner {
     id!: number;
     parents!: BadRelations[];
     parent?: BadRelations;
-    /** A query type of its own needs a separate load. */
-    @Sublist('lines', { queryType: 'transaction', relationship: 'transactionlines' }) joinedElsewhere!: BadRelations[];
+    /** A query type of its own cannot be joined into the owner's query. */
+    @Sublist('lines', { load: 'join', queryType: 'transaction', relationship: 'transactionlines' }) joinedElsewhere!: BadRelations[];
 }
 
 @RecordType('customrecord_code_owner')

@@ -57,7 +57,7 @@ export interface SublistOptions extends RelationOptions {
     /**
      * Root type of the separate line query when the lines are reached from another record than the owner's query
      * type: a sales order's lines hang off `transaction`, not `salesorder`. The lines are matched to the owner by
-     * internal id. Requires `load: 'separate'`.
+     * internal id, so the sublist loads separately; `load` need not be given.
      */
     queryType?: string;
 }

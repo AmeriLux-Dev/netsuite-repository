@@ -53,5 +53,5 @@ export class SalesOrder extends Transaction {
      * The item lines. A `salesorder` root has no join to its lines in N/query; the `transaction` root reaches them through
      * `transactionlines`, so the lines run as their own query on that root, matched to the order by id.
      */
-    @Sublist('item', { load: 'separate', queryType: 'transaction', relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }) lines!: TransactionLine[];
+    @Sublist('item', { queryType: 'transaction', relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }) lines!: TransactionLine[];
 }
