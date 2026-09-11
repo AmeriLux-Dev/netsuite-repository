@@ -215,8 +215,8 @@ npx netsuite-repository watch        # regenerate whenever a model file changes
 
 It writes:
 
-- `generated/<Class>.gen.ts` for every exported class, with everything for that class as named exports: the interface, extending the base class's interface and importing the referenced ones; and for record types also `<Class>Patch`, `<Class>Create`, the `<Class>Config` literal the runtime reads, and `<Class>Fields`, a constant whose properties mirror the model and hold its field paths (`SalesOrderFields.lines.item.type` is `'lines.item.type'`) for `where()`, `orderBy()`, and `select()`.
-- `generated/types.gen.ts`, a barrel of type-only re-exports: every class's interface and, for record types, `<Class>Patch` and `<Class>Create`. Import model types from it wherever the configs must stay out of the bundle, such as DTOs shared with a browser client; a bundler erases `import type` from it entirely. `types.fileName` renames it and `"types": { "emit": false }` leaves it out.
+- `generated/types.gen.ts`, the interface of every exported class (extending its base class's interface) and, for record types, `<Class>Patch` and `<Class>Create`. It holds types only, so a bundler erases any import of it: put DTOs shared with a browser client on it. `types.fileName` renames it, and `types.outDir` moves it to another directory, such as a `common/` workspace the client also compiles; every generated file imports it from there.
+- `generated/<Class>.gen.ts` for every record type, the runtime side: the `<Class>Config` literal the runtime reads, and `<Class>Fields`, a constant whose properties mirror the model and hold its field paths (`SalesOrderFields.lines.item.type` is `'lines.item.type'`) for `where()`, `orderBy()`, and `select()`. It re-exports the class's three types from the types file, so server code can import the type and the fields from one place.
 - `generated/context.gen.ts` with `AppSchema`, the `AppContext` type, `createAppContext()`, and `dbContext`: the record sets for reading without tracking, plus `withTracking()` for a fresh tracking context.
 - With `"repositories": "classes"`, each record type's file also exports `<Class>RepositoryBase`, a `RecordSet` bound to the config, and the context factory accepts subclasses through `createAppContext({ repositories })`.
 
@@ -343,7 +343,7 @@ Everything that touches NetSuite data lives in the repositories layer, and the c
 | Folder | Holds | Imports |
 |---|---|---|
 | `src/models/` | The decorated model classes (source, hand-written) | This package's decorators |
-| `src/repositories/generated/` | The build step's output: `<Class>.gen.ts`, `types.gen.ts`, and `context.gen.ts` | Never edited |
+| `src/repositories/generated/` | The build step's output: `<Class>.gen.ts` and `context.gen.ts`, plus `types.gen.ts` unless `types.outDir` moves it into the shared workspace | Never edited |
 | `src/specifications/` | One module per record type of `Specification` builders: the query vocabulary | `generated/`, this package's types |
 | `src/repositories/` | Query and write functions over `dbContext`: reads through its sets, writes through `withTracking()`, saved before the function returns | `generated/`, `specifications/` |
 | `src/services/` | Decisions: interpret the request, call repository functions, shape the result | `repositories/` (functions and model types only) |

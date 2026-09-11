@@ -21,7 +21,7 @@ describe('loadBuildConfig()', () => {
             models: ['models/*.ts'],
             outDir: 'models/generated',
             context: { name: 'Erp', fileName: 'erp.gen.ts' },
-            types: { emit: true, fileName: 'types.gen.ts' },
+            types: { fileName: 'types.gen.ts' },
             tsconfig: 'tsconfig.json',
             libraryModule: '@acme/orm',
             repositories: 'none',
@@ -42,12 +42,12 @@ describe('loadBuildConfig()', () => {
         expect(loadBuildConfig(fileSystem, cwd).context).toEqual({ name: 'Erp', fileName: 'context.gen.ts' });
     });
 
-    it('emits the type barrel by default, and accepts another .ts name or switching it off', () => {
-        expect(loadBuildConfig(createInMemoryFileSystemAdapter(), cwd).types).toEqual({ emit: true, fileName: 'types.gen.ts' });
-        const renamed = createInMemoryFileSystemAdapter({ [defaultConfigPath]: JSON.stringify({ types: { fileName: 'models.types.gen.ts' } }) });
-        expect(loadBuildConfig(renamed, cwd).types).toEqual({ emit: true, fileName: 'models.types.gen.ts' });
-        const off = createInMemoryFileSystemAdapter({ [defaultConfigPath]: JSON.stringify({ types: { emit: false } }) });
-        expect(loadBuildConfig(off, cwd).types).toEqual({ emit: false, fileName: 'types.gen.ts' });
+    it('puts the types file next to the other output by default, and accepts another .ts name or a directory of its own', () => {
+        expect(loadBuildConfig(createInMemoryFileSystemAdapter(), cwd).types).toEqual({ fileName: 'types.gen.ts' });
+        const renamed = createInMemoryFileSystemAdapter({ [defaultConfigPath]: JSON.stringify({ types: { fileName: 'models.gen.ts' } }) });
+        expect(loadBuildConfig(renamed, cwd).types).toEqual({ fileName: 'models.gen.ts' });
+        const shared = createInMemoryFileSystemAdapter({ [defaultConfigPath]: JSON.stringify({ types: { outDir: '../common/types' } }) });
+        expect(loadBuildConfig(shared, cwd).types).toEqual({ fileName: 'types.gen.ts', outDir: '../common/types' });
     });
 
     it('throws when an explicit config path does not exist', () => {
@@ -62,7 +62,7 @@ describe('loadBuildConfig()', () => {
 
     it('collects every validation problem', () => {
         const fileSystem = createInMemoryFileSystemAdapter({
-            [defaultConfigPath]: JSON.stringify({ models: [], outDir: ' ', context: { name: '1bad', fileName: 'x.js' }, types: { emit: 'yes', fileName: 'y.js' }, tsconfig: 5, libraryModule: '' }),
+            [defaultConfigPath]: JSON.stringify({ models: [], outDir: ' ', context: { name: '1bad', fileName: 'x.js' }, types: { fileName: 'y.js', outDir: ' ' }, tsconfig: 5, libraryModule: '' }),
         });
         let caught: unknown;
         try {
@@ -76,8 +76,8 @@ describe('loadBuildConfig()', () => {
             "'outDir' must be a non-empty string.",
             "'context.name' must be a valid identifier.",
             "'context.fileName' must end with '.ts'.",
-            "'types.emit' must be a boolean.",
             "'types.fileName' must end with '.ts'.",
+            "'types.outDir' must be a non-empty string.",
             "'tsconfig' must be a string path.",
             "'libraryModule' must be a non-empty string.",
         ]);

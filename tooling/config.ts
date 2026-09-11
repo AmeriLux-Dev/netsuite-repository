@@ -11,11 +11,14 @@ export interface BuildConfig {
         name: string;
         fileName: string;
     };
-    /** The generated type barrel: the interface and helper types of every class, re-exported type-only. */
+    /**
+     * The generated types file: the interface of every class and, for record types, the `<Class>Patch` and `<Class>Create`
+     * helper types. Type-only, so a browser client can import it without pulling the configs into its bundle.
+     */
     types: {
-        /** Whether to write the barrel at all (default true). */
-        emit: boolean;
         fileName: string;
+        /** Directory (relative to the config file's directory) receiving the types file; defaults to `outDir`. */
+        outDir?: string;
     };
     /** Optional tsconfig path (relative to the config file's directory) used to type-check model files; defaults to sensible compiler options. */
     tsconfig?: string;
@@ -40,7 +43,7 @@ export const defaultBuildConfig: BuildConfig = {
     models: ['src/models/**/*.ts'],
     outDir: 'src/repositories/generated',
     context: { name: 'App', fileName: 'context.gen.ts' },
-    types: { emit: true, fileName: 'types.gen.ts' },
+    types: { fileName: 'types.gen.ts' },
     libraryModule: '@amerilux/netsuite-repository',
     repositories: 'none',
 };
@@ -104,18 +107,18 @@ function validateBuildConfig(raw: Record<string, unknown>, configPath: string): 
         if (!types || typeof types !== 'object') {
             problems.push("'types' must be an object.");
         } else {
-            if (types.emit !== undefined) {
-                if (typeof types.emit === 'boolean') {
-                    config.types.emit = types.emit;
-                } else {
-                    problems.push("'types.emit' must be a boolean.");
-                }
-            }
             if (types.fileName !== undefined) {
                 if (typeof types.fileName === 'string' && types.fileName.endsWith('.ts')) {
                     config.types.fileName = types.fileName;
                 } else {
                     problems.push("'types.fileName' must end with '.ts'.");
+                }
+            }
+            if (types.outDir !== undefined) {
+                if (typeof types.outDir === 'string' && types.outDir.trim() !== '') {
+                    config.types.outDir = types.outDir;
+                } else {
+                    problems.push("'types.outDir' must be a non-empty string.");
                 }
             }
         }

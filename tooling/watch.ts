@@ -2,7 +2,7 @@ import * as nodePath from 'path';
 import type { BuildConfig } from './config';
 import { DEFAULT_BUILD_CONFIG_FILE_NAME } from './config';
 import type { FileSystemAdapter } from './file-system';
-import { runGenerate } from './generate';
+import { resolveTypesFilePath, runGenerate } from './generate';
 import type { GenerateOptions, GenerateResult } from './generate';
 
 export interface ModelWatcherOptions extends GenerateOptions {
@@ -48,6 +48,7 @@ export function createModelWatcher(options: ModelWatcherOptions): ModelWatcher {
     const generate = options.generate ?? runGenerate;
     const debounceMilliseconds = options.debounceMilliseconds ?? 200;
     const outDir = nodePath.resolve(options.cwd, options.config.outDir);
+    const typesFilePath = resolveTypesFilePath(options.config, options.cwd);
     let stopWatching: (() => void) | undefined;
     let pendingTimer: ReturnType<typeof setTimeout> | undefined;
     let running = false;
@@ -62,7 +63,7 @@ export function createModelWatcher(options: ModelWatcherOptions): ModelWatcher {
     };
 
     const scheduleRun = (changedPath: string): void => {
-        if (isInsideDirectory(changedPath, outDir)) {
+        if (isInsideDirectory(changedPath, outDir) || nodePath.resolve(changedPath) === typesFilePath) {
             return;
         }
         if (pendingTimer !== undefined) {

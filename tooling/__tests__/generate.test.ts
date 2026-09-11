@@ -54,8 +54,9 @@ describe('planGeneration() – model fixtures', () => {
     });
     const fileByName = new Map(plan.files.map((file) => [nodePath.basename(file.path), file.content]));
     const salesOrderConfig = fileByName.get('SalesOrder.gen.ts') as string;
+    const types = fileByName.get('types.gen.ts') as string;
 
-    it('reports no diagnostics, one record set per @RecordType class, and one generated file per class', () => {
+    it('reports no diagnostics, one record set per @RecordType class, one generated file per record type, and the types file', () => {
         expect(plan.diagnostics).toEqual([]);
         expect(plan.models).toEqual([
             expect.objectContaining({ modelName: 'Customer', setName: 'customers' }),
@@ -64,25 +65,53 @@ describe('planGeneration() – model fixtures', () => {
             expect.objectContaining({ modelName: 'TransactionLine', setName: 'transactionLines' }),
         ]);
         expect(Array.from(fileByName.keys()).sort()).toEqual([
-            'Customer.gen.ts', 'InventoryItem.gen.ts', 'SalesOrder.gen.ts',
-            'Transaction.gen.ts', 'TransactionAddress.gen.ts', 'TransactionLine.gen.ts',
+            'Customer.gen.ts', 'InventoryItem.gen.ts', 'SalesOrder.gen.ts', 'TransactionLine.gen.ts',
             'context.gen.ts', 'types.gen.ts',
         ]);
     });
 
-    it('emits a type-only barrel: every interface, plus the helper types of record types, sorted by class name', () => {
-        const types = fileByName.get('types.gen.ts') as string;
-        expect(types).toContain("export type { Customer, CustomerCreate, CustomerPatch } from './Customer.gen';\nexport type { InventoryItem, InventoryItemCreate, InventoryItemPatch } from './InventoryItem.gen';\nexport type { SalesOrder, SalesOrderCreate, SalesOrderPatch } from './SalesOrder.gen';\nexport type { Transaction } from './Transaction.gen';\nexport type { TransactionAddress } from './TransactionAddress.gen';\nexport type { TransactionLine, TransactionLineCreate, TransactionLinePatch } from './TransactionLine.gen';\n");
-        expect(types).not.toContain('import ');
+    it('emits the types file: every interface and the helper types of record types, sorted by class name, with no config', () => {
+        expect(types).toContain("import type { EntityCreate, EntityPatch } from '@amerilux/netsuite-repository';\n\nexport interface Customer {");
+        expect(types.match(/^export interface (\w+)/gm)).toEqual([
+            'export interface Customer', 'export interface InventoryItem', 'export interface SalesOrder',
+            'export interface Transaction', 'export interface TransactionAddress', 'export interface TransactionLine',
+        ]);
+        expect(types).toContain([
+            'export interface SalesOrder extends Transaction {',
+            '    poNumber: string | null;',
+            '    approved: boolean;',
+            '    shipMethodId: number | null;',
+            '    total: number;',
+            '    cachedLabel?: string;',
+            "    customer?: Pick<Customer, 'id' | 'companyName'>;",
+            '    lines: TransactionLine[];',
+            '}',
+            '',
+            '/** What `update()` takes for a SalesOrder: a deep partial; subrecords merge, sublists take { update, add, remove }. */',
+            'export type SalesOrderPatch = EntityPatch<SalesOrder>;',
+            '/** What `create()` takes for a SalesOrder: a deep partial with sublists as arrays of partial lines. */',
+            'export type SalesOrderCreate = EntityCreate<SalesOrder>;',
+        ].join('\n'));
+        expect(types).toContain('export interface Transaction {\n    id: number;\n    tranId: string;\n    tranDate: Date;\n    memo?: string | null;\n    customerId: number;\n    statusText: string;\n    shippingAddress: TransactionAddress;\n    billingAddress?: TransactionAddress;\n}\n');
+        expect(types).not.toContain('TransactionPatch');
+        expect(types).toContain('export interface TransactionAddress {\n    addr1: string | null;\n    city: string | null;\n    state: string | null;\n}');
+        expect(types).toContain("export interface TransactionLine {\n    id: number;\n    transactionId: number;\n    itemId: number;\n    quantity: number;\n    amount: number;\n    notes: string | null;\n    item?: Pick<InventoryItem, 'itemId' | 'displayName'>;\n}");
+        expect(types).toContain('export interface Customer {\n    id: number;\n    companyName: string;\n    email: string | null;\n    isInactive: boolean;\n    categoryIds: number[];\n}');
         expect(types).not.toContain('Config');
+        expect(types).not.toContain("from './");
     });
 
-    it('leaves the type barrel out when the config switches it off', () => {
-        const config = buildConfig(['tooling/__tests__/fixtures/models/**/*.ts'], outDir);
-        const withoutBarrel = planGeneration({ config: { ...config, types: { ...config.types, emit: false } }, cwd: repositoryRoot, fileSystem, compilerOptions, version: '0.0.0-test' });
-        expect(withoutBarrel.diagnostics).toEqual([]);
-        expect(withoutBarrel.files.some((file) => file.path.endsWith('types.gen.ts'))).toBe(false);
-        expect(withoutBarrel.files.some((file) => file.path.endsWith('context.gen.ts'))).toBe(true);
+    it('writes the types file into types.outDir and points every model file at it', () => {
+        const sharedDir = nodePath.join(outDir, 'common', 'types');
+        const config = buildConfig(['tooling/__tests__/fixtures/models/**/*.ts'], outDir, { types: { fileName: 'models.gen.ts', outDir: sharedDir } });
+        const shared = planGeneration({ config, cwd: repositoryRoot, fileSystem, compilerOptions, version: '0.0.0-test' });
+        expect(shared.diagnostics).toEqual([]);
+        expect(shared.files.map((file) => file.path)).toContain(nodePath.join(sharedDir, 'models.gen.ts'));
+        expect(shared.files.some((file) => file.path.endsWith('types.gen.ts'))).toBe(false);
+        const salesOrder = shared.files.find((file) => file.path.endsWith('SalesOrder.gen.ts'))?.content as string;
+        expect(salesOrder).toContain("import type { SalesOrder } from './common/types/models.gen';");
+        expect(salesOrder).toContain("export type { SalesOrder, SalesOrderCreate, SalesOrderPatch } from './common/types/models.gen';");
+        expect(shared.files.find((file) => file.path.endsWith('context.gen.ts'))?.path).toBe(nodePath.join(outDir, 'context.gen.ts'));
     });
 
     it('maps every property from the model: lowercased field id, query field id equal to it, type from the declaration', () => {
@@ -97,7 +126,7 @@ describe('planGeneration() – model fixtures', () => {
         expect(salesOrderConfig).toMatch(/tranId: \{[^}]*transform: uppercaseText,\n\s+recordFieldId: 'tranid'/);
         expect(salesOrderConfig).toMatch(/import \{ trimText, uppercaseText \} from '.*fixtures\/models\/shared';/);
         expect(salesOrderConfig).not.toMatch(/cachedLabel: \{/);
-        expect(salesOrderConfig).toContain('    cachedLabel?: string;');
+        expect(types).toContain('    cachedLabel?: string;');
         expect(salesOrderConfig).not.toContain('discriminator');
         expect(salesOrderConfig).not.toContain('tableAlias');
         expect(fileByName.get('InventoryItem.gen.ts')).toContain("recordType: 'inventoryitem',\n    queryType: 'inventoryitem',");
@@ -158,30 +187,12 @@ describe('planGeneration() – model fixtures', () => {
         expect(invoiceConfig).toContain("        shipments: {\n            path: 'shipments',\n            relationship: 'shipments',\n            load: 'separate',\n            join: {\n                kind: 'from',\n                fieldId: 'custrecord_shipment_invoice',\n                source: 'customrecord_shipment',\n            },\n            separate: {\n                queryType: 'customrecord_shipment',\n                parentKeyField: 'id',\n                targetKeyFieldId: 'custrecord_shipment_invoice',\n                targetKeyFieldType: 'select',\n            },\n            lineOrderFieldId: 'id',\n        },");
     });
 
-    it('emits one interface per class, extending the base and importing referenced types', () => {
-        expect(salesOrderConfig).toContain('//   Generated type, config, field paths, base repository for the SalesOrder model.');
-        expect(salesOrderConfig).toContain("import { RecordSet } from '@amerilux/netsuite-repository';\nimport type { EntityCreate, EntityPatch, QueryConfig, QueryConfigSource, RecordSetOptions } from '@amerilux/netsuite-repository';\nimport type { Customer } from './Customer.gen';\nimport type { Transaction } from './Transaction.gen';\nimport type { TransactionLine } from './TransactionLine.gen';");
-        expect(salesOrderConfig).toContain([
-            'export interface SalesOrder extends Transaction {',
-            '    poNumber: string | null;',
-            '    approved: boolean;',
-            '    shipMethodId: number | null;',
-            '    total: number;',
-            '    cachedLabel?: string;',
-            "    customer?: Pick<Customer, 'id' | 'companyName'>;",
-            '    lines: TransactionLine[];',
-            '}',
-            '',
-            '/** What `update()` takes for a SalesOrder: a deep partial; subrecords merge, sublists take { update, add, remove }. */',
-            'export type SalesOrderPatch = EntityPatch<SalesOrder>;',
-            '/** What `create()` takes for a SalesOrder: a deep partial with sublists as arrays of partial lines. */',
-            'export type SalesOrderCreate = EntityCreate<SalesOrder>;',
-        ].join('\n'));
-        expect(fileByName.get('Transaction.gen.ts')).toContain("import type { TransactionAddress } from './TransactionAddress.gen';\n\nexport interface Transaction {\n    id: number;\n    tranId: string;\n    tranDate: Date;\n    memo?: string | null;\n    customerId: number;\n    statusText: string;\n    shippingAddress: TransactionAddress;\n    billingAddress?: TransactionAddress;\n}\n");
-        expect(fileByName.get('Transaction.gen.ts')).not.toContain('EntityPatch');
-        expect(fileByName.get('TransactionAddress.gen.ts')).toContain('export interface TransactionAddress {\n    addr1: string | null;\n    city: string | null;\n    state: string | null;\n}');
-        expect(fileByName.get('TransactionLine.gen.ts')).toContain("export interface TransactionLine {\n    id: number;\n    transactionId: number;\n    itemId: number;\n    quantity: number;\n    amount: number;\n    notes: string | null;\n    item?: Pick<InventoryItem, 'itemId' | 'displayName'>;\n}");
-        expect(fileByName.get('Customer.gen.ts')).toContain('export interface Customer {\n    id: number;\n    companyName: string;\n    email: string | null;\n    isInactive: boolean;\n    categoryIds: number[];\n}');
+    it('emits the config of a record type importing its interface from the types file, and re-exporting the types', () => {
+        expect(salesOrderConfig).toContain('//   Generated config, field paths, base repository for the SalesOrder model.');
+        expect(salesOrderConfig).toContain("import { RecordSet } from '@amerilux/netsuite-repository';\nimport type { QueryConfig, QueryConfigSource, RecordSetOptions } from '@amerilux/netsuite-repository';\nimport type { SalesOrder } from './types.gen';");
+        expect(salesOrderConfig).toContain("export type { SalesOrder, SalesOrderCreate, SalesOrderPatch } from './types.gen';");
+        expect(salesOrderConfig).not.toContain('export interface');
+        expect(salesOrderConfig).not.toContain('EntityPatch');
         expect(fileByName.get('Customer.gen.ts')).toMatch(/categoryIds: \{[^}]*type: 'multiselect'/);
     });
 
@@ -260,7 +271,8 @@ describe('planGeneration() – model fixtures', () => {
             '    }',
             '}',
         ].join('\n'));
-        expect(fileByName.get('Transaction.gen.ts')).not.toContain('RepositoryBase');
+        expect(fileByName.has('Transaction.gen.ts')).toBe(false);
+        expect(types).not.toContain('RepositoryBase');
     });
 });
 
@@ -271,13 +283,13 @@ describe('runGenerate() and checkGenerated()', () => {
 
     it('writes every file once and reports them unchanged on the second run', () => {
         const first = runGenerate(options);
-        expect(first.writtenFiles).toHaveLength(8);
+        expect(first.writtenFiles).toHaveLength(6);
         expect(first.unchangedFiles).toEqual([]);
         expect(nodeFileSystem.existsSync(nodePath.join(outDir, 'SalesOrder.gen.ts'))).toBe(true);
 
         const second = runGenerate(options);
         expect(second.writtenFiles).toEqual([]);
-        expect(second.unchangedFiles).toHaveLength(8);
+        expect(second.unchangedFiles).toHaveLength(6);
     });
 
     it('detects drift and missing files without writing', () => {
@@ -336,7 +348,9 @@ describe('planGeneration() – diagnostics', () => {
         expect(plan.diagnostics).toEqual([
             expect.objectContaining({ exportName: 'Unmappable', message: "Property 'Unmappable.extra' has type 'Map<string, string>', which does not map to a NetSuite field type. Declare it with @Field({ type }), type it as a model class, or mark it @NotMapped()." }),
         ]);
-        expect(plan.files.map((file) => nodePath.basename(file.path))).toEqual(['Unmappable.gen.ts', 'types.gen.ts']);
+        expect(plan.files.map((file) => nodePath.basename(file.path))).toEqual(['types.gen.ts']);
+        expect(plan.files[0].content).toContain('export interface Unmappable {');
+        expect(plan.files[0].content).not.toContain('UnmappablePatch');
     });
 
     it('reports transforms that are not exported', () => {

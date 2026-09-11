@@ -1,33 +1,57 @@
 import { buildGeneratedFileHeader } from './header';
 
-export interface TypesFileClassReference {
+export interface TypesFileMember {
+    name: string;
+    optional: boolean;
+    typeText: string;
+}
+
+/** One class of the types file: its interface, and for a record type the `<Class>Patch` and `<Class>Create` helpers. */
+export interface TypesFileClass {
     className: string;
-    /** Whether the class's generated file also exports `<Class>Patch` and `<Class>Create` (a record type whose config serialized). */
+    /** Generated interface this one extends, when the model class has a collected base class. */
+    baseClassName?: string;
+    /** Own members only; inherited ones come from the base interface. */
+    members: TypesFileMember[];
+    /** Whether to emit `<Class>Patch` and `<Class>Create`: a record type whose config serialized. */
     helperTypes: boolean;
-    /** Import path (extension-less, relative) of the class's generated file. */
-    importPath: string;
 }
 
 export interface TypesFileEmitOptions {
-    classes: TypesFileClassReference[];
+    classes: TypesFileClass[];
+    libraryModule: string;
     version?: string;
 }
 
 /**
- * Emits `types.gen.ts`: a barrel of type-only re-exports, so the interface and helper types of every generated class
- * are importable from one file without touching the configs, and a bundler erases the import entirely.
+ * Emits the types file: the interface of every class, extending its base and referring to the other interfaces by
+ * name (they all live in this one file), and for record types `<Class>Patch` and `<Class>Create`. Everything in it is
+ * a type, so a bundler erases any import of it and a browser client can share it without the configs.
  */
 export function emitTypesFile(options: TypesFileEmitOptions): string {
     const sortedClasses = [...options.classes].sort((left, right) => left.className.localeCompare(right.className));
-    const header = buildGeneratedFileHeader('Type barrel: the interface and helper types of every generated model, re-exported type-only.', options.version);
-    return [
-        header,
-        ...sortedClasses.map((reference) => {
-            const names = reference.helperTypes
-                ? [reference.className, `${reference.className}Create`, `${reference.className}Patch`]
-                : [reference.className];
-            return `export type { ${names.join(', ')} } from '${reference.importPath}';`;
-        }),
-        '',
-    ].join('\n');
+    const lines: string[] = [buildGeneratedFileHeader('The interface of every model and the helper types of every record type. Type-only; safe to share with a client.', options.version)];
+
+    if (sortedClasses.some((reference) => reference.helperTypes)) {
+        lines.push(`import type { EntityCreate, EntityPatch } from '${options.libraryModule}';`, '');
+    }
+
+    sortedClasses.forEach((reference, index) => {
+        if (index > 0) lines.push('');
+        const extendsClause = reference.baseClassName ? ` extends ${reference.baseClassName}` : '';
+        lines.push(`export interface ${reference.className}${extendsClause} {`);
+        for (const member of reference.members) {
+            lines.push(`    ${member.name}${member.optional ? '?' : ''}: ${member.typeText};`);
+        }
+        lines.push('}');
+        if (reference.helperTypes) {
+            lines.push('', `/** What \`update()\` takes for a ${reference.className}: a deep partial; subrecords merge, sublists take { update, add, remove }. */`);
+            lines.push(`export type ${reference.className}Patch = EntityPatch<${reference.className}>;`);
+            lines.push(`/** What \`create()\` takes for a ${reference.className}: a deep partial with sublists as arrays of partial lines. */`);
+            lines.push(`export type ${reference.className}Create = EntityCreate<${reference.className}>;`);
+        }
+    });
+
+    lines.push('');
+    return lines.join('\n');
 }

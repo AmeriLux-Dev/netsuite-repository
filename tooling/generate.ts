@@ -11,9 +11,9 @@ import { compileModel } from './compile/compile-model';
 import type { BuildConfig } from './config';
 import { emitContextFile } from './emit/context-file-emitter';
 import { emitModelFile } from './emit/model-file-emitter';
-import type { FieldPathTree, FunctionImport, RecordTypeEmitOptions, TypeFileMember } from './emit/model-file-emitter';
+import type { FieldPathTree, FunctionImport } from './emit/model-file-emitter';
 import { emitTypesFile } from './emit/types-file-emitter';
-import type { TypesFileClassReference } from './emit/types-file-emitter';
+import type { TypesFileClass, TypesFileMember } from './emit/types-file-emitter';
 import { resolveGlobs, toPosixPath } from './file-system';
 import type { FileSystemAdapter } from './file-system';
 
@@ -66,6 +66,11 @@ function toImportPath(fromDirectory: string, toFile: string): string {
     return relative.startsWith('.') ? relative : `./${relative}`;
 }
 
+/** Where the types file goes: `types.outDir` when set, otherwise next to the other generated files. */
+export function resolveTypesFilePath(config: BuildConfig, cwd: string): string {
+    return nodePath.resolve(cwd, config.types.outDir ?? config.outDir, config.types.fileName);
+}
+
 /** Gives every exported function a unique identifier for generated imports; same-named exports from different files are aliased. */
 function buildFunctionImports(functionReferences: Map<Function, { exportName: string; filePath: string }>, outDir: string): FunctionImport[] {
     const usedIdentifiers = new Set<string>();
@@ -109,9 +114,9 @@ function buildFieldPathTree(fields: Array<{ name: string }>, relations: Resolved
     return tree;
 }
 
-function buildTypeFileMembers(model: ResolvedClass, classesByName: Map<string, ResolvedClass>): { members: TypeFileMember[]; imports: string[] } {
-    const members: TypeFileMember[] = [];
-    const imports: string[] = model.base ? [model.base.className] : [];
+/** The own members of a class as the types file declares them; inherited ones come from the base interface it extends. */
+function buildTypeFileMembers(model: ResolvedClass, classesByName: Map<string, ResolvedClass>): TypesFileMember[] {
+    const members: TypesFileMember[] = [];
     const ownFields = model.fields.filter((field) => !field.inherited || !model.base);
     const ownRelations = model.relations.filter((relation) => !relation.inherited || !model.base);
     for (const field of ownFields) {
@@ -121,10 +126,9 @@ function buildTypeFileMembers(model: ResolvedClass, classesByName: Map<string, R
         members.push({ name: property.name, optional: property.optional, typeText: property.typeText });
     }
     for (const relation of ownRelations) {
-        imports.push(relation.targetClassName);
         members.push({ name: relation.name, optional: relation.optional, typeText: relationTypeText(relation, classesByName.get(relation.targetClassName)) });
     }
-    return { members, imports };
+    return members;
 }
 
 /** Computes every generated file without touching disk. */
@@ -172,56 +176,44 @@ export function planGeneration(options: GenerateOptions): GenerationPlan {
         classesByName.set(model.className, model);
     }
 
-    const typeExports: TypesFileClassReference[] = [];
-    for (const model of classesByName.values()) {
-        const { members, imports } = buildTypeFileMembers(model, classesByName);
-        let record: RecordTypeEmitOptions | undefined;
+    // The types file may live outside outDir (a workspace shared with a client); every model file imports its interface from there.
+    const typesFilePath = resolveTypesFilePath(config, cwd);
+    const typesImportPath = toImportPath(outDir, typesFilePath);
 
+    const typesFileClasses: TypesFileClass[] = [];
+    for (const model of classesByName.values()) {
+        const members = buildTypeFileMembers(model, classesByName);
+        let helperTypes = false;
+
+        // One file per record type: its config, field paths, and optional base repository. A plain class has only its interface, in the types file.
         if (model.recordType !== undefined && !classesWithProblems.has(`${model.filePath}#${model.exportName}`)) {
             try {
-                record = {
+                const content = emitModelFile({
+                    className: model.className,
+                    libraryModule: config.libraryModule,
+                    typesImportPath,
                     config: compileModel(model),
                     functionImports,
                     fields: buildFieldPathTree(model.fields, model.relations),
                     repository: config.repositories === 'classes',
-                };
+                    version: options.version,
+                });
+                files.push({ path: nodePath.join(outDir, `${model.className}.gen.ts`), content });
+                models.push({ modelName: model.className, setName: model.setName ?? toRecordSetName(model.className), filePath: model.filePath });
+                helperTypes = true;
             } catch (error) {
+                // The config could not be compiled or serialized (an unexported transform, say): report it and still emit the type.
                 diagnostics.push({ filePath: model.filePath, exportName: model.exportName, message: error instanceof Error ? error.message : String(error) });
             }
         }
-
-        // One file per class: the interface always, and for a record type its config, field paths, and optional base repository.
-        const emit = (recordPart: RecordTypeEmitOptions | undefined) => emitModelFile({
-            className: model.className,
-            baseClassName: model.base?.className,
-            members,
-            imports,
-            libraryModule: config.libraryModule,
-            record: recordPart,
-            version: options.version,
-        });
-        let content: string;
-        let helperTypes = false;
-        try {
-            content = emit(record);
-            if (record) {
-                models.push({ modelName: model.className, setName: model.setName ?? toRecordSetName(model.className), filePath: model.filePath });
-                helperTypes = true;
-            }
-        } catch (error) {
-            // The config could not be serialized (an unexported transform, say): report it and still emit the type.
-            diagnostics.push({ filePath: model.filePath, exportName: model.exportName, message: error instanceof Error ? error.message : String(error) });
-            content = emit(undefined);
-        }
-        files.push({ path: nodePath.join(outDir, `${model.className}.gen.ts`), content });
-        typeExports.push({ className: model.className, helperTypes, importPath: `./${model.className}.gen` });
+        typesFileClasses.push({ className: model.className, baseClassName: model.base?.className, members, helperTypes });
     }
 
-    // One type-only barrel over every class, so consumers that must not touch the configs (a browser client's DTOs) import from one file.
-    if (config.types.emit && typeExports.length > 0) {
+    // Every interface in one type-only file, so consumers that must not touch the configs (a browser client's DTOs) import from it.
+    if (typesFileClasses.length > 0) {
         files.push({
-            path: nodePath.join(outDir, config.types.fileName),
-            content: emitTypesFile({ classes: typeExports, version: options.version }),
+            path: typesFilePath,
+            content: emitTypesFile({ classes: typesFileClasses, libraryModule: config.libraryModule, version: options.version }),
         });
     }
 
