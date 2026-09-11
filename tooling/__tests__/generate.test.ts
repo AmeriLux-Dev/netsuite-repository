@@ -402,6 +402,22 @@ describe('planGeneration() – diagnostics', () => {
         expect(plan.models).toHaveLength(1);
     });
 
+    it('reports a property typed as a class the model files do not export', () => {
+        const plan = planFor(['tooling/__tests__/fixtures/broken/UnexportedTarget.ts']);
+        expect(plan.diagnostics).toEqual([
+            expect.objectContaining({ exportName: 'UnexportedTarget', message: "Property 'UnexportedTarget.address' is typed as 'HiddenAddress', which is not an exported class in the model files." }),
+        ]);
+        expect(plan.models).toEqual([]);
+    });
+
+    it('reports an exported class expression, whose declaration the type checker cannot find by name', () => {
+        const plan = planFor(['tooling/__tests__/fixtures/broken/ClassExpression.ts']);
+        expect(plan.diagnostics).toEqual([
+            expect.objectContaining({ exportName: 'Renamed', message: "Could not read the TypeScript declaration of 'Renamed'." }),
+        ]);
+        expect(plan.files).toEqual([]);
+    });
+
     it('reports a diagnostic instead of silently producing nothing when no model files match', () => {
         const plan = planFor(['tooling/__tests__/fixtures/none/**/*.ts']);
         expect(plan.files).toEqual([]);
@@ -409,6 +425,21 @@ describe('planGeneration() – diagnostics', () => {
         expect(plan.diagnostics).toEqual([
             { filePath: repositoryRoot, message: expect.stringContaining("No model files matched the 'models' globs (tooling/__tests__/fixtures/none/**/*.ts)") },
         ]);
+    });
+});
+
+describe('planGeneration() – function imports', () => {
+    it('aliases same-named functions exported from different model files', () => {
+        const outDir = createTemporaryOutDir();
+        temporaryDirectories.push(outDir);
+        const plan = planGeneration({ config: buildConfig(['tooling/__tests__/fixtures/functions/*.ts'], outDir), cwd: repositoryRoot, fileSystem, compilerOptions, version: '0.0.0-test' });
+
+        expect(plan.diagnostics).toEqual([]);
+        const generated = plan.files.filter((file) => /Normalized\.gen\.ts$/.test(file.path)).map((file) => file.content);
+        expect(generated).toHaveLength(2);
+        expect(generated.join('\n')).toContain('import { normalizeText } from');
+        expect(generated.join('\n')).toContain('import { normalizeText as normalizeText_2 } from');
+        expect(generated.filter((content) => content.includes('transform: normalizeText_2'))).toHaveLength(1);
     });
 });
 

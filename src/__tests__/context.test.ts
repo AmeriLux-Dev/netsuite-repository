@@ -108,6 +108,13 @@ describe('RecordSet.submitPatch()', () => {
         const result = new RecordSet(customerConfig).submitPatch(1, { name: 'Acme' });
         expect(result.success).toBe(true);
     });
+
+    it('passes updater options through to the write', () => {
+        mockSubmitFields.mockReturnValue(1);
+        const result = new RecordSet(customerConfig).submitPatch(1, { name: 'Acme' }, { ignoreMandatoryFields: false, enableSourcing: true });
+        expect(result.success).toBe(true);
+        expect(mockSubmitFields).toHaveBeenCalledWith(expect.objectContaining({ options: { enableSourcing: true, ignoreMandatoryFields: false } }));
+    });
 });
 
 // ── NetSuiteContext ───────────────────────────────────────────────────────────
