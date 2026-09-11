@@ -21,6 +21,7 @@ describe('loadBuildConfig()', () => {
             models: ['models/*.ts'],
             outDir: 'models/generated',
             context: { name: 'Erp', fileName: 'erp.gen.ts' },
+            types: { fileName: 'types.gen.ts' },
             tsconfig: 'tsconfig.json',
             libraryModule: '@acme/orm',
             repositories: 'none',
@@ -41,6 +42,14 @@ describe('loadBuildConfig()', () => {
         expect(loadBuildConfig(fileSystem, cwd).context).toEqual({ name: 'Erp', fileName: 'context.gen.ts' });
     });
 
+    it('puts the types file next to the other output by default, and accepts another .ts name or a directory of its own', () => {
+        expect(loadBuildConfig(createInMemoryFileSystemAdapter(), cwd).types).toEqual({ fileName: 'types.gen.ts' });
+        const renamed = createInMemoryFileSystemAdapter({ [defaultConfigPath]: JSON.stringify({ types: { fileName: 'models.gen.ts' } }) });
+        expect(loadBuildConfig(renamed, cwd).types).toEqual({ fileName: 'models.gen.ts' });
+        const shared = createInMemoryFileSystemAdapter({ [defaultConfigPath]: JSON.stringify({ types: { outDir: '../common/types' } }) });
+        expect(loadBuildConfig(shared, cwd).types).toEqual({ fileName: 'types.gen.ts', outDir: '../common/types' });
+    });
+
     it('throws when an explicit config path does not exist', () => {
         expect(() => loadBuildConfig(createInMemoryFileSystemAdapter(), cwd, 'custom.json')).toThrow(BuildConfigError);
         expect(() => loadBuildConfig(createInMemoryFileSystemAdapter(), cwd, 'custom.json')).toThrow('file does not exist');
@@ -53,7 +62,7 @@ describe('loadBuildConfig()', () => {
 
     it('collects every validation problem', () => {
         const fileSystem = createInMemoryFileSystemAdapter({
-            [defaultConfigPath]: JSON.stringify({ models: [], outDir: ' ', context: { name: '1bad', fileName: 'x.js' }, tsconfig: 5, libraryModule: '' }),
+            [defaultConfigPath]: JSON.stringify({ models: [], outDir: ' ', context: { name: '1bad', fileName: 'x.js' }, types: { fileName: 'y.js', outDir: ' ' }, tsconfig: 5, libraryModule: '' }),
         });
         let caught: unknown;
         try {
@@ -67,10 +76,13 @@ describe('loadBuildConfig()', () => {
             "'outDir' must be a non-empty string.",
             "'context.name' must be a valid identifier.",
             "'context.fileName' must end with '.ts'.",
+            "'types.fileName' must end with '.ts'.",
+            "'types.outDir' must be a non-empty string.",
             "'tsconfig' must be a string path.",
             "'libraryModule' must be a non-empty string.",
         ]);
         expect(() => loadBuildConfig(createInMemoryFileSystemAdapter({ [defaultConfigPath]: JSON.stringify({ context: 'nope' }) }), cwd)).toThrow("'context' must be an object.");
+        expect(() => loadBuildConfig(createInMemoryFileSystemAdapter({ [defaultConfigPath]: JSON.stringify({ types: 'nope' }) }), cwd)).toThrow("'types' must be an object.");
     });
 });
 

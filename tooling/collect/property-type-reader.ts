@@ -184,11 +184,8 @@ export function readDeclaredClass(program: ts.Program, filePath: string, classNa
 
     const checker = program.getTypeChecker();
     const context: ReaderContext = { checker };
-    const classSymbol = checker.getSymbolAtLocation(declaration.name);
-    const classType = classSymbol ? checker.getDeclaredTypeOfSymbol(classSymbol) : undefined;
-    if (!classType) {
-        return undefined;
-    }
+    // For a class declaration node the checker answers with the instance type, never undefined.
+    const classType = checker.getTypeAtLocation(declaration);
 
     const extendsExpression = declaration.heritageClauses?.find((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword)?.types[0];
     const baseDeclaration = extendsExpression ? classDeclarationOfType(checker.getTypeAtLocation(extendsExpression.expression)) : undefined;

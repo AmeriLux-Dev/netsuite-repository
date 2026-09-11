@@ -4,7 +4,7 @@ const runtimeProject = {
     preset: 'ts-jest',
     testEnvironment: 'node',
     testMatch: ['<rootDir>/src/__tests__/**/*.test.ts'],
-    coveragePathIgnorePatterns: ['/node_modules/', '/tooling/'],
+    coveragePathIgnorePatterns: ['/node_modules/', '<rootDir>/tooling/'],
     moduleNameMapper: {
         '^N/(.*)$': '<rootDir>/src/__mocks__/netsuite/$1',
     },
@@ -14,7 +14,7 @@ const toolingProject = {
     displayName: 'tooling',
     testEnvironment: 'node',
     testMatch: ['<rootDir>/tooling/__tests__/**/*.test.ts'],
-    coveragePathIgnorePatterns: ['/node_modules/', '/src/', '/tooling/cli/bin\\.ts$'],
+    coveragePathIgnorePatterns: ['/node_modules/', '<rootDir>/src/', '<rootDir>/tooling/cli/bin\\.ts$'],
     transform: {
         '^.+\\.ts$': ['ts-jest', { tsconfig: '<rootDir>/tsconfig.tooling.test.json' }],
     },

@@ -11,6 +11,15 @@ export interface BuildConfig {
         name: string;
         fileName: string;
     };
+    /**
+     * The generated types file: the interface of every class and, for record types, the `<Class>Patch` and `<Class>Create`
+     * helper types. Type-only, so a browser client can import it without pulling the configs into its bundle.
+     */
+    types: {
+        fileName: string;
+        /** Directory (relative to the config file's directory) receiving the types file; defaults to `outDir`. */
+        outDir?: string;
+    };
     /** Optional tsconfig path (relative to the config file's directory) used to type-check model files; defaults to sensible compiler options. */
     tsconfig?: string;
     /** Module specifier model files import the library from, and generated files import the runtime from. */
@@ -31,9 +40,10 @@ export interface ResolvedBuildConfig extends BuildConfig {
 export const DEFAULT_BUILD_CONFIG_FILE_NAME = 'netsuite-repository.config.json';
 
 export const defaultBuildConfig: BuildConfig = {
-    models: ['src/models/**/*.ts', '!src/models/generated/**'],
-    outDir: 'src/models/generated',
+    models: ['src/models/**/*.ts'],
+    outDir: 'src/repositories/generated',
     context: { name: 'App', fileName: 'context.gen.ts' },
+    types: { fileName: 'types.gen.ts' },
     libraryModule: '@amerilux/netsuite-repository',
     repositories: 'none',
 };
@@ -54,6 +64,7 @@ function validateBuildConfig(raw: Record<string, unknown>, configPath: string): 
     const config: BuildConfig = {
         ...defaultBuildConfig,
         context: { ...defaultBuildConfig.context },
+        types: { ...defaultBuildConfig.types },
     };
 
     if (raw.models !== undefined) {
@@ -87,6 +98,27 @@ function validateBuildConfig(raw: Record<string, unknown>, configPath: string): 
                     config.context.fileName = context.fileName;
                 } else {
                     problems.push("'context.fileName' must end with '.ts'.");
+                }
+            }
+        }
+    }
+    if (raw.types !== undefined) {
+        const types = raw.types as Record<string, unknown> | null;
+        if (!types || typeof types !== 'object') {
+            problems.push("'types' must be an object.");
+        } else {
+            if (types.fileName !== undefined) {
+                if (typeof types.fileName === 'string' && types.fileName.endsWith('.ts')) {
+                    config.types.fileName = types.fileName;
+                } else {
+                    problems.push("'types.fileName' must end with '.ts'.");
+                }
+            }
+            if (types.outDir !== undefined) {
+                if (typeof types.outDir === 'string' && types.outDir.trim() !== '') {
+                    config.types.outDir = types.outDir;
+                } else {
+                    problems.push("'types.outDir' must be a non-empty string.");
                 }
             }
         }
@@ -131,7 +163,7 @@ export function loadBuildConfig(fileSystem: FileSystemAdapter, cwd: string, conf
         if (configPath !== undefined) {
             throw new BuildConfigError(resolvedPath, ['file does not exist.']);
         }
-        return { ...defaultBuildConfig, context: { ...defaultBuildConfig.context }, rootDirectory: cwd };
+        return { ...defaultBuildConfig, context: { ...defaultBuildConfig.context }, types: { ...defaultBuildConfig.types }, rootDirectory: cwd };
     }
 
     let raw: unknown;

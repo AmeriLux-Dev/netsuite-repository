@@ -16,7 +16,15 @@ export interface ContextFileEmitOptions {
     version?: string;
 }
 
-/** Emits `context.gen.ts`: the schema, the context type, and a factory; with repositories, also the generated bases and the option to swap in subclasses. */
+const dbContextComment = [
+    '/**',
+    ' * The record sets for reading, and withTracking() for writing. Reads go through one context that never',
+    ' * tracks, so dbContext is safe at module scope; withTracking() returns a new context each call, so a',
+    ' * change tracker lives only as long as the function that asked for it and saveChanges() on it.',
+    ' */',
+];
+
+/** Emits `context.gen.ts`: the schema, the context type, a factory, and `dbContext`; with repositories, also the generated bases and the option to swap in subclasses. */
 export function emitContextFile(options: ContextFileEmitOptions): string {
     const sortedModels = [...options.models].sort((left, right) => left.setName.localeCompare(right.setName));
     const { contextName, libraryModule } = options;
@@ -24,6 +32,20 @@ export function emitContextFile(options: ContextFileEmitOptions): string {
     const schema = [
         `export const ${contextName}Schema = {`,
         ...sortedModels.map((model) => `    ${model.setName}: ${model.modelName}Config,`),
+        '};',
+    ];
+    const readOnlyContextFunction = `getReadOnly${contextName}Context`;
+    const dbContextValue = [
+        `let readOnly${contextName}Context: ${contextName}Context | undefined;`,
+        '',
+        `function ${readOnlyContextFunction}(): ${contextName}Context {`,
+        `    if (!readOnly${contextName}Context) readOnly${contextName}Context = create${contextName}Context({ tracking: false });`,
+        `    return readOnly${contextName}Context;`,
+        '}',
+        '',
+        'export const dbContext: DbContext = {',
+        ...sortedModels.map((model) => `    get ${model.setName}() { return ${readOnlyContextFunction}().${model.setName}; },`),
+        '    withTracking,',
         '};',
     ];
 
@@ -41,6 +63,17 @@ export function emitContextFile(options: ContextFileEmitOptions): string {
             `export function create${contextName}Context(options?: NetSuiteContextOptions): ${contextName}Context {`,
             `    return createNetSuiteContext(${contextName}Schema, options);`,
             '}',
+            '',
+            ...dbContextComment,
+            `export type DbContext = Pick<${contextName}Context, keyof typeof ${contextName}Schema> & {`,
+            `    withTracking(options?: Omit<NetSuiteContextOptions, 'tracking'>): ${contextName}Context;`,
+            '};',
+            '',
+            `function withTracking(options: Omit<NetSuiteContextOptions, 'tracking'> = {}): ${contextName}Context {`,
+            `    return create${contextName}Context({ ...options, tracking: true });`,
+            '}',
+            '',
+            ...dbContextValue,
             '',
         ].join('\n');
     }
@@ -65,6 +98,17 @@ export function emitContextFile(options: ContextFileEmitOptions): string {
         `export function create${contextName}Context<TRepositories extends ${contextName}RepositoryMap = {}>(options: ContextFactoryOptions<TRepositories> = {}): ${contextName}Context<TRepositories> {`,
         `    return createNetSuiteContext(${contextName}Schema, { ...options, repositories: { ...${contextName}Repositories, ...options.repositories } }) as unknown as ${contextName}Context<TRepositories>;`,
         '}',
+        '',
+        ...dbContextComment,
+        `export type DbContext = Pick<${contextName}Context, keyof typeof ${contextName}Schema> & {`,
+        `    withTracking<TRepositories extends ${contextName}RepositoryMap = {}>(options?: Omit<ContextFactoryOptions<TRepositories>, 'tracking'>): ${contextName}Context<TRepositories>;`,
+        '};',
+        '',
+        `function withTracking<TRepositories extends ${contextName}RepositoryMap = {}>(options: Omit<ContextFactoryOptions<TRepositories>, 'tracking'> = {}): ${contextName}Context<TRepositories> {`,
+        `    return create${contextName}Context({ ...options, tracking: true });`,
+        '}',
+        '',
+        ...dbContextValue,
         '',
     ].join('\n');
 }

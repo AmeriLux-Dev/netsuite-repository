@@ -54,6 +54,12 @@ describe('applyEntityPatch() – subrecords', () => {
         expect(apply(order(), { shippingAddress: null }).shippingAddress).toBeNull();
     });
 
+    it('skips undefined nested values', () => {
+        const entity = apply(order(), { shippingAddress: { city: undefined }, lines: { update: [{ line: 1, quantity: undefined }] } });
+        expect(entity.shippingAddress).toEqual({ addr1: '1 Main', city: 'Dallas' });
+        expect(entity.lines[1]).toEqual({ line: 1, itemId: 11, quantity: 1 });
+    });
+
     it('rejects a scalar and an unknown nested property', () => {
         expect(() => apply(order(), { shippingAddress: 'Dallas' })).toThrow("Subrecord 'salesorder.shippingAddress' takes an object patch.");
         expect(() => apply(order(), { shippingAddress: { zip: '75001' } })).toThrow("'zip' is not a property of 'salesorder.shippingAddress'.");
@@ -97,6 +103,8 @@ describe('applyEntityPatch() – sublists', () => {
 
     it('rejects an array, a missing identity, an unknown line, and an unknown line property', () => {
         expect(() => apply(order(), { lines: [] })).toThrow("Sublist 'salesorder.lines' takes { update, add, remove }, not an array.");
+        expect(() => apply(order(), { lines: { update: [7] } })).toThrow("Line patches of 'salesorder.lines' must be objects.");
+        expect(() => apply(order(), { lines: { add: ['x'] } })).toThrow("Lines added to 'salesorder.lines' must be objects.");
         expect(() => apply(order(), { lines: { update: [{ quantity: 1 }] } })).toThrow("A line patch of 'salesorder.lines' needs a 'line' value.");
         expect(() => apply(order(), { lines: { update: [{ line: 7, quantity: 1 }] } })).toThrow("'salesorder.lines' has no line with line 7.");
         expect(() => apply(order(), { lines: { remove: [7] } })).toThrow("'salesorder.lines' has no line with line 7.");
