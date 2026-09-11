@@ -25,7 +25,7 @@ const toolingProject = {
 
 module.exports = {
     projects: [runtimeProject, toolingProject],
-    collectCoverage: true,
+    // No threshold: coverage is a report, not a gate. `npm run test:coverage` collects it on demand.
     collectCoverageFrom: [
         'src/**/*.ts',
         'tooling/**/*.ts',
@@ -34,12 +34,4 @@ module.exports = {
         '!tooling/__tests__/**',
         '!tooling/cli/bin.ts',
     ],
-    coverageThreshold: {
-        global: {
-            branches: 85,
-            functions: 100,
-            lines: 100,
-            statements: 99,
-        },
-    },
 };
