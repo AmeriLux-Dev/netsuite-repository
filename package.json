@@ -4,6 +4,10 @@
   "private": false,
   "description": "Entity Framework style data access for NetSuite SuiteScript: decorated models, a build step that generates configs and types, typed queries through the N/query object model, change tracking, and record updates. This is not for production use and is here for development and testing purposes only.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AmeriLux-Dev/netsuite-repository.git"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
