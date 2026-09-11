@@ -3,6 +3,8 @@ name: Publish to npm
 on:
   release:
     types: [published]
+  # Manual runs publish the selected branch or tag. They re-run the tests, since nothing else has verified that ref.
+  workflow_dispatch:
 
 jobs:
   publish:
@@ -22,6 +24,9 @@ jobs:
 
       - run: npm run build
 
-      - run: npm test
+      # Release runs skip this: the CI workflow already tested the tagged commit.
+      - name: Test (manual runs only)
+        if: github.event_name == 'workflow_dispatch'
+        run: npm test
 
       - run: npm publish --access public --provenance
