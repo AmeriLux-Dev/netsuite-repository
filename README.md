@@ -338,7 +338,7 @@ Either way:
 
 ### Layering
 
-The generated file names the context `UnitOfWork` and exports `openUnitOfWork()` so a project can keep data access in one layer without writing any unit-of-work code of its own. The layout the defaults assume, and what each layer may import:
+The generated file names the context `UnitOfWork` and exports `openUnitOfWork()` so a project can keep data access in one layer without writing any unit-of-work code of its own. The layout the defaults assume, and what each layer may import (the `models` globs decide where the model classes live; a project that shares them with a browser client keeps them in a `common/` workspace and points the globs there):
 
 | Folder | Holds | Imports |
 |---|---|---|
@@ -455,4 +455,4 @@ The runtime entry points never import Node modules, so the SuiteScript bundle st
 
 ## Design notes
 
-`docs/entity-conventions-redesign.md` records why the surface looks the way it does: the three rules, the vocabulary, the decisions taken along the way, and the 1.0.0 move to the N/query object model. `experiments/` holds the sandbox probes that established what N/query resolves on its own.
+`docs/entity-conventions-redesign.md` records why the surface looks the way it does: the three rules, the vocabulary, the decisions taken along the way, and the 1.0.0 move to the N/query object model.

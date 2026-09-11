@@ -308,7 +308,7 @@ Runtime constraint, restated because it decides the shape: all of this runs in S
 
 Applied 2026-09-09. The runtime no longer renders SuiteQL text. A query is built with `query.create`, the joins with
 `autoJoin`, `joinTo`, and `joinFrom`, the columns, conditions, and sorts with the matching `create*` calls, and it
-runs with `run` or `runPaged`. `toSuiteQL` is kept only as a debugging view. Three sandbox probes (`experiments/`)
+runs with `run` or `runPaged`. `toSuiteQL` is kept only as a debugging view. Three sandbox probes (kept outside the repository)
 established what the object model resolves on its own; the rest of the design follows from one rule the user set:
 **the library carries no NetSuite metadata or schema**. Types that mirror the N/query API are fine; anything that
 would have to change when NetSuite changes a table, field, relationship, or sublist is not.
