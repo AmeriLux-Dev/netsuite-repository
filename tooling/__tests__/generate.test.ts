@@ -191,6 +191,7 @@ describe('planGeneration() – model fixtures', () => {
         expect(context).toContain('export const AppRepositories = {\n    customers: CustomerRepositoryBase,\n    inventoryItems: InventoryItemRepositoryBase,\n    salesOrders: SalesOrderRepositoryBase,\n    transactionLines: TransactionLineRepositoryBase,\n};');
         expect(context).toContain('export type AppContext<TRepositories extends AppRepositoryMap = {}> = NetSuiteContextInstance<typeof AppSchema, MergeRepositories<typeof AppRepositories, TRepositories>>;');
         expect(context).toContain('export function createAppContext<TRepositories extends AppRepositoryMap = {}>(options: ContextFactoryOptions<TRepositories> = {}): AppContext<TRepositories> {');
+        expect(context).toContain('export const dbContext: DbContext = {\n    get customers() { return getReadOnlyAppContext().customers; },\n    get inventoryItems() { return getReadOnlyAppContext().inventoryItems; },\n    get salesOrders() { return getReadOnlyAppContext().salesOrders; },\n    get transactionLines() { return getReadOnlyAppContext().transactionLines; },\n    withTracking,\n};');
         expect(context).not.toContain('UnitOfWork');
     });
 
@@ -245,6 +246,8 @@ describe('planGeneration() – model fixtures', () => {
         const context = plain.files.find((file) => file.path.endsWith('context.gen.ts'))?.content as string;
         expect(context).toContain('export type AppContext = NetSuiteContextInstance<typeof AppSchema>;');
         expect(context).toContain('export function createAppContext(options?: NetSuiteContextOptions): AppContext {\n    return createNetSuiteContext(AppSchema, options);\n}');
+        expect(context).toContain("withTracking(options?: Omit<NetSuiteContextOptions, 'tracking'>): AppContext;");
+        expect(context).toContain('export const dbContext: DbContext = {');
         expect(context).not.toContain('UnitOfWork');
         expect(context).not.toContain('AppRepositories');
     });

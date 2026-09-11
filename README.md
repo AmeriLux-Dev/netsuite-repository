@@ -217,7 +217,7 @@ It writes:
 
 - `generated/<Class>.gen.ts` for every exported class, with everything for that class as named exports: the interface, extending the base class's interface and importing the referenced ones; and for record types also `<Class>Patch`, `<Class>Create`, the `<Class>Config` literal the runtime reads, and `<Class>Fields`, a constant whose properties mirror the model and hold its field paths (`SalesOrderFields.lines.item.type` is `'lines.item.type'`) for `where()`, `orderBy()`, and `select()`.
 - `generated/types.gen.ts`, a barrel of type-only re-exports: every class's interface and, for record types, `<Class>Patch` and `<Class>Create`. Import model types from it wherever the configs must stay out of the bundle, such as DTOs shared with a browser client; a bundler erases `import type` from it entirely. `types.fileName` renames it and `"types": { "emit": false }` leaves it out.
-- `generated/context.gen.ts` with `AppSchema`, the `AppContext` type, and `createAppContext()`.
+- `generated/context.gen.ts` with `AppSchema`, the `AppContext` type, `createAppContext()`, and `dbContext`: the record sets for reading without tracking, plus `withTracking()` for a fresh tracking context.
 - With `"repositories": "classes"`, each record type's file also exports `<Class>RepositoryBase`, a `RecordSet` bound to the config, and the context factory accepts subclasses through `createAppContext({ repositories })`.
 
 The build step reads the classes with the TypeScript type checker, so it sees every property, its declared type, `Pick` projections, and inheritance. Model files are also evaluated in a sandbox to collect the decorators; they may import the library and other model files by relative path, and nothing else. Anything that cannot be mapped is reported with the file, class, and property.
@@ -271,13 +271,13 @@ A patch is the entity's own shape made partial (`<Model>Patch` in the generated 
 
 Entities returned by `find()`, `getById()`, `list()`, `first()`, and `executeTyped()` are tracked. `saveChanges()` diffs each one against its snapshot and writes the difference through the record updater: body-only changes use `submitFields`, and anything touching a subrecord or sublist loads, mutates, and saves. Lines are matched by their line key. Added entities get their new id written back. `planChanges()` shows what would happen without calling NetSuite, and both take `{ entities }` to work on a subset. Changes to a referenced record's fields are reported as ignored, never written.
 
-Use `asNoTracking()` for reporting reads, and `{ tracking: false }` on `createAppContext()` for contexts that never write. Contexts hold tracked entities strongly, so never keep one at module scope: create it inside the function that needs it and let it go when that function returns. The Layering section below says where that happens.
+Use `asNoTracking()` for reporting reads, and `{ tracking: false }` on `createAppContext()` for contexts that never write. Contexts hold tracked entities strongly, so never keep a tracking one at module scope. The generated `dbContext` is safe there: its record sets (`dbContext.salesOrders`) read through one context that never tracks, and `dbContext.withTracking()` returns a new context each call, so a tracker lives only as long as the function that asked for it. The Layering section below says where that happens.
 
 ## Repositories
 
 The record set on the context is the repository, the way a DbSet is in Entity Framework, and the context is its unit of work: the change tracker that `saveChanges()` writes. Domain queries are built from specifications: plain functions over the query builder that `list`, `first`, `count`, and `exists` apply in order.
 
-The simplest home for them is a module of functions, each of which creates the context it needs:
+The simplest home for them is a module of functions over the generated `dbContext`: reads through its sets, writes through `withTracking()`:
 
 ```ts
 // specifications/salesOrders.ts
@@ -289,17 +289,17 @@ export const forCustomer = (customerId: number): Specification<SalesOrder> => (q
 export const pendingFulfillment = (): Specification<SalesOrder> => (query) => query.where(so.status, '=', 'SalesOrd:B');
 
 // repositories/salesOrders.ts
-import { createAppContext } from './generated/context.gen';
+import { dbContext } from './generated/context.gen';
 import type { SalesOrder } from './generated/SalesOrder.gen';
 import { SalesOrderFields as so } from './generated/SalesOrder.gen';
 import { forCustomer, pendingFulfillment } from '../specifications/salesOrders';
 
 export function listPendingSalesOrders(customerId: number): SalesOrder[] {
-    return createAppContext({ tracking: false }).salesOrders.list(forCustomer(customerId), pendingFulfillment(), (query) => query.orderByAsc(so.tranDate));
+    return dbContext.salesOrders.list(forCustomer(customerId), pendingFulfillment(), (query) => query.orderByAsc(so.tranDate));
 }
 
 export function approveSalesOrder(salesOrderId: number, memo: string): SalesOrder {
-    return createAppContext().salesOrders.update(salesOrderId, { memo }, { beforeSave: (plan) => log.debug('approve plan', plan.entries) });
+    return dbContext.withTracking().salesOrders.update(salesOrderId, { memo }, { beforeSave: (plan) => log.debug('approve plan', plan.entries) });
 }
 
 // services/salesOrders.ts
@@ -313,7 +313,7 @@ export function approveOldestPendingSalesOrder(customerId: number): SalesOrder |
 
 Nothing is registered, a function can read several record sets, and the service above never sees the context or the library. Writes wrap the set's `create()`, `update()`, and `delete()` the same way: the module adds the validation and the domain name, the set does the loading, planning, and saving. This is the style to reach for first. Keep the specifications in a module of their own, one per record type, and the query functions in another; the predicates then read as a vocabulary and the functions as sentences built from it.
 
-A flow that reads several records, changes them, and writes them back is one repository function too: it creates a tracking context, does the reads, mutates the entities, and calls `saveChanges()` once before it returns. The tracker is shared by everything inside that function and by nothing outside it, so the service that calls it still sees only a domain name and a result.
+A flow that reads several records, changes them, and writes them back is one repository function too: it keeps `dbContext.withTracking()` in a local, does the reads through that, mutates the entities, and calls `saveChanges()` on it once before it returns. The tracker is shared by everything inside that function and by nothing outside it, so the service that calls it still sees only a domain name and a result.
 
 If you prefer the queries on the set itself, set `"repositories": "classes"` in the build config. The build step then emits a base repository per record type; extend it and register the subclass when the context is created:
 
@@ -345,13 +345,13 @@ Everything that touches NetSuite data lives in the repositories layer, and the c
 | `src/models/` | The decorated model classes (source, hand-written) | This package's decorators |
 | `src/repositories/generated/` | The build step's output: `<Class>.gen.ts`, `types.gen.ts`, and `context.gen.ts` | Never edited |
 | `src/specifications/` | One module per record type of `Specification` builders: the query vocabulary | `generated/`, this package's types |
-| `src/repositories/` | Query and write functions: each creates the context it needs, composes specifications, and saves before it returns | `generated/`, `specifications/` |
+| `src/repositories/` | Query and write functions over `dbContext`: reads through its sets, writes through `withTracking()`, saved before the function returns | `generated/`, `specifications/` |
 | `src/services/` | Decisions: interpret the request, call repository functions, shape the result | `repositories/` (functions and model types only) |
 | Endpoints, entry points | Parse the request, call a service, shape the reply | `services/` only |
 
-A repository function creates its context on entry and drops it on return, so a read-only function passes `{ tracking: false }` and a writing function finishes its own write. Two repository functions never share a tracker; when a flow needs one, the flow is a single repository function. Nothing is memoized at module scope, so the lifetime is visible in the code and does not depend on how NetSuite instantiates modules.
+A read goes through `dbContext.<set>` and tracks nothing. A write calls `dbContext.withTracking()`, keeps the result in a local, and finishes its own write before returning. Two repository functions never share a tracker; when a flow needs one, the flow is a single repository function. The only module-scope state is the read-only context behind `dbContext`, which holds no entities, so lifetimes stay visible in the code and do not depend on how NetSuite instantiates modules.
 
-A repository test mocks the generated `createAppContext` and returns a fake with the sets the function reads; a service test mocks the repository module. `N/record`, `N/query`, `N/search`, and `context.gen` are never imported above the repositories layer, which a lint rule can enforce per folder.
+A repository test mocks the generated `dbContext` with a fake carrying the sets the function reads; a service test mocks the repository module. `N/record`, `N/query`, `N/search`, and `context.gen` are never imported above the repositories layer, which a lint rule can enforce per folder.
 
 ## Queries
 

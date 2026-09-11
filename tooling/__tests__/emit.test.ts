@@ -233,6 +233,9 @@ describe('emitContextFile()', () => {
         expect(output).toContain('export type AppRepositoryMap = RepositoryMap<typeof AppSchema>;');
         expect(output).toContain('export type AppContext<TRepositories extends AppRepositoryMap = {}> = NetSuiteContextInstance<typeof AppSchema, MergeRepositories<typeof AppRepositories, TRepositories>>;');
         expect(output).toContain('export function createAppContext<TRepositories extends AppRepositoryMap = {}>(options: ContextFactoryOptions<TRepositories> = {}): AppContext<TRepositories> {\n    return createNetSuiteContext(AppSchema, { ...options, repositories: { ...AppRepositories, ...options.repositories } }) as unknown as AppContext<TRepositories>;\n}');
+        expect(output).toContain("export type DbContext = Pick<AppContext, keyof typeof AppSchema> & {\n    withTracking<TRepositories extends AppRepositoryMap = {}>(options?: Omit<ContextFactoryOptions<TRepositories>, 'tracking'>): AppContext<TRepositories>;\n};");
+        expect(output).toContain("function withTracking<TRepositories extends AppRepositoryMap = {}>(options: Omit<ContextFactoryOptions<TRepositories>, 'tracking'> = {}): AppContext<TRepositories> {\n    return createAppContext({ ...options, tracking: true });\n}");
+        expect(output).toContain('export const dbContext: DbContext = {\n    get customers() { return getReadOnlyAppContext().customers; },\n    get salesOrders() { return getReadOnlyAppContext().salesOrders; },\n    withTracking,\n};');
         expect(output).not.toContain('UnitOfWork');
     });
 
@@ -249,6 +252,9 @@ describe('emitContextFile()', () => {
         expect(output).not.toContain('RepositoryBase');
         expect(output).toContain('export type AppContext = NetSuiteContextInstance<typeof AppSchema>;');
         expect(output).toContain('export function createAppContext(options?: NetSuiteContextOptions): AppContext {\n    return createNetSuiteContext(AppSchema, options);\n}');
+        expect(output).toContain("export type DbContext = Pick<AppContext, keyof typeof AppSchema> & {\n    withTracking(options?: Omit<NetSuiteContextOptions, 'tracking'>): AppContext;\n};");
+        expect(output).toContain('let readOnlyAppContext: AppContext | undefined;\n\nfunction getReadOnlyAppContext(): AppContext {\n    if (!readOnlyAppContext) readOnlyAppContext = createAppContext({ tracking: false });\n    return readOnlyAppContext;\n}');
+        expect(output).toContain('export const dbContext: DbContext = {\n    get customers() { return getReadOnlyAppContext().customers; },\n    withTracking,\n};');
         expect(output).not.toContain('UnitOfWork');
     });
 });
