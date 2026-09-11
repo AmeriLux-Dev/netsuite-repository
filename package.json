@@ -1,6 +1,6 @@
 {
   "name": "@amerilux/netsuite-repository",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": false,
   "description": "Entity Framework style data access for NetSuite SuiteScript: decorated models, a build step that generates configs and types, typed queries through the N/query object model, change tracking, and record updates. This is not for production use and is here for development and testing purposes only.",
   "license": "MIT",
