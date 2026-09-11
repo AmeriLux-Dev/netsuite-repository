@@ -191,8 +191,7 @@ describe('planGeneration() – model fixtures', () => {
         expect(context).toContain('export const AppRepositories = {\n    customers: CustomerRepositoryBase,\n    inventoryItems: InventoryItemRepositoryBase,\n    salesOrders: SalesOrderRepositoryBase,\n    transactionLines: TransactionLineRepositoryBase,\n};');
         expect(context).toContain('export type AppContext<TRepositories extends AppRepositoryMap = {}> = NetSuiteContextInstance<typeof AppSchema, MergeRepositories<typeof AppRepositories, TRepositories>>;');
         expect(context).toContain('export function createAppContext<TRepositories extends AppRepositoryMap = {}>(options: ContextFactoryOptions<TRepositories> = {}): AppContext<TRepositories> {');
-        expect(context).toContain('export type UnitOfWork<TRepositories extends AppRepositoryMap = {}> = AppContext<TRepositories>;');
-        expect(context).toContain('export function openUnitOfWork<TRepositories extends AppRepositoryMap = {}>(options: ContextFactoryOptions<TRepositories> = {}): UnitOfWork<TRepositories> {');
+        expect(context).not.toContain('UnitOfWork');
     });
 
     it('emits a fields constant per record type with the path of every field, nested by relation', () => {
@@ -246,8 +245,7 @@ describe('planGeneration() – model fixtures', () => {
         const context = plain.files.find((file) => file.path.endsWith('context.gen.ts'))?.content as string;
         expect(context).toContain('export type AppContext = NetSuiteContextInstance<typeof AppSchema>;');
         expect(context).toContain('export function createAppContext(options?: NetSuiteContextOptions): AppContext {\n    return createNetSuiteContext(AppSchema, options);\n}');
-        expect(context).toContain('export type UnitOfWork = AppContext;');
-        expect(context).toContain('export function openUnitOfWork(options?: NetSuiteContextOptions): UnitOfWork {\n    return createAppContext(options);\n}');
+        expect(context).not.toContain('UnitOfWork');
         expect(context).not.toContain('AppRepositories');
     });
 

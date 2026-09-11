@@ -7,7 +7,7 @@ export interface BuildConfig {
     /** Directory (relative to the config file's directory) receiving the generated files. */
     outDir: string;
     context: {
-        /** Prefix for the generated context: `AppSchema`, `AppContext`, `createAppContext()`. The unit-of-work names `UnitOfWork` and `openUnitOfWork()` carry no prefix. */
+        /** Prefix for the generated context: `AppSchema`, `AppContext`, `createAppContext()`. */
         name: string;
         fileName: string;
     };
