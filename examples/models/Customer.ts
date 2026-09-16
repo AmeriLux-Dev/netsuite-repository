@@ -1,6 +1,6 @@
-import { Field, ReadOnly, RecordType } from '@amerilux/netsuite-repository';
+import { Field, NetsuiteRecordType, ReadOnly, RecordType } from '@amerilux/netsuite-repository';
 
-@RecordType('customer')
+@RecordType(NetsuiteRecordType.CUSTOMER)
 export class Customer {
     id!: number;
     @Field('companyname') companyName!: string;

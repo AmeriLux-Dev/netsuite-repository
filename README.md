@@ -178,7 +178,7 @@ A base class without `@RecordType` is a mapping base whose members are inherited
 
 | Decorator | Where | Purpose |
 | --- | --- | --- |
-| `@RecordType(id, { queryType?, filter?, setName?, coerce?, updater? })` | class | A queryable record type with a record set on the context. `updater` sets the default `RecordUpdaterOptions` for every write. |
+| `@RecordType(id, { queryType?, filter?, setName?, coerce?, updater? })` | class | A queryable record type with a record set on the context. `id` is a native type from `NetsuiteRecordType` (`NetsuiteRecordType.SALES_ORDER`, a runtime copy of N/record's `Type` so the model needs no N/* import) or a custom record id (`'customrecord_x'`). `updater` sets the default `RecordUpdaterOptions` for every write. |
 | `@InternalId()` | property | The internal id when it is not `id`. |
 | `@ParentId()` | property | On a line class: the property holding the parent record's internal id. |
 | `@Field(id?, { queryFieldId?, type?, text?, coerce? })` | property | Renames the field, separates the query field id from the record field id, or overrides the inferred type. |
