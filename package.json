@@ -1,6 +1,6 @@
 {
   "name": "@amerilux/netsuite-repository",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "private": false,
   "description": "Entity Framework style data access for NetSuite SuiteScript: decorated models, a build step that generates configs and types, typed queries through the N/query object model, change tracking, and record updates. This is not for production use and is here for development and testing purposes only.",
   "license": "MIT",
@@ -71,6 +71,7 @@
     "README.md"
   ],
   "scripts": {
+    "generate:record-types": "node scripts/generateNetsuiteRecordTypes.mjs",
     "build": "npm run build:runtime && npm run build:tooling",
     "build:runtime": "tsc -p tsconfig.build.json",
     "build:tooling": "tsc -p tsconfig.tooling.json",
