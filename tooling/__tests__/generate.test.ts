@@ -187,6 +187,23 @@ describe('planGeneration() – model fixtures', () => {
         expect(invoiceConfig).toContain("        shipments: {\n            path: 'shipments',\n            relationship: 'shipments',\n            load: 'separate',\n            join: {\n                kind: 'from',\n                fieldId: 'custrecord_shipment_invoice',\n                source: 'customrecord_shipment',\n            },\n            separate: {\n                queryType: 'customrecord_shipment',\n                parentKeyField: 'id',\n                targetKeyFieldId: 'custrecord_shipment_invoice',\n                targetKeyFieldType: 'select',\n            },\n            lineOrderFieldId: 'id',\n        },");
     });
 
+    // N/query inside SuiteScript rejects some root fields as NOT_EXPOSED (a transaction's subsidiary) that a joined
+    // component carries (its main line): the field is read there, and still written through the record's own field.
+    it('reads a field through a relationship with its filter, sharing the join, and joins a reference through it from there', () => {
+        const joins = planGeneration({ config: buildConfig(['tooling/__tests__/fixtures/joins/*.ts'], outDir), cwd: repositoryRoot, fileSystem, compilerOptions, version: '0.0.0-test' });
+        expect(joins.diagnostics).toEqual([]);
+        const invoiceConfig = joins.files.find((file) => file.path.endsWith('/Invoice.gen.ts') || file.path.endsWith('\\Invoice.gen.ts'))?.content as string;
+        const invoiceNoteConfig = joins.files.find((file) => file.path.endsWith('InvoiceNote.gen.ts'))?.content as string;
+        const mainLineConditions = "            conditions: [\n                {\n                    fieldId: 'mainline',\n                    operator: 'IS',\n                    values: [\n                        true,\n                    ],\n                },\n            ],\n";
+        expect(invoiceConfig).toContain(`        transactionlines: {\n            path: 'transactionlines',\n            relationship: 'transactionlines',\n            load: 'join',\n            join: {\n                kind: 'auto',\n                fieldId: 'transactionlines',\n            },\n${mainLineConditions}        },`);
+        expect(invoiceConfig).toMatch(/subsidiaryId: \{\n\s+queryFieldId: 'subsidiary',\n\s+component: 'transactionlines',\n\s+type: 'select',\n\s+recordFieldId: 'subsidiary',\n\s+\},/);
+        expect(invoiceConfig).toMatch(/departmentId: \{\n\s+queryFieldId: 'department',\n\s+component: 'transactionlines',/);
+        expect(invoiceConfig).toContain("        subsidiary: {\n            path: 'subsidiary',\n            parent: 'transactionlines',\n            relationship: 'subsidiary',\n            load: 'join',\n            join: {\n                kind: 'to',\n                fieldId: 'subsidiary',\n                target: 'subsidiary',\n            },\n        },");
+        expect(invoiceNoteConfig).toContain(`        'invoice.transactionlines': {\n            path: 'invoice.transactionlines',\n            parent: 'invoice',\n            relationship: 'invoice',\n            load: 'join',\n            join: {\n                kind: 'auto',\n                fieldId: 'transactionlines',\n            },\n${mainLineConditions}        },`);
+        expect(invoiceNoteConfig).toMatch(/invoice_subsidiaryId: \{\n\s+queryFieldId: 'subsidiary',\n\s+component: 'invoice\.transactionlines',[^}]*nestPath: 'invoice\.subsidiaryId',\n\s+readonly: true,/);
+        expect(invoiceNoteConfig).toContain("            components: [\n                'invoice',\n                'invoice.transactionlines',\n            ],");
+    });
+
     it('emits the config of a record type importing its interface from the types file, and re-exporting the types', () => {
         expect(salesOrderConfig).toContain('//   Generated config, field paths, base repository for the SalesOrder model.');
         expect(salesOrderConfig).toContain("import { RecordSet } from '@amerilux/netsuite-repository';\nimport type { QueryConfig, QueryConfigSource, RecordSetOptions } from '@amerilux/netsuite-repository';\nimport type { SalesOrder } from './types.gen';");
@@ -384,6 +401,14 @@ describe('planGeneration() – diagnostics', () => {
             "Sublist 'BadRelationsOwner.joinedElsewhere' ('lines') names a query type ('transaction') for its own query, which cannot be joined into the owner's. Remove load: 'join'.",
             "Reference 'BadTargetKey.owner' matches on 'BadRelationsOwner.ghost', which is not a mapped field.",
             "Reference 'BadTargetKey.joined' matches on 'BadRelationsOwner.id' and must load separately; N/query joins only through the target's internal id. Remove load: 'join'.",
+        ]);
+    });
+
+    it('reports a field filter with no relationship, and two filters on one relationship', () => {
+        const plan = planFor(['tooling/__tests__/fixtures/broken/BadFieldRelationships.ts']);
+        expect(plan.diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
+            "Property 'FilterWithoutRelationship.subsidiaryId' declares a filter but no relationship to read it through; name the relationship field with @Field('subsidiary', { relationship, filter }), or remove the filter.",
+            "Properties 'ConflictingRelationshipFilters.departmentId' and 'ConflictingRelationshipFilters.locationId' read through 'transactionlines' with different filters; N/query joins a relationship once, so give them the same filter.",
         ]);
     });
 

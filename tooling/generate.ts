@@ -14,7 +14,7 @@ import { emitModelFile } from './emit/model-file-emitter';
 import type { FieldPathTree, FunctionImport } from './emit/model-file-emitter';
 import { emitTypesFile } from './emit/types-file-emitter';
 import type { TypesFileClass, TypesFileMember } from './emit/types-file-emitter';
-import { resolveGlobs, toPosixPath } from './file-system';
+import { globBaseDirectory, resolveGlobs, toPosixPath } from './file-system';
 import type { FileSystemAdapter } from './file-system';
 
 export interface GenerateOptions {
@@ -144,7 +144,12 @@ export function planGeneration(options: GenerateOptions): GenerationPlan {
         runtimeApi: runtime,
     });
     const diagnostics = [...evaluation.diagnostics];
-    if (modelFiles.length === 0) {
+    // A models folder that exists and holds no model yet is a project that has just started: nothing to generate.
+    // A folder that does not exist is a 'models' glob pointing at the wrong place.
+    const missingModelFolder = config.models
+        .filter((pattern) => !pattern.startsWith('!'))
+        .some((pattern) => !fileSystem.fileExists(nodePath.resolve(cwd, globBaseDirectory(pattern))));
+    if (modelFiles.length === 0 && missingModelFolder) {
         diagnostics.push({ filePath: cwd, message: `No model files matched the 'models' globs (${config.models.join(', ')}) under '${cwd}'. Check 'models' in the build config.` });
     }
     const functionImports = buildFunctionImports(evaluation.functionReferences, outDir);

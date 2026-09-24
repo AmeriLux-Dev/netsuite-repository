@@ -108,6 +108,7 @@ The class decorator is only ever `@RecordType`. A sublist line class is a record
 | Select field with no reference | a number or string like any other | `@Field('location', { type: 'select' })`: N/query compares select and key fields through `ANY_OF`, not `EQUAL` |
 | Read-only | the internal id, `text: true` fields, fields of a referenced record | `@ReadOnly()` |
 | Text of a select field | | `@Field({ queryFieldId: 'status', text: true })`, read in DISPLAY context |
+| Field the root does not expose | read on the root | `@Field('subsidiary', { relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [true] }] })`: read off the joined component, still written through the record's own field |
 | Query type | the record type | `@RecordType('x', { queryType })` |
 | Root filter | none | `@RecordType('x', { filter: [{ fieldId, operator, values }] })` |
 | Reference or subrecord | a plain class is a subrecord; a record class is a reference | `@Reference()`, `@Subrecord()` |
@@ -170,6 +171,26 @@ export class ItemFulfillment {
 
 A separate relation inside a separately loaded relation is not planned: compose it in the repository, as the order-processing test project does when it reads the fulfillments of a set of orders and stitches them onto the orders itself.
 
+### Fields the root does not expose
+
+N/query inside SuiteScript rejects some body fields on the root that the record itself has: a transaction's `subsidiary` fails with `NOT_EXPOSED - Field is marked as internal for channel SEARCH`, even though SuiteQL through the REST service reads it. Its main line carries the same value, so the field is read there:
+
+```ts
+@RecordType(NetsuiteRecordType.INVOICE, { queryType: 'transaction', filter: [{ fieldId: 'type', operator: 'ANY_OF', values: ['CustInvc'] }] })
+export class Invoice {
+    id!: number;
+    @Field('subsidiary', { type: 'select', relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [true] }] })
+    subsidiaryId!: number;
+    subsidiary?: Pick<Subsidiary, 'id' | 'name'>;   // joined from the main line, not from the root
+}
+```
+
+- The build step emits one component per relationship (`autoJoin` with the filter as its conditions) and puts the field on it; the value still lands at the root of the result (`invoice.subsidiaryId`), and `where()` and `orderBy()` on it join the same component.
+- The filter must pick one row per record. `mainline IS true` does, so rows never fan out and `page()` stays a row window.
+- Fields read through one relationship share its join, so they must declare the same filter; the build step reports two that differ, and a filter with no relationship.
+- A reference whose select field is read this way joins from that component. Loaded separately, it matches the collected values as any reference does.
+- Writes are unchanged: the field writes through the record's own field id. Mark it `@ReadOnly()` when the record has no such field.
+
 ### Inheritance
 
 A base class without `@RecordType` is a mapping base whose members are inherited. Each `@RecordType` class queries its own record type, so `salesorder` and `invoice` classes extending one `Transaction` base each read their own fields with no discriminator to declare.
@@ -181,7 +202,7 @@ A base class without `@RecordType` is a mapping base whose members are inherited
 | `@RecordType(id, { queryType?, filter?, setName?, coerce?, updater? })` | class | A queryable record type with a record set on the context. `id` is a native type from `NetsuiteRecordType` (`NetsuiteRecordType.SALES_ORDER`, a runtime copy of N/record's `Type` so the model needs no N/* import) or a custom record id (`'customrecord_x'`). `updater` sets the default `RecordUpdaterOptions` for every write. |
 | `@InternalId()` | property | The internal id when it is not `id`. |
 | `@ParentId()` | property | On a line class: the property holding the parent record's internal id. |
-| `@Field(id?, { queryFieldId?, type?, text?, coerce? })` | property | Renames the field, separates the query field id from the record field id, or overrides the inferred type. |
+| `@Field(id?, { queryFieldId?, type?, text?, coerce?, relationship?, filter? })` | property | Renames the field, separates the query field id from the record field id, overrides the inferred type, or reads the field through a relationship when the root does not expose it. |
 | `@ReadOnly()` | property | Excludes the property from writes. |
 | `@Reference(selectFieldProperty?, { targetKey?, load?, join? })` | property | A reference: the select field behind it, and the referenced property to match on when it is not the internal id. |
 | `@Subrecord(fieldId?, { clearListField?, load? })` | property | A subrecord: its field id and the list field cleared before an edit. |
@@ -373,10 +394,35 @@ db.salesOrders.query()
 - The operators and the value follow the property's declared type, and are translated to N/query's operators. Text takes `=`, `!=`, `LIKE`, `NOT LIKE`, `IN`, and `NOT IN`; a number adds `<`, `<=`, `>`, `>=`, and `BETWEEN`; a `Date` takes the comparisons and `BETWEEN` with `Date` values; a checkbox takes `=` and `!=` with a boolean or NetSuite's `'T'`/`'F'`. Every field takes `IS NULL` and `IS NOT NULL`; `null` is not a comparison value. The N/query operator names follow N/search's: `=` becomes `IS` on text and on a checkbox, `EQUAL` on a number, `ON` on a date, and `ANY_OF` on a select, multiselect, or key field (the internal id, a reference's select field, anything declared `type: 'select'`); `>=` on a date becomes `ON_OR_AFTER`; `LIKE 'Acme%'` becomes `START_WITH`, `'%Acme'` `ENDWITH`, `'%Acme%'` `CONTAIN`, and `'Acme'` `IS`; `IS NULL` becomes `EMPTY`. `IN` becomes `ANY_OF` on a select or key field; on text, numbers, dates, and checkboxes, which have no list operator in N/query, it becomes one equality per value joined with `OR` (`NOT IN`: one negated equality per value joined with `AND`). A select field the model does not mark as one fails at run time with "Operator EQUAL is not valid"; declare it with `@Field({ type: 'select' })`. Any N/query operator name is accepted directly on any field (`where(so.tranDate, 'WITHIN', [from, to])`). A `LIKE` pattern with `_` or a `%` in the middle has no N/query operator and is rejected; write it as a formula.
 - With `useText`, and for a `text: true` field, the comparison is against the display text through a `{field#DISPLAY}` formula, so the text operators and string values apply whatever the field.
 - `selectFormula()` and `whereFormula()` are the escape hatch for anything the model does not declare. Formulas use N/query's `{fieldid}` and `{relation.fieldid}` syntax and are sent as written; values in them are part of the text, so never build a formula from untrusted input.
-- `limit()`, `offset()`, and `page()` read a row window through `runPaged`; N/query pages are five to a thousand rows, so a window smaller than five still fetches five and slices. Add an `orderBy` for deterministic pages. With a joined sublist the rows fan out, so the window applies to mapped records and the query reads every row.
+- `limit()`, `offset()`, and `page()` read a row window through `runPaged`; N/query pages are five to a thousand rows, so a window smaller than five still fetches five and slices. Every query's sort ends with the internal id, so rows that tie on the other sorts never change places between pages. With a joined sublist the rows fan out, so the window applies to mapped records and the query reads every row.
 - `count()` counts records, distinct by primary key when a component is joined; `exists()` asks for one row.
 - `describe()` returns what the query will ask N/query for as plain data, `describeText()` renders it one clause per line, and `toSQL()` shows the SuiteQL NetSuite would run. None of them executes anything.
 - Read-side coercion turns numeric strings into numbers, `T`/`F` into booleans, and date strings into `Date` through `N/format`. Generated configs enable it; hand-written configs do not. Override per query with `coerce(false)`, per config with `coerce`, or per field.
+
+### Past N/query's 5,000 rows
+
+N/query's `run()` answers at most 5,000 rows and says nothing when it stops there. `list()`, `all()`, `executeTyped()`, and `execute()` read on past it:
+
+- Every query's sort ends with the internal id (`ORDER BY …, id ASC`), so its order is complete. When an answer comes back 5,000 rows long, the next `run()` asks for the rows after its last one, by the value of each sort and then the id, until an answer comes back shorter. A query under 5,000 rows is still one `run()`.
+- The comparison follows the sort's type. The id, numbers, and dates use their own operators (`GREATER`, `AFTER`, `EQUAL`, `ON`). Text is compared upper-cased in a formula (`UPPER({companyname}) > UPPER('Acme')`): N/query refuses `GREATER` on text, and NetSuite orders text by `UPPER()`. Blanks go where NetSuite sorts them, last ascending and first descending.
+- A query no read can pick up after is read again through `runPaged`, a thousand rows a fetch: one sorted by a select field, a checkbox, a datetime, display text, or a formula; one with a joined sublist, whose rows are lines; one whose config has no internal id.
+- A separately loaded relation whose batch comes back 5,000 rows long splits the batch in two and reads each half again. One parent with 5,000 related rows fails rather than come back short.
+- One 5,000-row `run()` costs 10 governance units; one `runPaged` read of a thousand costs 20. Before every read past the first, the query checks `N/runtime`'s remaining usage, which costs nothing. When another read like the last would leave less than the reserve (`governanceReserve` on the query options, 100 units by default), `list()` throws a `GovernanceLimitError` carrying `rowsRead`, `remainingUsage`, `readCost`, and `reserve`, instead of NetSuite ending the script halfway through a read.
+
+To read a list across requests, a page at a time, use `listPage()`:
+
+```ts
+const first = db.invoices.listPage({ limit: 5000 }, forCustomer(2431), open());
+// first.items; first.next is null when nothing follows
+const second = db.invoices.listPage({ after: first.next, limit: 5000 }, forCustomer(2431), open());
+```
+
+- Each page picks up after the previous page's last record by its sort values, so a record changed or deleted between two pages cannot shift the rest, and nothing is counted: `next` is null once the records run out.
+- `next` is a string carrying the last record's sort values and id; hand it back unchanged. A marker from another query is rejected.
+- A page larger than 5,000 is read in several answers. When the script cannot afford another read, the page stops early and `next` says where to continue.
+- Every sort must be one a read can compare (the id, numbers, dates, text), and the model must not join a sublist; load it separately (`load: 'separate'`) to page it.
+
+Each comparison, cost, and blank position above was checked against 17,369 records in a sandbox account on 2026-09-24; the sorts listed as read through `runPaged` were not, which is why they are.
 
 ## Writes
 
@@ -420,7 +466,7 @@ it('lists open orders for a customer', () => {
 });
 ```
 
-`queueRows` matches the next query by root type, by a joined component, by a substring of the rendered text, or by a predicate; every queued set answers one query unless it repeats (`{ repeat: true }`). `calls` records each query as a `QueryDescription` plus its rendered text and whether it ran, ran paged, or was rendered. The double implements the enums the runtime reads (`Operator`, `FieldContext`, `ReturnType`, `Aggregate`), so the same code runs against it and against NetSuite.
+`queueRows` matches the next query by root type, by a joined component, by a substring of the rendered text, or by a predicate; every queued set answers one query unless it repeats (`{ repeat: true }`). The double answers whatever is queued and has no 5,000-row limit: queue exactly 5,000 rows to make a list read on. `fakeNRuntime`, from the same entry point, stands in for `N/runtime`: map `N/runtime` to it and `queueRemainingUsage(1000, 990, 105)` to exercise the governance guard. Where `N/runtime` answers no usage, every read is affordable. `calls` records each query as a `QueryDescription` plus its rendered text and whether it ran, ran paged, or was rendered. The double implements the enums the runtime reads (`Operator`, `FieldContext`, `ReturnType`, `Aggregate`), so the same code runs against it and against NetSuite.
 
 The double sees only what N/query sees, so it names joined components by the field ids it was given, not by the model's property paths: a sublist joined from `transactionline.transaction` is the component `transactionline.transaction`, a subrecord `shippingaddress` is `shippingaddress`, and a sublist filter lands in the `WHERE` line. `describeText()` on a query builder renders the same plan with the model's names (`lines`, `shippingAddress`) before anything runs; assert on it when the property path is what matters. Row keys are matched case-insensitively against the column aliases (`lines_priceLevelName` or `lines_pricelevelname` both work), and a separately loaded relation's rows carry the parent key under `__parentKey`.
 

@@ -41,9 +41,12 @@ export interface PropertyOverrides {
     clearListField?: string;
     /** Sublist: id when it is not the lowercased property name. */
     sublistId?: string;
-    /** Sublist: relationship field for autoJoin instead of joinFrom through the line class's parent id. */
+    /**
+     * Sublist: relationship field for autoJoin instead of joinFrom through the line class's parent id. Field: the
+     * relationship field the value is read through, when the root does not expose it.
+     */
     relationshipFieldId?: string;
-    /** Sublist: conditions on the line component that pick the sublist's rows out of the line type. */
+    /** Sublist: conditions on the line component that pick the sublist's rows out of the line type. Field: the one row read. */
     filter?: ComponentCondition[];
     /** Sublist loaded separately: root type of the line query when it is not the owner's query type. */
     separateQueryType?: string;

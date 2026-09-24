@@ -11,6 +11,8 @@ import type {
     FieldMap,
     FieldType,
     FormulaReturnType,
+    ListPage,
+    ListPageOptions,
     NQueryOperatorName,
     PageWindow,
     QueryComponent,
@@ -27,9 +29,22 @@ import type {
 } from '../types';
 import { collectConditionComponents, combineConditions, conditionNodeForTranslation, rerootConditionNode } from './condition-nodes';
 import type { LinkedCondition } from './condition-nodes';
-import { compileQueryDescriptionToNQuery } from './n-query-compiler';
+import { compileQueryDescriptionToNQuery, sortColumnAliases } from './n-query-compiler';
 import { translateConditionOperator } from './operator-translation';
 import { renderQueryDescription } from './query-description';
+import {
+    GovernanceLimitError,
+    ReadGovernance,
+    buildAfterRowCondition,
+    decodeReadOnMarker,
+    defaultGovernanceReserve,
+    encodeReadOnMarker,
+    readKeyValues,
+    readOnComparisonFor,
+    runRowLimit,
+    withAddedCondition,
+} from './read-on';
+import type { ReadOnComparison, ReadOnKey } from './read-on';
 import { buildFieldMap, mapRowsToResults } from './result-mapper';
 import type { ResultMappingOptions, ResultRow } from './result-mapper';
 import { defaultSeparateLoadBatchSize, loadSeparateRelationsIntoResults } from './separate-relation-loader';
@@ -52,6 +67,11 @@ export interface QueryBuilderOptions<TResult> {
     resultObserver?: (results: TResult[]) => TResult[];
     /** How many parent keys one separate-load query asks for at a time. */
     separateLoadBatchSize?: number;
+    /**
+     * The governance units a read past N/query's 5,000-row answer leaves the script: a list stops with a
+     * GovernanceLimitError, and a page stops early, before a read that would dip into them. Defaults to 100.
+     */
+    governanceReserve?: number;
 }
 
 export interface FormulaSelectionOptions {
@@ -74,6 +94,10 @@ interface BuilderCondition extends LinkedCondition {
 interface BuilderSort {
     sort: DescribedSort;
     relationship?: string;
+    /** The field key the sort was asked for by, for messages. */
+    key: string;
+    /** How a read picks up after this sort's value; unset when no probe checked a comparison for its field. */
+    readOn?: { comparison: ReadOnComparison; fieldType: FieldType; isPrimary: boolean };
 }
 
 /** What one execution needs: the description to compile and how to map the rows that come back. */
@@ -81,6 +105,10 @@ interface QueryPlan {
     description: QueryDescription;
     mapping: ResultMappingOptions;
     separateMappings: Map<string, ResultMappingOptions>;
+    /** The sorts a read picks up after, the internal id last; unset when one of them cannot be compared. */
+    readOnKeys?: ReadOnKey[];
+    /** The sorts that cannot be compared, or the missing id, for the message listPage() refuses with. */
+    readOnObstacle?: string;
 }
 
 /**
@@ -91,6 +119,10 @@ function withQueryInError<T>(description: QueryDescription, step: () => T): T {
     try {
         return step();
     } catch (error) {
+        // Not N/query's failure: the guard's, which callers catch by its type.
+        if (error instanceof GovernanceLimitError) {
+            throw error;
+        }
         const failure = error as { name?: string; message?: string } | undefined;
         const message = failure && typeof failure.message === 'string' ? failure.message : String(error);
         const named = failure && typeof failure.name === 'string' && failure.name !== 'Error' ? `${failure.name}: ${message}` : message;
@@ -267,8 +299,18 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
         const sort: DescribedSort = resolved.formula !== undefined
             ? omitUndefined({ formula: resolved.formula, formulaType: resolved.formulaType, ascending: direction === 'ASC' })
             : omitUndefined({ component: resolved.component, fieldId: resolved.queryFieldId, context: resolved.fieldContext, ascending: direction === 'ASC' });
-        this.sorts.push(omitUndefined({ sort, relationship: this.separateRelationshipOf(key, resolved) }));
+        this.sorts.push(omitUndefined({ sort, relationship: this.separateRelationshipOf(key, resolved), key, readOn: this.readOnFor(resolved) }));
         return this;
+    }
+
+    /** How a read picks up after a sort on this field: formulas and display text have no comparison a probe checked. */
+    private readOnFor(field: QueryField): BuilderSort['readOn'] {
+        if (field.formula !== undefined || field.fieldContext === 'DISPLAY') {
+            return undefined;
+        }
+        const fieldType: FieldType | undefined = field.isPrimary ? 'key' : field.type;
+        const comparison = readOnComparisonFor(fieldType);
+        return comparison === undefined || fieldType === undefined ? undefined : { comparison, fieldType, isPrimary: Boolean(field.isPrimary) };
     }
 
     orderByAsc(field: FieldReference<TResult, TDeclared>): this {
@@ -317,7 +359,7 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
 
     execute(): QueryExecution<TResult> {
         const plan = this.plan(true);
-        return { data: this.executeDescription(plan.description), query: plan.description };
+        return { data: this.readRows(plan), query: plan.description };
     }
 
     executeRaw(): Record<string, QueryResultValue>[] {
@@ -328,9 +370,63 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
         const fansOut = this.plan(false).mapping.arrayPaths.length > 0;
         // Joined sublists fan rows out, so a row window would cut records short; those queries page over mapped records instead.
         const plan = this.plan(!fansOut);
-        const rows = this.executeDescription(plan.description);
+        return this.buildTypedResults(this.readRows(plan), plan, fansOut && this.hasPageWindow());
+    }
+
+    /**
+     * One page of the typed results, read across requests: up to `limit` records after the page `after` names, and
+     * `next` to name this one. Each page picks up after the last record by its sort values, so a record changed
+     * between two pages cannot shift the rest; a page larger than N/query's 5,000-row answer is read on in several.
+     * When the script cannot afford another read, the page stops early and `next` says where. Needs every sort to be
+     * one a read can compare (the id, numbers, dates, text) and no joined sublist, which answers a row per line.
+     */
+    executeTypedPage(options: ListPageOptions): ListPage<TResult> {
+        const { limit } = options;
+        if (!Number.isInteger(limit) || limit < 1) {
+            throw new Error(`A page needs a limit of at least one record; it was given ${limit}.`);
+        }
+        const plan = this.plan(false);
+        if (plan.mapping.arrayPaths.length > 0) {
+            throw new Error(`A page picks up after its last record, and ${plan.mapping.arrayPaths.join(', ')} of '${this.config.recordType}' is a joined sublist that answers a row per line: load it separately (load: 'separate') to page these records.`);
+        }
+        const keys = plan.readOnKeys;
+        if (!keys) {
+            throw new Error(`A page picks up after its last record by its sort values, and ${plan.readOnObstacle}: sort by the id, a number, a date or text to page these records.`);
+        }
+
+        const governance = new ReadGovernance(this.governanceReserve());
+        let afterValues = options.after === undefined || options.after === null ? undefined : decodeReadOnMarker(options.after, keys);
+        const rows: ResultRow[] = [];
+        let hasMore: boolean;
+        for (;;) {
+            const description = afterValues === undefined ? plan.description : withAddedCondition(plan.description, buildAfterRowCondition(keys, afterValues));
+            const answer = governance.measure(() => this.executeDescription(description));
+            const wanted = limit - rows.length;
+            rows.push(...answer.slice(0, wanted));
+            if (answer.length > wanted) {
+                hasMore = true;
+                break;
+            }
+            if (answer.length < runRowLimit) {
+                hasMore = false;
+                break;
+            }
+            if (rows.length === limit || governance.shortfall()) {
+                hasMore = true;
+                break;
+            }
+            afterValues = readKeyValues(keys, answer[answer.length - 1]);
+        }
+        return {
+            items: this.buildTypedResults(rows, plan, false),
+            next: hasMore && rows.length > 0 ? encodeReadOnMarker(readKeyValues(keys, rows[rows.length - 1])) : null,
+        };
+    }
+
+    /** Rows into typed results: mapped, cut to the page window when rows fanned out, related records loaded, tracked. */
+    private buildTypedResults(rows: ResultRow[], plan: QueryPlan, sliceWindow: boolean): TResult[] {
         let results = mapRowsToResults<TResult>(rows, plan.mapping);
-        if (fansOut && this.hasPageWindow()) {
+        if (sliceWindow) {
             const offset = this.offsetValue ?? 0;
             results = results.slice(offset, this.limitValue === undefined ? undefined : offset + this.limitValue);
         }
@@ -388,7 +484,7 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
         const separateRelationships = this.activeSeparateRelationships();
         const mainFields = activeFields.filter(([key, field]) => !separateRelationships.has(this.relationshipOf(key, field) ?? ''));
         const mainConditions = this.conditions.filter((condition) => condition.relationship === undefined);
-        const mainSorts = this.sorts.filter((sort) => sort.relationship === undefined);
+        const mainSorts = this.withPrimaryKeySort(this.sorts.filter((sort) => sort.relationship === undefined));
         const components = this.collectComponents(mainFields, mainConditions.map((condition) => condition.node), mainSorts.map((sort) => sort.sort));
 
         const columns = mainFields.map(([key, field]) => this.toColumn(key, field));
@@ -422,7 +518,37 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
             description,
             mapping: this.mappingOptions(mainFields, this.primaryAlias()),
             separateMappings,
+            ...this.planReadOn(mainSorts, description),
         };
+    }
+
+    /**
+     * The query's own sorts, then the internal id: a complete order, so a read past N/query's 5,000-row answer can pick
+     * up after the last row, and rows that tie on the sorts never change places between reads. Nothing is added when
+     * the id is sorted on already.
+     */
+    private withPrimaryKeySort(sorts: BuilderSort[]): BuilderSort[] {
+        const primary = this.primaryField();
+        if (!primary || sorts.some((sort) => sort.readOn?.isPrimary)) {
+            return sorts;
+        }
+        const sort: DescribedSort = omitUndefined({ component: primary.field.component, fieldId: primary.field.queryFieldId, ascending: true });
+        return [...sorts, { sort, key: primary.key, readOn: { comparison: 'ordered', fieldType: 'key', isPrimary: true } }];
+    }
+
+    /** The sorts a read picks up after, up to the internal id, which completes the order; or why there are none. */
+    private planReadOn(sorts: BuilderSort[], description: QueryDescription): Pick<QueryPlan, 'readOnKeys' | 'readOnObstacle'> {
+        const primaryIndex = sorts.findIndex((sort) => sort.readOn?.isPrimary);
+        if (primaryIndex === -1) {
+            return { readOnObstacle: `'${this.config.recordType}' declares no internal id to read on by` };
+        }
+        const keySorts = sorts.slice(0, primaryIndex + 1);
+        const uncomparable = keySorts.filter((sort) => sort.readOn === undefined).map((sort) => sort.key);
+        if (uncomparable.length > 0) {
+            return { readOnObstacle: `'${this.config.recordType}' is sorted by ${uncomparable.join(', ')}, which no read can compare (select fields, checkboxes, datetimes, display text and formulas)` };
+        }
+        const aliases = sortColumnAliases(description);
+        return { readOnKeys: keySorts.map((sort, index) => ({ sort: sort.sort, alias: aliases[index], ...(sort.readOn as NonNullable<BuilderSort['readOn']>) })) };
     }
 
     private planSeparateLoad(relationship: string, relationFields: SelectableField[]): { load: SeparateLoadDescription; mapping: ResultMappingOptions } {
@@ -571,8 +697,20 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
         return this.orderComponents(Array.from(withAncestors).map((path) => this.config.components?.[path] as QueryComponent)).map((component) => this.toDescribedComponent(component));
     }
 
+    /**
+     * Parents before children. Depth is the length of the parent chain, which the path need not spell: a reference
+     * joined from a field read through a relationship (`subsidiary`) hangs off that relationship's component
+     * (`transactionlines`), not off the root.
+     */
     private orderComponents(components: QueryComponent[]): QueryComponent[] {
-        return [...components].sort((left, right) => left.path.split('.').length - right.path.split('.').length || left.path.localeCompare(right.path));
+        const depthOf = (component: QueryComponent): number => {
+            let depth = 0;
+            for (let parent = component.parent; parent !== undefined; parent = this.config.components?.[parent]?.parent) {
+                depth += 1;
+            }
+            return depth;
+        };
+        return [...components].sort((left, right) => depthOf(left) - depthOf(right) || left.path.localeCompare(right.path));
     }
 
     private combineWithRootConditions(userCondition: ConditionNode | undefined): ConditionNode | undefined {
@@ -600,6 +738,70 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
     }
 
     // ── running ───────────────────────────────────────────────────────────────
+
+    /** The plan's rows: its page window when it has one, otherwise every row, past N/query's 5,000-row answer. */
+    private readRows(plan: QueryPlan): ResultRow[] {
+        return plan.description.page ? this.executeDescription(plan.description) : this.readEveryRow(plan);
+    }
+
+    /**
+     * Every row the query matches. One run() answers most queries whole; an answer of 5,000 rows may have stopped
+     * short, so the rows after its last one are read the same way until an answer comes back shorter. A query no read
+     * can pick up after (a sort no probe compared, a joined sublist's rows, no internal id) is read again through
+     * runPaged instead, a thousand rows a fetch.
+     */
+    private readEveryRow(plan: QueryPlan): ResultRow[] {
+        const governance = new ReadGovernance(this.governanceReserve());
+        const firstAnswer = governance.measure(() => this.executeDescription(plan.description));
+        if (firstAnswer.length < runRowLimit) {
+            return firstAnswer;
+        }
+        const keys = plan.mapping.arrayPaths.length > 0 ? undefined : plan.readOnKeys;
+        return keys ? this.readOnAfterLastRow(plan.description, keys, firstAnswer, governance) : this.readEveryPage(plan.description, governance);
+    }
+
+    private readOnAfterLastRow(description: QueryDescription, keys: ReadOnKey[], firstAnswer: ResultRow[], governance: ReadGovernance): ResultRow[] {
+        const rows = [...firstAnswer];
+        let answer = firstAnswer;
+        while (answer.length >= runRowLimit) {
+            this.assertAnotherReadAffordable(governance, rows.length);
+            const after = buildAfterRowCondition(keys, readKeyValues(keys, answer[answer.length - 1]));
+            answer = governance.measure(() => this.executeDescription(withAddedCondition(description, after)));
+            rows.push(...answer);
+        }
+        return rows;
+    }
+
+    /** Every row in the query's own order through runPaged, a thousand a fetch. */
+    private readEveryPage(description: QueryDescription, governance: ReadGovernance): ResultRow[] {
+        return withQueryInError(description, () => {
+            const query = compileQueryDescriptionToNQuery(description, getNsQuery());
+            const paged = governance.measure(() => query.runPaged({ pageSize: maximumPageSize }));
+            const rows: ResultRow[] = [];
+            for (const range of paged.pageRanges) {
+                this.assertAnotherReadAffordable(governance, rows.length);
+                rows.push(...governance.measure(() => paged.fetch({ index: range.index }).data.asMappedResults() as ResultRow[]));
+            }
+            return rows;
+        });
+    }
+
+    private assertAnotherReadAffordable(governance: ReadGovernance, rowsRead: number): void {
+        const shortfall = governance.shortfall();
+        if (shortfall) {
+            throw new GovernanceLimitError(
+                `Reading '${this.config.recordType}' stopped after ${rowsRead} rows: another read costs about ${shortfall.readCost} units, and ${shortfall.remainingUsage} are left with ${governance.reserve} held back for the script. Narrow the query, or read it a page at a time with listPage().`,
+                rowsRead,
+                shortfall.remainingUsage,
+                shortfall.readCost,
+                governance.reserve,
+            );
+        }
+    }
+
+    private governanceReserve(): number {
+        return this.options.governanceReserve ?? defaultGovernanceReserve;
+    }
 
     private executeDescription(description: QueryDescription): ResultRow[] {
         return withQueryInError(description, () => {
@@ -637,6 +839,7 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
             executeDescription: (description) => this.executeDescription(description),
             mappingOptionsFor: (load) => plan.separateMappings.get(load.relationship) as ResultMappingOptions,
             batchSize: this.options.separateLoadBatchSize ?? defaultSeparateLoadBatchSize,
+            rowLimit: runRowLimit,
         });
     }
 

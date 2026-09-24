@@ -1,4 +1,4 @@
-import type { DeleteResult, EntityCreate, EntityPatch, QueryConfig, RecordGraphPatch, RecordId, RecordUpdaterOptions, UpdatePlan, UpdateResult } from './types';
+import type { DeleteResult, EntityCreate, EntityPatch, ListPage, ListPageOptions, QueryConfig, RecordGraphPatch, RecordId, RecordUpdaterOptions, UpdatePlan, UpdateResult } from './types';
 import { QueryBuilder, query } from './query';
 import type { ConditionValue, FieldPath, FieldValue, OperatorFor } from './field-path';
 import { RecordUpdater, createRecord, deleteRecord, updateRecord } from './record-updater';
@@ -226,13 +226,24 @@ export class RecordSet<TResult, TUpdate extends Record<string, unknown> = Partia
         return this.query().asNoTracking();
     }
 
-    /** Every record matching the specifications; every record of the set when there are none. */
+    /**
+     * Every record matching the specifications, past N/query's 5,000-row answer; every record of the set when there are
+     * none. See QueryBuilder.executeTyped().
+     */
     list(...specifications: Specification<TResult>[]): TResult[] {
         return applySpecifications(this.query(), specifications).executeTyped();
     }
 
     all(): TResult[] {
         return this.list();
+    }
+
+    /**
+     * One page of the records matching the specifications, for a list read across requests: pass the page's `next` as
+     * `after` to read the page that follows. See QueryBuilder.executeTypedPage().
+     */
+    listPage(options: ListPageOptions, ...specifications: Specification<TResult>[]): ListPage<TResult> {
+        return applySpecifications(this.query(), specifications).executeTypedPage(options);
     }
 
     /** The first record matching the specifications. */

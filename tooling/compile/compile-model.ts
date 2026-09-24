@@ -38,6 +38,42 @@ export function compileModel(model: ResolvedClass): QueryConfig<unknown> {
         fields[key] = omitUndefined(field);
     };
 
+    const registerComponent = (component: QueryComponent) => {
+        const compiled = omitUndefined(component);
+        const existing = components[compiled.path];
+        if (existing && JSON.stringify(existing) !== JSON.stringify(compiled)) {
+            throw new ModelValidationError(model.className, [`component '${compiled.path}' is produced twice; rename the property or read the field through another relationship.`]);
+        }
+        components[compiled.path] = compiled;
+    };
+
+    /**
+     * The component a field read through a relationship comes from, joined off its owner's component (the root when
+     * `ownerPath` is undefined) and shared by every field of that owner read through the same relationship.
+     */
+    const relationshipComponentPathOf = (field: ResolvedField, ownerPath: string | undefined): string | undefined => {
+        if (!field.relationship) {
+            return undefined;
+        }
+        return ownerPath === undefined ? field.relationship.fieldId : `${ownerPath}.${field.relationship.fieldId}`;
+    };
+
+    const registerRelationshipComponent = (field: ResolvedField, ownerPath: string | undefined, relationship: string | undefined, load: RelationshipLoad): string | undefined => {
+        const path = relationshipComponentPathOf(field, ownerPath);
+        if (path === undefined || !field.relationship) {
+            return undefined;
+        }
+        registerComponent({
+            path,
+            parent: ownerPath,
+            relationship: relationship ?? path,
+            load,
+            join: { kind: 'auto', fieldId: field.relationship.fieldId },
+            conditions: field.relationship.filter,
+        });
+        return path;
+    };
+
     const commonFieldShape = (field: ResolvedField): Partial<QueryField> => ({
         type: field.type,
         select: field.selectByDefault === false ? false : undefined,
@@ -50,6 +86,7 @@ export function compileModel(model: ResolvedClass): QueryConfig<unknown> {
     for (const field of model.fields) {
         registerField(field.name, {
             queryFieldId: field.queryFieldId,
+            component: registerRelationshipComponent(field, undefined, undefined, 'join'),
             ...commonFieldShape(field),
             isPrimary: field.name === model.keyProperty ? true : undefined,
             recordFieldId: field.readOnly ? undefined : field.recordFieldId,
@@ -64,15 +101,20 @@ export function compileModel(model: ResolvedClass): QueryConfig<unknown> {
         rootComponents: string[];
         rootFields: RelationshipFieldMap;
         insideSublist: boolean;
+        /** The fields of the class that declares the relation: where a reference finds its select field. */
+        ownerFields: ResolvedField[];
     }
 
     function compileRelation(relation: ResolvedRelation, context: RelationContext): void {
         const path = [...context.path, relation.name];
         const componentPath = path.join('.');
-        const parentPath = context.path.length > 0 ? context.path.join('.') : undefined;
+        const ownerPath = context.path.length > 0 ? context.path.join('.') : undefined;
+        // A reference joins from wherever its select field is read: the component of a relationship the owner reads it through.
+        const selectField = relation.kind === 'reference' ? context.ownerFields.find((field) => field.name === relation.selectFieldProperty) : undefined;
+        const parentPath = (selectField && relationshipComponentPathOf(selectField, ownerPath)) ?? ownerPath;
         context.rootComponents.push(componentPath);
         const load: RelationshipLoad = context.path.length === 0 ? relation.load : context.root.load;
-        components[componentPath] = omitUndefined({
+        registerComponent({
             path: componentPath,
             parent: parentPath,
             relationship: context.root.name,
@@ -91,9 +133,13 @@ export function compileModel(model: ResolvedClass): QueryConfig<unknown> {
             const key = `${path.join('_')}_${field.name}`;
             const nestedPath = `${path.slice(1).join('.')}${path.length > 1 ? '.' : ''}${field.name}`;
             context.rootFields[nestedPath] = key;
+            const relationshipComponentPath = registerRelationshipComponent(field, componentPath, context.root.name, load);
+            if (relationshipComponentPath !== undefined && !context.rootComponents.includes(relationshipComponentPath)) {
+                context.rootComponents.push(relationshipComponentPath);
+            }
             const common: QueryField = {
                 queryFieldId: field.queryFieldId,
-                component: componentPath,
+                component: relationshipComponentPath ?? componentPath,
                 ...commonFieldShape(field),
                 nestPath: `${componentPath}.${field.name}`,
                 cardinality: insideSublist ? 'many' : undefined,
@@ -132,14 +178,14 @@ export function compileModel(model: ResolvedClass): QueryConfig<unknown> {
         }
 
         for (const nested of relation.relations) {
-            compileRelation(nested, { ...context, path, insideSublist });
+            compileRelation(nested, { ...context, path, insideSublist, ownerFields: relation.fields });
         }
     }
 
     for (const relation of model.relations) {
         const rootComponents: string[] = [];
         const rootFields: RelationshipFieldMap = {};
-        compileRelation(relation, { path: [], root: relation, rootComponents, rootFields, insideSublist: false });
+        compileRelation(relation, { path: [], root: relation, rootComponents, rootFields, insideSublist: false, ownerFields: model.fields });
         const base = omitUndefined({ fields: rootFields, components: rootComponents, load: relation.load, selectByDefault: relation.selectByDefault === false ? false : undefined });
         if (relation.kind === 'reference') {
             relationships[relation.name] = { kind: 'reference', ...base };

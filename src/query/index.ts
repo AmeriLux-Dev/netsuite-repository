@@ -5,3 +5,4 @@ export * from './operator-translation';
 export * from './n-query-compiler';
 export * from './result-mapper';
 export * from './separate-relation-loader';
+export * from './read-on';

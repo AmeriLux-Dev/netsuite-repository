@@ -52,7 +52,7 @@ describe('QueryBuilder.describe() – columns', () => {
             .describe();
         expect(description.columns).toContainEqual({ alias: 'doubled', formula: '{custentity_score} * 2', formulaType: 'FLOAT' });
         expect(description.condition).toEqual({ kind: 'formula', formula: '{custentity_score} * 2', type: 'FLOAT', operator: 'GREATER', values: [10] });
-        expect(description.sort).toEqual([{ formula: '{custentity_score} * 2', formulaType: 'FLOAT', ascending: false }]);
+        expect(description.sort).toEqual([{ formula: '{custentity_score} * 2', formulaType: 'FLOAT', ascending: false }, { fieldId: 'id', ascending: true }]);
     });
 
     it('lets a group condition use a formula alias declared outside the group', () => {
@@ -152,10 +152,12 @@ describe('QueryBuilder.describe() – ordering and paging', () => {
             { fieldId: 'companyname', ascending: true },
             { fieldId: 'custentity_score', ascending: false },
             { fieldId: 'email', ascending: true },
+            { fieldId: 'id', ascending: true },
         ]);
         expect(QueryBuilder.from(employeeConfig).orderBy('deptName').orderBy('department.name', 'DESC').describe().sort).toEqual([
             { fieldId: 'department', context: 'DISPLAY', ascending: true },
             { component: 'department', fieldId: 'name', ascending: false },
+            { fieldId: 'id', ascending: true },
         ]);
     });
 
@@ -179,7 +181,7 @@ describe('QueryBuilder.describeText()', () => {
             'JOIN from transactionline.transaction AS lines WHERE lines.mainline IS [false]',
             'SELECT id AS id, entity AS entityId, lines.item AS lines_itemId, lines.quantity AS lines_qty, lines.amount AS lines_amount',
             'WHERE entity ANY_OF [7] AND lines.item ANY_OF [1, 2]',
-            'ORDER BY lines.quantity DESC',
+            'ORDER BY lines.quantity DESC, id ASC',
             'PAGE offset 25 limit 25',
         ].join('\n'));
     });

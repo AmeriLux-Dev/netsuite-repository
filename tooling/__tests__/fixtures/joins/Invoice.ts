@@ -28,9 +28,21 @@ export class InvoiceLine {
     location?: Pick<Warehouse, 'id' | 'mainAddress'>;
 }
 
+@RecordType('subsidiary')
+export class Subsidiary {
+    id!: number;
+    name!: string;
+}
+
 @RecordType('invoice')
 export class Invoice {
     id!: number;
+    /** Read off the main line: N/query inside SuiteScript does not expose a transaction's own subsidiary on its root. */
+    @Field('subsidiary', { type: 'select', relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [true] }] }) subsidiaryId!: number;
+    /** A reference through a field read off the main line joins from that line, not from the root. */
+    subsidiary?: Pick<Subsidiary, 'id' | 'name'>;
+    /** A second field off the same line shares its join. */
+    @Field('department', { type: 'select', relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [true] }] }) departmentId!: number | null;
     @Field('location') locationId!: number | null;
     /** A reference by internal id that N/query has no join for: loaded by a second query matching the target's id. */
     @Reference('locationId', { load: 'separate' }) location?: Pick<Warehouse, 'id' | 'name'>;
@@ -45,6 +57,14 @@ export class Invoice {
     @Subrecord('billingaddress', { load: 'separate' }) billingAddress?: Address;
     /** A has-many loaded separately runs on the child's record type, batched on the field that points back at the invoice. */
     @Sublist({ load: 'separate' }) shipments!: Shipment[];
+}
+
+/** A field read off the main line keeps its own join when another record reaches it through a reference. */
+@RecordType('customrecord_invoice_note')
+export class InvoiceNote {
+    id!: number;
+    @Field('custrecord_note_invoice') invoiceId!: number;
+    invoice?: Pick<Invoice, 'id' | 'subsidiaryId'>;
 }
 
 /** A custom record pointing at the invoice through a list/record field: a has-many keyed by that field. */

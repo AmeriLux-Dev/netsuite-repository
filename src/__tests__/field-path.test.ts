@@ -28,6 +28,7 @@ describe('typed field paths', () => {
         expect(description.sort).toEqual([
             { component: 'customer', fieldId: 'companyname', ascending: true },
             { formula: '{lines.quantity} * 2', formulaType: 'FLOAT', ascending: false },
+            { fieldId: 'id', ascending: true },
         ]);
 
         const path: FieldPath<SalesOrderModel> = 'lines.quantity';

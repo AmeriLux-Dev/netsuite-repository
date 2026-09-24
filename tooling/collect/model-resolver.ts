@@ -6,10 +6,18 @@ import type { ClassIdentity, DeclaredClass, DeclaredProperty } from './property-
 
 export type { RelationKind };
 
+/** A field N/query reads off a joined component instead of the root: the relationship field and the row it picks. */
+export interface ResolvedFieldRelationship {
+    fieldId: string;
+    filter?: ComponentCondition[];
+}
+
 export interface ResolvedField {
     name: string;
     /** N/query field id. */
     queryFieldId: string;
+    /** Set when the value is read through a relationship because the root does not expose it. */
+    relationship?: ResolvedFieldRelationship;
     /** N/record field id the property writes through; `readOnly` says whether it ever does. */
     recordFieldId: string;
     readOnly: boolean;
@@ -47,6 +55,8 @@ export interface ResolvedRelation {
     join: ComponentJoin;
     /** Reference matched on a field other than the target's internal id: loaded by its own query. */
     separate?: SeparateLoad;
+    /** Reference: the owner's property holding the select field; a select field read through a relationship joins from there. */
+    selectFieldProperty?: string;
     /** Subrecord: field id on the owner and the list field cleared before edits. */
     subrecordFieldId?: string;
     clearListField?: string;
@@ -98,9 +108,11 @@ function toShallowField(property: DeclaredProperty, overrides: PropertyOverrides
         return undefined;
     }
     const recordFieldId = overrides?.fieldId ?? property.name.toLowerCase();
+    const relationship = overrides?.relationshipFieldId === undefined ? undefined : { fieldId: overrides.relationshipFieldId, ...(overrides.filter ? { filter: overrides.filter } : {}) };
     return {
         name: property.name,
         queryFieldId: overrides?.queryFieldId ?? recordFieldId,
+        ...(relationship ? { relationship } : {}),
         recordFieldId,
         readOnly: Boolean(overrides?.readOnly || isKey || overrides?.text),
         type: inferredType,
@@ -190,7 +202,25 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
                 report(entry, `Property '${entry.declared.className}.${property.name}' has type '${property.typeText}', which does not map to a NetSuite field type. Declare it with @Field({ type }), type it as a model class, or mark it @NotMapped().`);
                 continue;
             }
+            const propertyOverrides = overrides.properties.get(property.name);
+            if (propertyOverrides?.filter !== undefined && propertyOverrides.relationshipFieldId === undefined) {
+                report(entry, `Property '${entry.declared.className}.${property.name}' declares a filter but no relationship to read it through; name the relationship field with @Field('${field.recordFieldId}', { relationship, filter }), or remove the filter.`);
+            }
             resolved.fields.push(field);
+        }
+
+        // Fields read through one relationship share its join, and N/query joins a relationship once per component.
+        const firstFieldByRelationship = new Map<string, ResolvedField>();
+        for (const field of resolved.fields) {
+            if (!field.relationship) {
+                continue;
+            }
+            const first = firstFieldByRelationship.get(field.relationship.fieldId);
+            if (!first) {
+                firstFieldByRelationship.set(field.relationship.fieldId, field);
+            } else if (JSON.stringify(first.relationship?.filter ?? []) !== JSON.stringify(field.relationship.filter ?? [])) {
+                report(entry, `Properties '${entry.declared.className}.${first.name}' and '${entry.declared.className}.${field.name}' read through '${field.relationship.fieldId}' with different filters; N/query joins a relationship once, so give them the same filter.`);
+            }
         }
 
         if (overrides.recordType !== undefined && !resolved.fields.some((field) => field.name === keyProperty)) {
@@ -320,7 +350,7 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
                     // A reference loaded separately by internal id: the second query matches the target's key against the select field values.
                     const targetKeyQueryFieldId = target.fields.find((field) => field.name === target.keyProperty)?.queryFieldId ?? target.keyProperty.toLowerCase();
                     const separate = load === 'separate' ? { queryType: target.queryType as string, parentKeyField: selectFieldProperty, targetKeyFieldId: targetKeyQueryFieldId, targetKeyFieldType: 'key' as const } : undefined;
-                    relations.push({ ...toRelation('reference', join, load), ...(separate ? { separate } : {}), relations: nested() });
+                    relations.push({ ...toRelation('reference', join, load), ...(separate ? { separate } : {}), selectFieldProperty, relations: nested() });
                     continue;
                 }
                 const targetKeyField = target.fields.find((field) => field.name === targetKeyProperty);
@@ -335,6 +365,7 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
                 relations.push({
                     ...toRelation('reference', join, 'separate'),
                     separate: { queryType: target.queryType as string, parentKeyField: selectFieldProperty, targetKeyFieldId: targetKeyField.queryFieldId, targetKeyFieldType: targetKeyField.type },
+                    selectFieldProperty,
                     relations: nested(),
                 });
                 continue;
