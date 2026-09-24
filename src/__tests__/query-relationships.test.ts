@@ -63,7 +63,7 @@ describe('QueryBuilder – dotted field keys', () => {
             .describe();
         expect(description.columns.map((column) => column.alias)).toEqual(['id', 'tranId', 'customer_companyName']);
         expect(description.condition).toEqual({ kind: 'field', component: 'lines', fieldId: 'quantity', operator: 'GREATER', values: [2] });
-        expect(description.sort).toEqual([{ component: 'shippingAddress', fieldId: 'city', ascending: false }]);
+        expect(description.sort).toEqual([{ component: 'shippingAddress', fieldId: 'city', ascending: false }, { fieldId: 'id', ascending: true }]);
         expect(description.components.map((component) => component.path)).toEqual(['customer', 'lines', 'shippingAddress']);
     });
 
@@ -99,7 +99,7 @@ describe('QueryBuilder – separately loaded sublists', () => {
         expect(description.components).toEqual([]);
         expect(description.columns.map((column) => column.alias)).toEqual(['id', 'entityId']);
         expect(description.condition).toEqual({ kind: 'field', fieldId: 'entity', operator: 'ANY_OF', values: [7] });
-        expect(description.sort).toEqual([]);
+        expect(description.sort).toEqual([{ fieldId: 'id', ascending: true }]);
         expect(description.separateLoads).toEqual([{
             relationship: 'lines',
             kind: 'sublist',
@@ -313,7 +313,7 @@ describe('QueryBuilder – fields read through a relationship', () => {
 
         // One main line per transaction: the rows do not fan out, so the page is read as a row window through runPaged.
         expect(fakeNQuery.calls[0].execution).toBe('runPaged');
-        expect(fakeNQuery.calls[0].text).toBe('FROM transaction\nJOIN auto transactionlines AS transactionlines\nSELECT id AS id, transactionlines.subsidiary AS subsidiaryId\nWHERE transactionlines.mainline IS [true]');
+        expect(fakeNQuery.calls[0].text).toBe('FROM transaction\nJOIN auto transactionlines AS transactionlines\nSELECT id AS id, transactionlines.subsidiary AS subsidiaryId\nWHERE transactionlines.mainline IS [true]\nORDER BY id ASC');
     });
 
     it('filters on the field there, and joins a reference through it from the line', () => {

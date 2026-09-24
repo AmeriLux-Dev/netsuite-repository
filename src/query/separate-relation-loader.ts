@@ -12,6 +12,8 @@ export interface SeparateLoadRuntime {
     /** The mapping of one relation's rows into its items, with output paths relative to the relation. */
     mappingOptionsFor(load: SeparateLoadDescription): ResultMappingOptions;
     batchSize: number;
+    /** The most rows one answer holds; an answer this long may have stopped short. Unset, answers are taken as they come. */
+    rowLimit?: number;
 }
 
 /** Distinct parent key values in first-seen order; null and undefined are never keys. */
@@ -45,6 +47,23 @@ function withBatchCondition(load: SeparateLoadDescription, batch: ConditionParam
     const batchNode = conditionNodeForTranslation(translated, (operator, values) => ({ kind: 'field', fieldId: load.batchFieldId, operator, values }));
     const condition: ConditionNode = load.description.condition ? { kind: 'and', nodes: [batchNode, load.description.condition] } : batchNode;
     return { ...load.description, condition };
+}
+
+/**
+ * One batch's related rows. An answer as long as the row limit may have stopped short, so the batch is split in two
+ * and each half read again; a single parent whose answer is still that long cannot be split, and fails rather than
+ * hand back part of what it holds.
+ */
+function readBatchRows(load: SeparateLoadDescription, batch: ConditionParamValue[], runtime: SeparateLoadRuntime): ResultRow[] {
+    const rows = runtime.executeDescription(withBatchCondition(load, batch));
+    if (runtime.rowLimit === undefined || rows.length < runtime.rowLimit) {
+        return rows;
+    }
+    if (batch.length === 1) {
+        throw new Error(`'${load.relationship}' of the record whose ${load.parentKeyPath} is ${String(batch[0])} came back ${runtime.rowLimit} rows long, as many as N/query answers at once, so some may be missing; narrow the relation's conditions or read it on its own.`);
+    }
+    const middle = Math.ceil(batch.length / 2);
+    return [...readBatchRows(load, batch.slice(0, middle), runtime), ...readBatchRows(load, batch.slice(middle), runtime)];
 }
 
 function readRowValue(row: ResultRow, alias: string): QueryResultValue | undefined {
@@ -81,7 +100,7 @@ export function loadSeparateRelationsIntoResults(parents: object[], loads: Separ
         const itemsByParentKey = new Map<string, unknown[]>();
         const mapping = runtime.mappingOptionsFor(load);
         for (const batch of batchValues(collectDistinctParentKeys(parents, load.parentKeyPath), runtime.batchSize)) {
-            const rows = runtime.executeDescription(withBatchCondition(load, batch));
+            const rows = readBatchRows(load, batch, runtime);
             for (const [parentKey, group] of groupRowsByParentKey(rows, load.parentKeyAlias)) {
                 const items = load.kind === 'sublist'
                     ? group.flatMap((row) => mapRowsToResults<unknown>([row], mapping))

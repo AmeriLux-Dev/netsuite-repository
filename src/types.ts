@@ -418,6 +418,20 @@ export interface QueryPageOptions {
     pageSize?: number;
 }
 
+/** One page of a list read across requests: how many records, and the marker the previous page answered. */
+export interface ListPageOptions {
+    /** The previous page's `next`; missing or null for the first page. */
+    after?: string | null;
+    /** How many records the page holds at most; past 5,000 it is read on in several answers. */
+    limit: number;
+}
+
+export interface ListPage<TResult> {
+    items: TResult[];
+    /** What to pass as `after` for the page that follows, or null when no records follow these. */
+    next: string | null;
+}
+
 // ── writes ───────────────────────────────────────────────────────────────────
 
 export type RecordFieldValue = NsRecord.FieldValue | ReadonlyArray<string | number> | undefined;

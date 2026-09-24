@@ -50,18 +50,26 @@ function createColumn(component: NsQuery.Component, column: DescribedColumn, nsQ
  * sorts only on one of the query's own columns (a column object outside `query.columns` fails to render, sandbox
  * 2026-09-09), so a sort on a field that is not selected gets a hidden column appended to the query instead.
  */
-function selectedColumnForSort(sort: DescribedSort, columns: DescribedColumn[], created: NsQuery.Column[]): NsQuery.Column | undefined {
-    const index = columns.findIndex((column) =>
+function selectedColumnIndexForSort(sort: DescribedSort, columns: DescribedColumn[]): number {
+    return columns.findIndex((column) =>
         column.component === sort.component && column.aggregate === undefined && column.context === sort.context
         && (sort.formula !== undefined
             ? column.formula === sort.formula && column.formulaType === sort.formulaType
             : column.formula === undefined && column.fieldId === sort.fieldId));
-    return index === -1 ? undefined : created[index];
 }
 
 /** The hidden column a sort on an unselected field is given; the mapper reads rows by the model's aliases and never sees it. */
 export function hiddenSortColumnAlias(index: number): string {
     return `__sort${index}`;
+}
+
+/** For each sort, the alias its value comes back under: the selected column it reuses, or its hidden `__sort<n>` column. */
+export function sortColumnAliases(description: QueryDescription): string[] {
+    let hiddenCount = 0;
+    return description.sort.map((sort) => {
+        const index = selectedColumnIndexForSort(sort, description.columns);
+        return index === -1 ? hiddenSortColumnAlias(hiddenCount++) : description.columns[index].alias;
+    });
 }
 
 function createSortColumn(component: NsQuery.Component, sort: DescribedSort, alias: string, nsQuery: NQueryModule): NsQuery.Column {
@@ -141,7 +149,8 @@ export function compileQueryDescriptionToNQuery(description: QueryDescription, n
     const hiddenSortColumns: NsQuery.Column[] = [];
     const sorts = description.sort.map((sort) => {
         const component = componentAt(sort.component);
-        let column = selectedColumnForSort(sort, description.columns, columns);
+        const selectedIndex = selectedColumnIndexForSort(sort, description.columns);
+        let column = selectedIndex === -1 ? undefined : columns[selectedIndex];
         if (column === undefined) {
             column = createSortColumn(component, sort, hiddenSortColumnAlias(hiddenSortColumns.length), nsQuery);
             hiddenSortColumns.push(column);

@@ -18,7 +18,7 @@ describe('QueryBuilder – N/query errors', () => {
         } catch (error) {
             caught = error as Error & { cause?: unknown };
         }
-        expect(caught?.message).toBe("SSS_SEARCH_ERROR_OCCURRED: Search error occurred: Operator EQUAL is not valid for given search filter.\nQuery:\nFROM customer\nSELECT id AS id, companyname AS name, email AS email, isinactive AS isActive, custentity_score AS score\nWHERE companyname IS ['Acme']");
+        expect(caught?.message).toBe("SSS_SEARCH_ERROR_OCCURRED: Search error occurred: Operator EQUAL is not valid for given search filter.\nQuery:\nFROM customer\nSELECT id AS id, companyname AS name, email AS email, isinactive AS isActive, custentity_score AS score\nWHERE companyname IS ['Acme']\nORDER BY id ASC");
         expect(caught?.cause).toBe(failure);
     });
 
