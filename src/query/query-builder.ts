@@ -571,8 +571,20 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
         return this.orderComponents(Array.from(withAncestors).map((path) => this.config.components?.[path] as QueryComponent)).map((component) => this.toDescribedComponent(component));
     }
 
+    /**
+     * Parents before children. Depth is the length of the parent chain, which the path need not spell: a reference
+     * joined from a field read through a relationship (`subsidiary`) hangs off that relationship's component
+     * (`transactionlines`), not off the root.
+     */
     private orderComponents(components: QueryComponent[]): QueryComponent[] {
-        return [...components].sort((left, right) => left.path.split('.').length - right.path.split('.').length || left.path.localeCompare(right.path));
+        const depthOf = (component: QueryComponent): number => {
+            let depth = 0;
+            for (let parent = component.parent; parent !== undefined; parent = this.config.components?.[parent]?.parent) {
+                depth += 1;
+            }
+            return depth;
+        };
+        return [...components].sort((left, right) => depthOf(left) - depthOf(right) || left.path.localeCompare(right.path));
     }
 
     private combineWithRootConditions(userCondition: ConditionNode | undefined): ConditionNode | undefined {

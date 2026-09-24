@@ -280,3 +280,46 @@ describe('QueryBuilder – has-many loaded on the child type', () => {
         expect(fakeNQuery.calls[1].text).toBe('FROM customrecord_pkg\nJOIN auto custrecord_pkg_type AS custrecord_pkg_type\nSELECT id AS packages_id, custrecord_pkg_weight AS packages_weight, custrecord_pkg_type.name AS packages_type_name, custrecord_pkg_order AS __parentKey\nWHERE custrecord_pkg_order ANY_OF [1, 2] AND isinactive IS [false]\nORDER BY id ASC');
     });
 });
+
+interface MainLineInvoice {
+    id: number;
+    subsidiaryId: number;
+    subsidiary?: { name: string };
+}
+
+// What the build step emits for @Field('subsidiary', { relationship: 'transactionlines', filter: mainline }): N/query
+// inside SuiteScript rejects a transaction's own subsidiary on its root (NOT_EXPOSED), and its main line carries it.
+const mainLineInvoiceConfig: QueryConfig<MainLineInvoice> = {
+    recordType: 'invoice',
+    queryType: 'transaction',
+    coerce: true,
+    components: {
+        transactionlines: { path: 'transactionlines', relationship: 'transactionlines', load: 'join', join: { kind: 'auto', fieldId: 'transactionlines' }, conditions: [{ fieldId: 'mainline', operator: 'IS', values: [true] }] },
+        subsidiary: { path: 'subsidiary', parent: 'transactionlines', relationship: 'subsidiary', load: 'join', join: { kind: 'to', fieldId: 'subsidiary', target: 'subsidiary' } },
+    },
+    fields: {
+        id: { queryFieldId: 'id', type: 'key', isPrimary: true, readonly: true },
+        subsidiaryId: { queryFieldId: 'subsidiary', component: 'transactionlines', type: 'select', recordFieldId: 'subsidiary' },
+        subsidiary_name: { queryFieldId: 'name', component: 'subsidiary', type: 'string', nestPath: 'subsidiary.name', readonly: true },
+    },
+    relationships: { subsidiary: { kind: 'reference', fields: { name: 'subsidiary_name' }, components: ['subsidiary'], selectByDefault: false } },
+};
+
+describe('QueryBuilder – fields read through a relationship', () => {
+    it('joins the relationship with its filter, reads the field there, and maps it at the root of the result, keeping the row window', () => {
+        fakeNQuery.queueRows('transaction', [{ id: 7, subsidiaryId: 3 }]);
+
+        expect(query(mainLineInvoiceConfig).page(1, 50).executeTyped()).toEqual([{ id: 7, subsidiaryId: 3 }]);
+
+        // One main line per transaction: the rows do not fan out, so the page is read as a row window through runPaged.
+        expect(fakeNQuery.calls[0].execution).toBe('runPaged');
+        expect(fakeNQuery.calls[0].text).toBe('FROM transaction\nJOIN auto transactionlines AS transactionlines\nSELECT id AS id, transactionlines.subsidiary AS subsidiaryId\nWHERE transactionlines.mainline IS [true]');
+    });
+
+    it('filters on the field there, and joins a reference through it from the line', () => {
+        const description = query(mainLineInvoiceConfig).include('subsidiary').where('subsidiaryId', '=', 3).describe();
+
+        expect(description.components.map((component) => [component.path, component.parent])).toEqual([['transactionlines', undefined], ['subsidiary', 'transactionlines']]);
+        expect(description.condition).toEqual({ kind: 'field', component: 'transactionlines', fieldId: 'subsidiary', operator: 'ANY_OF', values: [3] });
+    });
+});

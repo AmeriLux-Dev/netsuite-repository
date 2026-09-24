@@ -108,6 +108,7 @@ The class decorator is only ever `@RecordType`. A sublist line class is a record
 | Select field with no reference | a number or string like any other | `@Field('location', { type: 'select' })`: N/query compares select and key fields through `ANY_OF`, not `EQUAL` |
 | Read-only | the internal id, `text: true` fields, fields of a referenced record | `@ReadOnly()` |
 | Text of a select field | | `@Field({ queryFieldId: 'status', text: true })`, read in DISPLAY context |
+| Field the root does not expose | read on the root | `@Field('subsidiary', { relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [true] }] })`: read off the joined component, still written through the record's own field |
 | Query type | the record type | `@RecordType('x', { queryType })` |
 | Root filter | none | `@RecordType('x', { filter: [{ fieldId, operator, values }] })` |
 | Reference or subrecord | a plain class is a subrecord; a record class is a reference | `@Reference()`, `@Subrecord()` |
@@ -170,6 +171,26 @@ export class ItemFulfillment {
 
 A separate relation inside a separately loaded relation is not planned: compose it in the repository, as the order-processing test project does when it reads the fulfillments of a set of orders and stitches them onto the orders itself.
 
+### Fields the root does not expose
+
+N/query inside SuiteScript rejects some body fields on the root that the record itself has: a transaction's `subsidiary` fails with `NOT_EXPOSED - Field is marked as internal for channel SEARCH`, even though SuiteQL through the REST service reads it. Its main line carries the same value, so the field is read there:
+
+```ts
+@RecordType(NetsuiteRecordType.INVOICE, { queryType: 'transaction', filter: [{ fieldId: 'type', operator: 'ANY_OF', values: ['CustInvc'] }] })
+export class Invoice {
+    id!: number;
+    @Field('subsidiary', { type: 'select', relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [true] }] })
+    subsidiaryId!: number;
+    subsidiary?: Pick<Subsidiary, 'id' | 'name'>;   // joined from the main line, not from the root
+}
+```
+
+- The build step emits one component per relationship (`autoJoin` with the filter as its conditions) and puts the field on it; the value still lands at the root of the result (`invoice.subsidiaryId`), and `where()` and `orderBy()` on it join the same component.
+- The filter must pick one row per record. `mainline IS true` does, so rows never fan out and `page()` stays a row window.
+- Fields read through one relationship share its join, so they must declare the same filter; the build step reports two that differ, and a filter with no relationship.
+- A reference whose select field is read this way joins from that component. Loaded separately, it matches the collected values as any reference does.
+- Writes are unchanged: the field writes through the record's own field id. Mark it `@ReadOnly()` when the record has no such field.
+
 ### Inheritance
 
 A base class without `@RecordType` is a mapping base whose members are inherited. Each `@RecordType` class queries its own record type, so `salesorder` and `invoice` classes extending one `Transaction` base each read their own fields with no discriminator to declare.
@@ -181,7 +202,7 @@ A base class without `@RecordType` is a mapping base whose members are inherited
 | `@RecordType(id, { queryType?, filter?, setName?, coerce?, updater? })` | class | A queryable record type with a record set on the context. `id` is a native type from `NetsuiteRecordType` (`NetsuiteRecordType.SALES_ORDER`, a runtime copy of N/record's `Type` so the model needs no N/* import) or a custom record id (`'customrecord_x'`). `updater` sets the default `RecordUpdaterOptions` for every write. |
 | `@InternalId()` | property | The internal id when it is not `id`. |
 | `@ParentId()` | property | On a line class: the property holding the parent record's internal id. |
-| `@Field(id?, { queryFieldId?, type?, text?, coerce? })` | property | Renames the field, separates the query field id from the record field id, or overrides the inferred type. |
+| `@Field(id?, { queryFieldId?, type?, text?, coerce?, relationship?, filter? })` | property | Renames the field, separates the query field id from the record field id, overrides the inferred type, or reads the field through a relationship when the root does not expose it. |
 | `@ReadOnly()` | property | Excludes the property from writes. |
 | `@Reference(selectFieldProperty?, { targetKey?, load?, join? })` | property | A reference: the select field behind it, and the referenced property to match on when it is not the internal id. |
 | `@Subrecord(fieldId?, { clearListField?, load? })` | property | A subrecord: its field id and the list field cleared before an edit. |

@@ -45,7 +45,8 @@ export function matchesGlob(pattern: string, relativePath: string): boolean {
     return globToRegularExpression(toPosixPath(pattern)).test(toPosixPath(relativePath));
 }
 
-function globBaseDirectory(pattern: string): string {
+/** The folder a glob starts from: its segments up to the first one with a wildcard. */
+export function globBaseDirectory(pattern: string): string {
     const segments = toPosixPath(pattern).split('/');
     const baseSegments: string[] = [];
     for (const segment of segments) {

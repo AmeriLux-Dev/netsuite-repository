@@ -27,6 +27,14 @@ export interface FieldOptions {
     /** Read the display text of a select field. Text fields are read-only; declare a second property to write the select field itself. */
     text?: boolean;
     coerce?: boolean;
+    /**
+     * Relationship field the value is read through (autoJoin), when N/query does not expose the field on the root but a
+     * joined component carries it: a transaction's `subsidiary` is NOT_EXPOSED on `transaction` inside SuiteScript, and
+     * its main line has it. The field still writes through the record's own field id; the query alone reads it there.
+     */
+    relationship?: string;
+    /** Conditions on the joined component that pick the one row the value is read from (`mainline IS true`). */
+    filter?: ComponentCondition[];
 }
 
 export interface RelationOptions {
@@ -143,6 +151,8 @@ export function Field(first?: string | FieldOptions, second?: FieldOptions): Pro
         if (options.type !== undefined) property.type = options.type;
         if (options.text !== undefined) property.text = options.text;
         if (options.coerce !== undefined) property.coerce = options.coerce;
+        if (options.relationship !== undefined) property.relationshipFieldId = options.relationship;
+        if (options.filter !== undefined) property.filter = options.filter;
     });
 }
 
