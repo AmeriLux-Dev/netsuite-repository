@@ -169,7 +169,7 @@ N/query has no join-type option: NetSuite decides whether a relationship joins i
 @Sublist('item', { queryType: 'transaction', relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }) lines!: TransactionLine[];
 ```
 
-`separate` runs one query for the parents and one per batch of parent ids for the relation, then stitches the lines in (`[]` when there are none, `null` for a subrecord or reference). Rows never fan out, `limit()` and `page()` count records, and a `where` on a field of the relation narrows the relation's rows rather than the parents. It costs one extra `run` per batch. A reference matched on a field other than the target's internal id (`targetKey`) always loads this way, because N/query joins only through internal ids.
+`separate` runs one query for the parents and one per batch of parent ids for the relation, then stitches the lines in (`[]` when there are none, `null` for a subrecord or reference). Rows never fan out, `limit()` and `page()` count records, and a `where` on a field of the relation narrows the relation's rows rather than the parents. It costs one extra `run` per batch. A reference matched on a field other than the target's internal id (`targetKey`) always loads this way, because N/query joins only through internal ids, and so does a reference whose select field is read through a relationship (see [Fields the root does not expose](#fields-the-root-does-not-expose)).
 
 Where the second query runs depends on how the relation is joined. A sublist reached through a relationship field (`relationship`) or another root (`queryType`) queries that root and joins the lines; a has-many joined `from` the child's `@ParentId()` field queries the child's own record type, with the sublist filter as a root condition and the child's parent field matched against the owners' ids, and the child's own references (`spsPackage`, `spsPackage.packType`) join inside that query:
 
@@ -220,15 +220,15 @@ export class Invoice {
     id!: number;
     @Field('subsidiary', { type: 'select', relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [true] }] })
     subsidiaryId!: number;
-    subsidiary?: Pick<Subsidiary, 'id' | 'name'>;   // joined from the main line, not from the root
+    subsidiary?: Pick<Subsidiary, 'id' | 'name'>;   // loaded by a second query, by the id read off the main line
 }
 ```
 
 - The build step emits one component per relationship (`autoJoin` with the filter as its conditions) and puts the field on it; the value still lands at the root of the result (`invoice.subsidiaryId`), and `where()` and `orderBy()` on it join the same component.
 - The filter must pick one row per record. `mainline IS true` does, so rows never fan out and `page()` stays a row window.
 - Fields read through one relationship share its join, so they must declare the same filter; the build step reports two that differ, and a filter with no relationship.
-- A reference whose select field is read this way joins from that component. Loaded separately, it matches the collected values as any reference does.
-- Without `subsidiaryId`, the options go on the reference itself: `@Field({ relationship: 'transactionlines', filter: [...] }) subsidiary?: Pick<Subsidiary, 'id' | 'name'>` reads its shadow select field off the main line.
+- A reference whose select field is read this way loads separately: a second query reads the target by the ids collected off the component. N/query inside SuiteScript has no join from that component to the target: the join the build step used to emit, from the main line to `subsidiary`, failed in production on 2026-09-25 with `Record Join 'subsidiary^subsidiary' for record 'transactionLine' was not found`. `load: 'join'` on such a reference is a build error, and so is projecting it into another relation, where it cannot load separately.
+- Without `subsidiaryId`, the options go on the reference itself: `@Field({ relationship: 'transactionlines', filter: [...] }) subsidiary?: Pick<Subsidiary, 'id' | 'name'>` reads its shadow select field off the main line and loads the subsidiary separately the same way.
 - Writes are unchanged: the field writes through the record's own field id. Declare it `readOnly: true` when the record has no such field.
 
 ### Inheritance

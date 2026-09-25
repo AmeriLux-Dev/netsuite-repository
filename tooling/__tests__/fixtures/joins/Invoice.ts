@@ -46,8 +46,8 @@ export class Invoice {
     id!: number;
     /** Read off the main line: N/query inside SuiteScript does not expose a transaction's own subsidiary on its root. */
     @Field('subsidiary', { type: 'select', relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [true] }] }) subsidiaryId!: number;
-    /** A reference through a field read off the main line joins from that line, not from the root. */
-    subsidiary?: Pick<Subsidiary, 'id' | 'name'>;
+    /** A reference through a field read off the main line loads separately: N/query has no join from the line to it. */
+    @Reference('subsidiaryId') subsidiary?: Pick<Subsidiary, 'id' | 'name'>;
     /** A second field off the same line shares its join. */
     @Field('department', { type: 'select', relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [true] }] }) departmentId!: number | null;
     @Field('location') locationId!: number | null;

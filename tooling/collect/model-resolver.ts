@@ -61,8 +61,10 @@ export interface ResolvedRelation {
     join: ComponentJoin;
     /** Reference matched on a field other than the target's internal id: loaded by its own query. */
     separate?: SeparateLoad;
-    /** Reference: the owner's property holding the select field; a select field read through a relationship joins from there. */
+    /** Reference: the owner's property holding the select field. */
     selectFieldProperty?: string;
+    /** Reference: the relationship field its select field is read through; such a reference always loads separately. */
+    selectFieldRelationship?: string;
     /** Subrecord: field id on the owner and the list field cleared before edits. */
     subrecordFieldId?: string;
     clearListField?: string;
@@ -424,6 +426,17 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
                     report(entry, `Reference '${qualifiedName}' has @Field options, but its select field is the declared property '${selectFieldProperty}'; put them on '${selectFieldProperty}'.`);
                     continue;
                 }
+                // N/query inside SuiteScript has no join from a relationship's component to a reference's target: the one
+                // case tried, transactionLine to subsidiary, failed in production on 2026-09-25 with "Record Join
+                // 'subsidiary^subsidiary' for record 'transactionLine' was not found". A reference whose select field is
+                // read through a relationship therefore loads separately, by the values read there. Allow a join again
+                // only for a relationship proven in a real account.
+                const selectFieldRelationship = selectField.relationship?.fieldId;
+                if (selectFieldRelationship !== undefined && propertyOverrides?.load === 'join') {
+                    report(entry, `Reference '${qualifiedName}' reads its select field '${selectFieldProperty}' through '${selectFieldRelationship}' and must load separately: N/query has no join from that component to '${target.queryType}', and the one case tried (transactionLine to subsidiary) fails with "Record Join 'subsidiary^subsidiary' for record 'transactionLine' was not found". Remove load: 'join'.`);
+                    continue;
+                }
+                const referenceLoad: RelationshipLoad = selectFieldRelationship !== undefined ? 'separate' : load;
                 const targetKeyProperty = propertyOverrides?.targetKeyProperty;
                 const join: ComponentJoin = propertyOverrides?.joinKind === 'auto'
                     ? { kind: 'auto', fieldId: selectField.queryFieldId }
@@ -431,8 +444,8 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
                 if (targetKeyProperty === undefined) {
                     // A reference loaded separately by internal id: the second query matches the target's key against the select field values.
                     const targetKeyQueryFieldId = target.fields.find((field) => field.name === target.keyProperty)?.queryFieldId ?? target.keyProperty.toLowerCase();
-                    const separate = load === 'separate' ? { queryType: target.queryType as string, parentKeyField: selectFieldProperty, targetKeyFieldId: targetKeyQueryFieldId, targetKeyFieldType: 'key' as const } : undefined;
-                    relations.push({ ...toRelation('reference', join, load), ...(separate ? { separate } : {}), selectFieldProperty, relations: nested() });
+                    const separate = referenceLoad === 'separate' ? { queryType: target.queryType as string, parentKeyField: selectFieldProperty, targetKeyFieldId: targetKeyQueryFieldId, targetKeyFieldType: 'key' as const } : undefined;
+                    relations.push({ ...toRelation('reference', join, referenceLoad), ...(separate ? { separate } : {}), selectFieldProperty, selectFieldRelationship, relations: nested() });
                     continue;
                 }
                 const targetKeyField = target.fields.find((field) => field.name === targetKeyProperty);
@@ -448,6 +461,7 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
                     ...toRelation('reference', join, 'separate'),
                     separate: { queryType: target.queryType as string, parentKeyField: selectFieldProperty, targetKeyFieldId: targetKeyField.queryFieldId, targetKeyFieldType: targetKeyField.type },
                     selectFieldProperty,
+                    selectFieldRelationship,
                     relations: nested(),
                 });
                 continue;

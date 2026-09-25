@@ -289,20 +289,25 @@ interface MainLineInvoice {
 
 // What the build step emits for @Field('subsidiary', { relationship: 'transactionlines', filter: mainline }): N/query
 // inside SuiteScript rejects a transaction's own subsidiary on its root (NOT_EXPOSED), and its main line carries it.
+// The reference through it loads separately: N/query has no join from the line to the subsidiary.
 const mainLineInvoiceConfig: QueryConfig<MainLineInvoice> = {
     recordType: 'invoice',
     queryType: 'transaction',
     coerce: true,
     components: {
         transactionlines: { path: 'transactionlines', relationship: 'transactionlines', load: 'join', join: { kind: 'auto', fieldId: 'transactionlines' }, conditions: [{ fieldId: 'mainline', operator: 'IS', values: [true] }] },
-        subsidiary: { path: 'subsidiary', parent: 'transactionlines', relationship: 'subsidiary', load: 'join', join: { kind: 'to', fieldId: 'subsidiary', target: 'subsidiary' } },
+        subsidiary: {
+            path: 'subsidiary', relationship: 'subsidiary', load: 'separate',
+            join: { kind: 'to', fieldId: 'subsidiary', target: 'subsidiary' },
+            separate: { queryType: 'subsidiary', parentKeyField: 'subsidiaryId', targetKeyFieldId: 'id', targetKeyFieldType: 'key' },
+        },
     },
     fields: {
         id: { queryFieldId: 'id', type: 'key', isPrimary: true, readonly: true },
         subsidiaryId: { queryFieldId: 'subsidiary', component: 'transactionlines', type: 'select', recordFieldId: 'subsidiary' },
         subsidiary_name: { queryFieldId: 'name', component: 'subsidiary', type: 'string', nestPath: 'subsidiary.name', readonly: true },
     },
-    relationships: { subsidiary: { kind: 'reference', fields: { name: 'subsidiary_name' }, components: ['subsidiary'], selectByDefault: false } },
+    relationships: { subsidiary: { kind: 'reference', load: 'separate', fields: { name: 'subsidiary_name' }, components: ['subsidiary'], selectByDefault: false } },
 };
 
 describe('QueryBuilder – fields read through a relationship', () => {
@@ -316,11 +321,27 @@ describe('QueryBuilder – fields read through a relationship', () => {
         expect(fakeNQuery.calls[0].text).toBe('FROM transaction\nJOIN auto transactionlines AS transactionlines\nSELECT id AS id, transactionlines.subsidiary AS subsidiaryId\nWHERE transactionlines.mainline IS [true]\nORDER BY id ASC');
     });
 
-    it('filters on the field there, and joins a reference through it from the line', () => {
-        const description = query(mainLineInvoiceConfig).include('subsidiary').where('subsidiaryId', '=', 3).describe();
+    it('filters on the field there, and loads a reference through it separately by the ids read off the line', () => {
+        const builder = query(mainLineInvoiceConfig).include('subsidiary').where('subsidiaryId', '=', 3);
+        const description = builder.describe();
 
-        expect(description.components.map((component) => [component.path, component.parent])).toEqual([['transactionlines', undefined], ['subsidiary', 'transactionlines']]);
+        // The main query joins the main line only; the subsidiary is a second query, never a join off the line.
+        expect(description.components.map((component) => component.path)).toEqual(['transactionlines']);
         expect(description.condition).toEqual({ kind: 'field', component: 'transactionlines', fieldId: 'subsidiary', operator: 'ANY_OF', values: [3] });
+        expect(description.separateLoads?.map((load) => [load.relationship, load.parentKeyPath, load.description.queryType, load.batchFieldId])).toEqual([['subsidiary', 'subsidiaryId', 'subsidiary', 'id']]);
+        expect(builder.describeText()).toContain('SEPARATE subsidiary BY id');
+        expect(builder.describeText()).not.toContain('JOIN to subsidiary');
+    });
+
+    it('stitches the separately loaded reference onto each invoice by the id read off its main line', () => {
+        fakeNQuery.queueRows('transaction', [{ id: 7, subsidiaryId: 3 }, { id: 8, subsidiaryId: 4 }]);
+        fakeNQuery.queueRows('subsidiary', [{ subsidiary_name: 'Parent Co', __parentKey: 3 }]);
+
+        expect(query(mainLineInvoiceConfig).include('subsidiary').executeTyped()).toEqual([
+            { id: 7, subsidiaryId: 3, subsidiary: { name: 'Parent Co' } },
+            { id: 8, subsidiaryId: 4, subsidiary: null },
+        ]);
+        expect(fakeNQuery.calls[1].text).toBe('FROM subsidiary\nSELECT name AS subsidiary_name, id AS __parentKey\nWHERE id ANY_OF [3, 4]');
     });
 });
 
