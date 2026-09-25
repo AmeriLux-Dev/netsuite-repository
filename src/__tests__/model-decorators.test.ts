@@ -59,6 +59,7 @@ class SalesOrder extends Transaction {
     @Reference({ load: 'separate' }) vendor?: object;
     @Sublist('item', { filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }], load: 'join' }) lines!: Line[];
     @Sublist({ relationship: 'transactionlines' }) extras!: Line[];
+    @Sublist({ queryType: 'transaction', relationship: 'nexttransactionlink', through: [{ fieldId: 'nextdoc', target: 'transaction', filter: [{ fieldId: 'type', operator: 'ANY_OF', values: ['ItemShip'] }] }, 'transactionlines'] }) fulfilledLines!: Line[];
     @Field('tranid') tranId!: string;
 }
 
@@ -100,6 +101,14 @@ describe('decorator registry', () => {
         expect(properties.get('vendor')).toEqual({ name: 'vendor', relationKind: 'reference', load: 'separate' });
         expect(properties.get('lines')).toEqual({ name: 'lines', relationKind: 'sublist', sublistId: 'item', filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }], load: 'join' });
         expect(properties.get('extras')).toEqual({ name: 'extras', relationKind: 'sublist', relationshipFieldId: 'transactionlines' });
+        // A hop given as a bare field id is autoJoin on it; an object keeps its target and filter.
+        expect(properties.get('fulfilledLines')).toEqual({
+            name: 'fulfilledLines',
+            relationKind: 'sublist',
+            relationshipFieldId: 'nexttransactionlink',
+            separateQueryType: 'transaction',
+            through: [{ fieldId: 'nextdoc', target: 'transaction', filter: [{ fieldId: 'type', operator: 'ANY_OF', values: ['ItemShip'] }] }, { fieldId: 'transactionlines' }],
+        });
         expect(properties.get('shippingAddress')).toEqual({ name: 'shippingAddress', relationKind: 'subrecord', subrecordFieldId: 'shippingaddress', clearListField: 'shipaddresslist', load: 'separate' });
         expect(properties.get('billingAddress')).toEqual({ name: 'billingAddress', relationKind: 'subrecord', clearListField: 'billaddresslist' });
     });

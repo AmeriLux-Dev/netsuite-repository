@@ -191,6 +191,8 @@ export interface QueryComponent {
     separate?: SeparateLoad;
     /** Sublist: field the separate line query is ordered by when the query declares no sort of its own. */
     lineOrderFieldId?: string;
+    /** Sublist: path of the component that field is read on, when the items sit past further joins; the sublist's own component otherwise. */
+    lineOrderComponent?: string;
 }
 
 // ── fields ───────────────────────────────────────────────────────────────────

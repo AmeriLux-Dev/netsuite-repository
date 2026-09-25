@@ -227,3 +227,57 @@ export const childRootedPackagesOrderConfig = defineQueryConfig<OrderWithPackage
         packages: { kind: 'sublist', recordAccessId: 'packages', components: ['packages', 'packages.type'], load: 'separate', fields: { id: 'packages_id', weight: 'packages_weight', 'type.name': 'packages_type_name' } },
     },
 });
+
+// ── Order with its related transactions, two joins away ──────────────────────
+// The link hangs off `nexttransactionlink`; the transaction each link points at off the link's `nextdoc`. The items'
+// fields are read on the second hop, and the link component carries none of its own.
+
+export interface RelatedTransaction {
+    id: number;
+    tranId: string;
+    type: string;
+}
+export interface OrderWithRelatedTransactions {
+    id: number;
+    entityId: number;
+    relatedTransactions: RelatedTransaction[];
+}
+
+export const relatedTransactionsOrderConfig = defineQueryConfig<OrderWithRelatedTransactions>({
+    recordType: 'salesorder',
+    components: {
+        relatedTransactions: {
+            path: 'relatedTransactions', relationship: 'relatedTransactions', load: 'separate',
+            join: { kind: 'auto', fieldId: 'nexttransactionlink' },
+            conditions: [{ fieldId: 'linktype', operator: 'ANY_OF', values: ['OrdShip', 'OrdBill'] }],
+            separate: { queryType: 'transaction', parentKeyField: 'id', targetKeyFieldId: 'id', targetKeyFieldType: 'key' },
+            lineOrderFieldId: 'id',
+            lineOrderComponent: 'relatedTransactions.nextdoc',
+        },
+        'relatedTransactions.nextdoc': { path: 'relatedTransactions.nextdoc', parent: 'relatedTransactions', relationship: 'relatedTransactions', load: 'separate', join: { kind: 'to', fieldId: 'nextdoc', target: 'transaction' } },
+    },
+    fields: {
+        id:       { queryFieldId: 'id',     type: 'integer', isPrimary: true, recordFieldId: 'id' },
+        entityId: { queryFieldId: 'entity', type: 'key',     recordFieldId: 'entity' },
+        relatedTransactions_id:     { queryFieldId: 'id',     component: 'relatedTransactions.nextdoc', type: 'key',    nestPath: 'relatedTransactions.id',     cardinality: 'many', readonly: true },
+        relatedTransactions_tranId: { queryFieldId: 'tranid', component: 'relatedTransactions.nextdoc', type: 'string', nestPath: 'relatedTransactions.tranId', cardinality: 'many', readonly: true },
+        relatedTransactions_type:   { queryFieldId: 'type',   component: 'relatedTransactions.nextdoc', type: 'string', nestPath: 'relatedTransactions.type',   cardinality: 'many', readonly: true },
+    },
+    relationships: {
+        relatedTransactions: { kind: 'sublist', recordAccessId: 'relatedtransactions', components: ['relatedTransactions', 'relatedTransactions.nextdoc'], load: 'separate', fields: { id: 'relatedTransactions_id', tranId: 'relatedTransactions_tranId', type: 'relatedTransactions_type' } },
+    },
+});
+
+/** The same items joined into the owner's query: the owner queries `transaction` itself, which carries the link. */
+export const joinedRelatedTransactionsOrderConfig = defineQueryConfig<OrderWithRelatedTransactions>({
+    ...relatedTransactionsOrderConfig,
+    queryType: 'transaction',
+    rootConditions: [{ fieldId: 'type', operator: 'ANY_OF', values: ['SalesOrd'] }],
+    components: {
+        relatedTransactions: { ...relatedTransactionsOrderConfig.components!.relatedTransactions, load: 'join', separate: undefined },
+        'relatedTransactions.nextdoc': { ...relatedTransactionsOrderConfig.components!['relatedTransactions.nextdoc'], load: 'join' },
+    },
+    relationships: {
+        relatedTransactions: { ...relatedTransactionsOrderConfig.relationships!.relatedTransactions, load: 'join' },
+    },
+});

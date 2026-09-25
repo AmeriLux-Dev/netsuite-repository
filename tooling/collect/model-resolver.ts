@@ -40,6 +40,12 @@ export interface ResolvedUnmappedProperty {
     inherited: boolean;
 }
 
+/** One join past a sublist's relationship field on the way to its items, with the conditions its component always carries. */
+export interface ResolvedRelationHop {
+    join: ComponentJoin;
+    filter?: ComponentCondition[];
+}
+
 export interface ResolvedRelation {
     name: string;
     kind: RelationKind;
@@ -65,6 +71,8 @@ export interface ResolvedRelation {
     filter?: ComponentCondition[];
     lineKeyProperty?: string;
     lineOrderFieldId?: string;
+    /** Sublist: the joins after the relationship field that lead to the items; their fields are read on the last one. */
+    through?: ResolvedRelationHop[];
 }
 
 export interface ResolvedClass extends ClassIdentity {
@@ -294,6 +302,20 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
                     }
                     join = { kind: 'from', fieldId: parentKeyField.queryFieldId, source: target.queryType as string };
                 }
+                // Items past further joins: each hop is autoJoin on a relationship field, or joinTo through a select field.
+                const hops = propertyOverrides?.through ?? [];
+                if (hops.length > 0 && propertyOverrides?.relationshipFieldId === undefined) {
+                    report(entry, `Sublist '${qualifiedName}' ('${sublistId}') hops through further joins but names no relationship field to start from; declare it with @Sublist('${sublistId}', { relationship, through }).`);
+                    continue;
+                }
+                if (hops.some((hop) => typeof hop.fieldId !== 'string' || hop.fieldId.trim() === '')) {
+                    report(entry, `Sublist '${qualifiedName}' ('${sublistId}') has a hop in 'through' with no field id; each hop is a relationship field id or { fieldId, target }.`);
+                    continue;
+                }
+                const through: ResolvedRelationHop[] = hops.map((hop) => ({
+                    join: hop.target === undefined ? { kind: 'auto', fieldId: hop.fieldId } : { kind: 'to', fieldId: hop.fieldId, target: hop.target },
+                    ...(hop.filter ? { filter: hop.filter } : {}),
+                }));
                 const lineKeyField = target.fields.find((field) => field.name === target.keyProperty);
                 // A query type of its own means the lines run as their own query, matched to the owner by internal id.
                 const separateQueryType = propertyOverrides?.separateQueryType;
@@ -318,6 +340,7 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
                     filter: propertyOverrides?.filter,
                     lineKeyProperty: target.keyProperty,
                     lineOrderFieldId: lineKeyField?.queryFieldId,
+                    ...(through.length > 0 ? { through } : {}),
                     relations: nested(),
                 });
                 continue;

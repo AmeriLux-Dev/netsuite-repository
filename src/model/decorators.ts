@@ -1,6 +1,6 @@
 import type { ComponentCondition, FieldType, QueryField, RecordUpdaterOptions, RelationshipLoad } from '../types';
 import { createClassOverrides, getOrCreatePropertyOverrides, mergeClassOverrides } from './metadata';
-import type { ClassOverrides, PropertyOverrides, ReferenceJoinKind } from './metadata';
+import type { ClassOverrides, PropertyOverrides, ReferenceJoinKind, RelationHop } from './metadata';
 
 export type ModelClass<T = unknown> = new (...args: never[]) => T;
 
@@ -68,6 +68,14 @@ export interface SublistOptions extends RelationOptions {
      * internal id, so the sublist loads separately; `load` need not be given.
      */
     queryType?: string;
+    /**
+     * The joins after `relationship` that lead to the items when they sit more than one join away: a string is a
+     * relationship field (autoJoin), an object a select field with the query type it points at (joinTo) and its own
+     * filter. The items' fields are read on the last hop, and nothing on the way needs a class. A transaction's
+     * related transactions: `{ relationship: 'nexttransactionlink', through: [{ fieldId: 'nextdoc', target: 'transaction' }] }`.
+     * The items are other records, not lines of the owner, so they are read-only.
+     */
+    through?: Array<string | RelationHop>;
 }
 
 type ClassDecoratorFunction = (target: Function) => void;
@@ -201,8 +209,14 @@ export function Sublist(first?: string | SublistOptions, second?: SublistOptions
         if (options.filter !== undefined) property.filter = options.filter;
         if (options.relationship !== undefined) property.relationshipFieldId = options.relationship;
         if (options.queryType !== undefined) property.separateQueryType = options.queryType;
+        if (options.through !== undefined) property.through = options.through.map(toRelationHop);
         applyRelationOptions(property, options);
     });
+}
+
+/** A hop given as a bare field id is autoJoin on that relationship field. */
+function toRelationHop(hop: string | RelationHop): RelationHop {
+    return typeof hop === 'string' ? { fieldId: hop } : { ...hop };
 }
 
 export function SetFirst(): PropertyDecoratorFunction {

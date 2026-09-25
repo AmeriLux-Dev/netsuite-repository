@@ -606,7 +606,7 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
             const filterNodes: ConditionNode[] = (component.conditions ?? []).map((condition) => omitUndefined({ kind: 'field' as const, fieldId: condition.fieldId, operator: condition.operator, values: condition.values }));
             const userCondition = combineConditions(conditions.map((condition) => ({ ...condition, node: rerootConditionNode(condition.node, relationship) })));
             const conditionNodes = [...filterNodes, ...(userCondition ? [userCondition] : [])];
-            const defaultSort: DescribedSort[] = component.lineOrderFieldId ? [{ fieldId: component.lineOrderFieldId, ascending: true }] : [];
+            const defaultSort: DescribedSort[] = component.lineOrderFieldId ? [omitUndefined({ component: reroot(component.lineOrderComponent), fieldId: component.lineOrderFieldId, ascending: true })] : [];
             const description: QueryDescription = omitUndefined({
                 queryType: separate.queryType,
                 components: this.orderComponents(nested).map((candidate) => omitUndefined({ ...this.toDescribedComponent(candidate), parent: reroot(candidate.parent) })),
@@ -625,7 +625,7 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
         const ownRoot = component.separate;
         const batchFieldId = ownRoot?.targetKeyFieldId ?? primary.field.queryFieldId;
         const columns = [...relationFields.map(([key, field]) => this.toColumn(key, field)), { alias: parentKeyAlias, fieldId: batchFieldId }];
-        const defaultSort: DescribedSort[] = component.lineOrderFieldId ? [{ component: relationship, fieldId: component.lineOrderFieldId, ascending: true }] : [];
+        const defaultSort: DescribedSort[] = component.lineOrderFieldId ? [{ component: component.lineOrderComponent ?? relationship, fieldId: component.lineOrderFieldId, ascending: true }] : [];
         const description: QueryDescription = omitUndefined({
             queryType: ownRoot?.queryType ?? this.config.queryType ?? this.config.recordType,
             components: this.orderComponents(relationComponents).map((candidate) => this.toDescribedComponent(candidate)),
