@@ -109,6 +109,19 @@ interface ClassEntry {
     declared: DeclaredClass;
 }
 
+/** An object-typed property is what its decorator says; otherwise a record class is a reference and a plain class a subrecord. */
+function inferObjectPropertyRelationKind(overrides: PropertyOverrides | undefined, targetIsRecordType: boolean): RelationKind {
+    return overrides?.relationKind ?? (targetIsRecordType ? 'reference' : 'subrecord');
+}
+
+/** True when @Field set anything on the property: on a reference, those options describe its shadow select field. */
+function hasFieldOptions(overrides: PropertyOverrides | undefined): boolean {
+    return overrides !== undefined && [
+        overrides.fieldId, overrides.queryFieldId, overrides.type, overrides.text, overrides.coerce, overrides.readOnly,
+        overrides.setFirst, overrides.transform, overrides.relationshipFieldId, overrides.filter,
+    ].some((value) => value !== undefined);
+}
+
 function toShallowField(property: DeclaredProperty, overrides: PropertyOverrides | undefined, isKey: boolean, isSelectField: boolean): ResolvedField | undefined {
     // The internal id is a key and a reference's select field a select: both compare through ANY_OF in N/query.
     const inferredType = overrides?.type ?? (isKey ? 'key' : isSelectField && property.scalarType ? 'select' : property.scalarType);
@@ -160,6 +173,44 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
         return entry.collected.overrides.keyProperty ?? 'id';
     }
 
+    /**
+     * The select field of a reference whose class declares none, like EF's shadow foreign key: `subsidiary` gets
+     * `subsidiaryId`, typed as the referenced record's internal id, and @Field options on the reference configure it.
+     * A declared property of that name is always the select field instead, mapped or not, so its type and decorators
+     * are never replaced. A reference that names its select field, or matches on another key, must declare it.
+     */
+    function toShadowSelectField(entry: ClassEntry, property: DeclaredProperty): ResolvedField | undefined {
+        const targetEntry = property.target ? entries.get(classKeyOf(property.target)) : undefined;
+        const referenceOverrides = entry.collected.overrides.properties.get(property.name);
+        const name = `${property.name}Id`;
+        if (
+            !targetEntry
+            || property.isArray
+            || inferObjectPropertyRelationKind(referenceOverrides, targetEntry.collected.overrides.recordType !== undefined) !== 'reference'
+            || referenceOverrides?.selectFieldProperty !== undefined
+            || referenceOverrides?.targetKeyProperty !== undefined
+            || entry.declared.properties.some((candidate) => candidate.name === name)
+        ) {
+            return undefined;
+        }
+        const targetKeyTypeText = targetEntry.declared.properties.find((candidate) => candidate.name === keyPropertyOf(targetEntry))?.typeText ?? 'number';
+        // Only the field's own options: selectByDefault and load on the reference belong to the relation.
+        const fieldOverrides: PropertyOverrides = {
+            name,
+            fieldId: referenceOverrides?.fieldId ?? property.name.toLowerCase(),
+            queryFieldId: referenceOverrides?.queryFieldId,
+            type: referenceOverrides?.type,
+            coerce: referenceOverrides?.coerce,
+            readOnly: referenceOverrides?.readOnly,
+            setFirst: referenceOverrides?.setFirst,
+            transform: referenceOverrides?.transform,
+            relationshipFieldId: referenceOverrides?.relationshipFieldId,
+            filter: referenceOverrides?.filter,
+        };
+        const shadow: DeclaredProperty = { name, optional: false, nullable: true, isArray: false, typeText: `${targetKeyTypeText} | null`, scalarType: 'select', inherited: property.inherited };
+        return toShallowField(shadow, fieldOverrides, false, true);
+    }
+
     /** Resolves scalars and the class-level facts; relations are attached afterwards so cycles cannot recurse. */
     function resolveShallow(entry: ClassEntry): ResolvedClass {
         const key = classKeyOf(entry.collected);
@@ -202,12 +253,14 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
                 resolved.unmapped.push({ name: property.name, typeText: property.typeText, optional: property.optional, inherited: property.inherited });
                 continue;
             }
-            if (property.target) {
-                continue;
-            }
-            const field = toShallowField(property, overrides.properties.get(property.name), property.name === keyProperty, selectFieldProperties.has(property.name) || property.name === overrides.parentKeyProperty);
+            // A reference with no declared select field brings its own (a shadow); other relations are attached later.
+            const field = property.target
+                ? toShadowSelectField(entry, property)
+                : toShallowField(property, overrides.properties.get(property.name), property.name === keyProperty, selectFieldProperties.has(property.name) || property.name === overrides.parentKeyProperty);
             if (!field) {
-                report(entry, `Property '${entry.declared.className}.${property.name}' has type '${property.typeText}', which does not map to a NetSuite field type. Declare it with @Field({ type }), type it as a model class, or mark it @NotMapped().`);
+                if (!property.target) {
+                    report(entry, `Property '${entry.declared.className}.${property.name}' has type '${property.typeText}', which does not map to a NetSuite field type. Declare it with @Field({ type }), type it as a model class, or mark it @NotMapped().`);
+                }
                 continue;
             }
             const propertyOverrides = overrides.properties.get(property.name);
@@ -351,8 +404,7 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
                 continue;
             }
 
-            // A plain class is a subrecord; a record class is a reference unless the property says @Subrecord().
-            const kind: RelationKind = declaredKind ?? (targetIsRecordType ? 'reference' : 'subrecord');
+            const kind = inferObjectPropertyRelationKind(propertyOverrides, targetIsRecordType);
 
             if (kind === 'reference') {
                 if (!targetIsRecordType) {
@@ -361,8 +413,15 @@ export function resolveModels(options: ResolveModelsOptions): ResolveModelsResul
                 }
                 const selectFieldProperty = propertyOverrides?.selectFieldProperty ?? `${property.name}Id`;
                 const selectField = resolved.fields.find((field) => field.name === selectFieldProperty);
+                const isSelectFieldDeclared = entry.declared.properties.some((candidate) => candidate.name === selectFieldProperty);
                 if (!selectField) {
-                    report(entry, `Reference '${qualifiedName}' needs a select field: declare '${selectFieldProperty}', name one with @Reference('<property>'), or mark the property @Subrecord() if it is one.`);
+                    report(entry, isSelectFieldDeclared
+                        ? `Reference '${qualifiedName}' needs a select field, and '${selectFieldProperty}' is declared but not mapped; map it, since a declared property is never replaced by a shadow select field.`
+                        : `Reference '${qualifiedName}' needs a select field: declare '${selectFieldProperty}', name one with @Reference('<property>'), or mark the property @Subrecord() if it is one.`);
+                    continue;
+                }
+                if (isSelectFieldDeclared && hasFieldOptions(propertyOverrides)) {
+                    report(entry, `Reference '${qualifiedName}' has @Field options, but its select field is the declared property '${selectFieldProperty}'; put them on '${selectFieldProperty}'.`);
                     continue;
                 }
                 const targetKeyProperty = propertyOverrides?.targetKeyProperty;

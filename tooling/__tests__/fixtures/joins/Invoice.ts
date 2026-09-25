@@ -69,6 +69,18 @@ export class Invoice {
     relatedTransactions!: Pick<TransactionBase, 'id' | 'tranId' | 'type'>[];
 }
 
+/** References with no id property: the build step adds each one's select field (`subsidiaryId`, `locationId`) as a shadow. */
+@RecordType('creditmemo')
+export class CreditMemo {
+    id!: number;
+    /** @Field options on a reference configure its shadow select field, here read off the main line. */
+    @Field({ relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [true] }] })
+    subsidiary?: Pick<Subsidiary, 'id' | 'name'>;
+    /** Loaded by a second query batched on the shadow's values. */
+    @Reference({ load: 'separate' })
+    location?: Pick<Warehouse, 'id' | 'name'>;
+}
+
 /** A field read off the main line keeps its own join when another record reaches it through a reference. */
 @RecordType('customrecord_invoice_note')
 export class InvoiceNote {

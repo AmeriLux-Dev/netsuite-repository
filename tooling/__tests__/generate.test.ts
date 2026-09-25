@@ -211,6 +211,24 @@ describe('planGeneration() – model fixtures', () => {
         expect(joins.files.find((file) => file.path.endsWith('types.gen.ts'))?.content).toContain('    relatedTransactions: TransactionBase[];');
     });
 
+    // Like EF's shadow foreign key: a reference with no id property gets its select field from the build step.
+    it('adds a shadow select field to a reference that declares none, and never replaces a declared one', () => {
+        const joins = planGeneration({ config: buildConfig(['tooling/__tests__/fixtures/joins/*.ts'], outDir), cwd: repositoryRoot, fileSystem, compilerOptions, version: '0.0.0-test' });
+        expect(joins.diagnostics).toEqual([]);
+        const creditMemoConfig = joins.files.find((file) => file.path.endsWith('CreditMemo.gen.ts'))?.content as string;
+        const typesFile = joins.files.find((file) => file.path.endsWith('types.gen.ts'))?.content as string;
+        // The field id comes from the reference, and the @Field options on it read the shadow off the main line.
+        expect(creditMemoConfig).toMatch(/subsidiaryId: \{\n\s+queryFieldId: 'subsidiary',\n\s+component: 'transactionlines',\n\s+type: 'select',\n\s+recordFieldId: 'subsidiary',\n\s+\},/);
+        expect(creditMemoConfig).toContain("        subsidiary: {\n            path: 'subsidiary',\n            parent: 'transactionlines',\n            relationship: 'subsidiary',\n            load: 'join',\n            join: {\n                kind: 'to',\n                fieldId: 'subsidiary',\n                target: 'subsidiary',\n            },\n        },");
+        expect(creditMemoConfig).toMatch(/locationId: \{\n\s+queryFieldId: 'location',\n\s+type: 'select',\n\s+recordFieldId: 'location',\n\s+\},/);
+        expect(creditMemoConfig).toContain("            separate: {\n                queryType: 'location',\n                parentKeyField: 'locationId',\n                targetKeyFieldId: 'id',\n                targetKeyFieldType: 'key',\n            },");
+        expect(creditMemoConfig).toContain("    subsidiaryId: 'subsidiaryId',\n    locationId: 'locationId',");
+        // The shadow is typed as the referenced record's internal id, and empty when the select field is.
+        expect(typesFile).toContain("export interface CreditMemo {\n    id: number;\n    subsidiaryId: number | null;\n    locationId: number | null;\n    subsidiary?: Subsidiary;\n    location?: Pick<Warehouse, 'id' | 'name'>;\n}");
+        // A declared select field keeps its own type.
+        expect(typesFile).toContain('export interface Invoice {\n    id: number;\n    subsidiaryId: number;\n');
+    });
+
     it('emits the config of a record type importing its interface from the types file, and re-exporting the types', () => {
         expect(salesOrderConfig).toContain('//   Generated config, field paths, base repository for the SalesOrder model.');
         expect(salesOrderConfig).toContain("import { RecordSet } from '@amerilux/netsuite-repository';\nimport type { QueryConfig, QueryConfigSource, RecordSetOptions } from '@amerilux/netsuite-repository';\nimport type { SalesOrder } from './types.gen';");
@@ -399,14 +417,15 @@ describe('planGeneration() – diagnostics', () => {
             "Property 'BadRelations.ghostParent' is marked @ParentId() but is not a mapped field.",
             "Sublist 'BadRelations.notes' ('notes') is typed as 'Note', which has no @RecordType; a line class names its record type, or the property names the relationship with @Sublist('notes', { relationship }).",
             "Sublist 'BadRelations.children' ('children') has no way back to its parent: mark the property of 'ChildLine' holding the parent's internal id with @ParentId(), or name the relationship with @Sublist('children', { relationship }).",
-            "Reference 'BadRelations.owner' needs a select field: declare 'ownerId', name one with @Reference('<property>'), or mark the property @Subrecord() if it is one.",
+            "Reference 'BadRelations.owner' needs a select field, and 'ownerId' is declared but not mapped; map it, since a declared property is never replaced by a shadow select field.",
+            "Reference 'BadRelations.manager' has @Field options, but its select field is the declared property 'managerId'; put them on 'managerId'.",
             "Reference 'BadRelations.detail' targets 'Note', which has no @RecordType; a reference needs a query type.",
             "Property 'BadRelations.line' is marked @Sublist() but is not an array.",
             "Property 'BadRelations.tags' is an array; use @Sublist() on it, @Subrecord() and @Reference() apply to object properties.",
             "Sublist 'BadRelations.hopsFromLines' ('hopsfromlines') hops through further joins but names no relationship field to start from; declare it with @Sublist('hopsfromlines', { relationship, through }).",
             "Sublist 'BadRelations.blankHop' ('blankhop') has a hop in 'through' with no field id; each hop is a relationship field id or { fieldId, target }.",
             "Sublist 'BadRelationsOwner.parents' ('parents') has no way back to its parent: mark the property of 'BadRelations' holding the parent's internal id with @ParentId(), or name the relationship with @Sublist('parents', { relationship }).",
-            "Reference 'BadRelationsOwner.parent' needs a select field: declare 'parentId', name one with @Reference('<property>'), or mark the property @Subrecord() if it is one.",
+            "Reference 'BadRelationsOwner.parent' needs a select field: declare 'parentKey', name one with @Reference('<property>'), or mark the property @Subrecord() if it is one.",
             "Sublist 'BadRelationsOwner.joinedElsewhere' ('lines') names a query type ('transaction') for its own query, which cannot be joined into the owner's. Remove load: 'join'.",
             "Reference 'BadTargetKey.owner' matches on 'BadRelationsOwner.ghost', which is not a mapped field.",
             "Reference 'BadTargetKey.joined' matches on 'BadRelationsOwner.id' and must load separately; N/query joins only through the target's internal id. Remove load: 'join'.",

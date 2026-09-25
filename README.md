@@ -113,7 +113,7 @@ The class decorator is only ever `@RecordType`. A sublist line class is a record
 | Query type | the record type | `@RecordType('x', { queryType })` |
 | Root filter | none | `@RecordType('x', { filter: [{ fieldId, operator, values }] })` |
 | Reference or subrecord | a plain class is a subrecord; a record class is a reference | `@Reference()`, `@Subrecord()` |
-| Select field of a reference | `<reference>Id` on the same class | `@Reference('entityId')` |
+| Select field of a reference | `<reference>Id` on the same class; when the class declares none, the build step adds it (a shadow select field, see below) | `@Reference('entityId')` names a declared one; `@Field('entity')` on the reference configures the shadow |
 | Reference join | `joinTo` through the select field and the target's record type | `@Reference({ join: 'auto' })` |
 | Reference matched on another field | | `@Reference('code', { targetKey: 'code' })`; always loaded separately |
 | Reference N/query has no join for | | `@Reference('parentId', { load: 'separate' })`: a second query matches the target's internal id against the select field values. A custom List/Record field whose list is Item is one such field: `autoJoin` on it fails with "Record Join ... was not found", while custom fields pointing at one custom record or at a standard record such as `shipitem` do join |
@@ -142,6 +142,24 @@ customer?: Customer;                                   // every mapped field
 ```
 
 References are read-only; write the select field (`customerId`) instead. A reference that loads its own class without a projection is a build error.
+
+### The select field of a reference
+
+A reference reads the internal id it joins on from `<reference>Id`. Declare that property when you want to control it, or leave it out and the build step adds it to the generated type, like an Entity Framework shadow foreign key:
+
+```ts
+@Field('entity') customerId!: number;                     // declared: its own type and options
+customer?: Pick<Customer, 'id' | 'companyName'>;
+
+subsidiary?: Pick<Subsidiary, 'id' | 'name'>;            // generated type gains subsidiaryId: number | null
+@Field('custbody_approver') approver?: Pick<Employee, 'id'>; // generated type gains approverId, read from custbody_approver
+```
+
+- The shadow is an ordinary field on the generated type: read it, filter on it, write it. Its field id is the reference's lowercased name, its type the referenced record's internal id or `null`.
+- `@Field` on the reference configures the shadow: its field id, `readOnly`, or `relationship` and `filter` to read it off a joined component.
+- A declared property is always the select field, whatever its type; the build step never replaces it, even when it is `@NotMapped()`. `@Field` options on a reference whose select field is declared are a build error: put them on the declared property.
+- A reference that names its select field (`@Reference('entityId')`) or matches on another key (`targetKey`) must declare it.
+- A projection in another model file cannot name a shadow: `Pick<Order, 'subsidiaryId'>` does not compile when the `Order` class does not declare it. Declare the select field when another model projects it.
 
 ### Join or separate
 
@@ -210,6 +228,7 @@ export class Invoice {
 - The filter must pick one row per record. `mainline IS true` does, so rows never fan out and `page()` stays a row window.
 - Fields read through one relationship share its join, so they must declare the same filter; the build step reports two that differ, and a filter with no relationship.
 - A reference whose select field is read this way joins from that component. Loaded separately, it matches the collected values as any reference does.
+- Without `subsidiaryId`, the options go on the reference itself: `@Field({ relationship: 'transactionlines', filter: [...] }) subsidiary?: Pick<Subsidiary, 'id' | 'name'>` reads its shadow select field off the main line.
 - Writes are unchanged: the field writes through the record's own field id. Declare it `readOnly: true` when the record has no such field.
 
 ### Inheritance
@@ -223,8 +242,8 @@ A base class without `@RecordType` is a mapping base whose members are inherited
 | `@RecordType(id, { queryType?, filter?, setName?, coerce?, updater? })` | class | A queryable record type with a record set on the context. `id` is a native type from `NetsuiteRecordType` (`NetsuiteRecordType.SALES_ORDER`, a runtime copy of N/record's `Type` so the model needs no N/* import) or a custom record id (`'customrecord_x'`). `updater` sets the default `RecordUpdaterOptions` for every write. |
 | `@InternalId()` | property | The internal id when it is not `id`. |
 | `@ParentId()` | property | On a line class: the property holding the parent record's internal id. |
-| `@Field(id?, { queryFieldId?, type?, text?, coerce?, relationship?, filter?, readOnly?, setFirst?, selectByDefault?, transform? })` | property | Renames the field, separates the query field id from the record field id, overrides the inferred type, or reads the field through a relationship when the root does not expose it. The flags: `readOnly` excludes it from writes, `setFirst` writes it before the others, `selectByDefault: false` leaves it out of the default select, and `transform` maps the value read; a transform must be an exported function so the build step can import it by name. |
-| `@Reference(selectFieldProperty?, { targetKey?, load?, join?, selectByDefault? })` | property | A reference: the select field behind it, and the referenced property to match on when it is not the internal id. |
+| `@Field(id?, { queryFieldId?, type?, text?, coerce?, relationship?, filter?, readOnly?, setFirst?, selectByDefault?, transform? })` | property | Renames the field, separates the query field id from the record field id, overrides the inferred type, or reads the field through a relationship when the root does not expose it. On a reference with no declared select field, it configures the shadow select field. The flags: `readOnly` excludes it from writes, `setFirst` writes it before the others, `selectByDefault: false` leaves it out of the default select, and `transform` maps the value read; a transform must be an exported function so the build step can import it by name. |
+| `@Reference(selectFieldProperty?, { targetKey?, load?, join?, selectByDefault? })` | property | A reference: the declared select field behind it when it is not `<reference>Id`, how it joins and loads, and the referenced property to match on when it is not the internal id. |
 | `@Subrecord(fieldId?, { clearListField?, load?, selectByDefault? })` | property | A subrecord: its field id and the list field cleared before an edit. |
 | `@Sublist(sublistId?, { filter?, relationship?, through?, queryType?, load?, selectByDefault? })` | property | A sublist, or any has-many: its id, the conditions that pick its lines, and how the lines are reached (a relationship field, further joins past it, another root, or the line class's `@ParentId()` field). |
 | `@NotMapped()` | property | Leaves the property out of the model; it stays on the generated type for values filled in after the query. |
