@@ -103,17 +103,24 @@ export function compileModel(model: ResolvedClass): QueryConfig<unknown> {
         insideSublist: boolean;
         /** The fields of the class that declares the relation: where a reference finds its select field. */
         ownerFields: ResolvedField[];
+        /** The component the owner's fields are read on: the root when undefined; past further joins, the last hop. */
+        ownerComponentPath?: string;
     }
 
     function compileRelation(relation: ResolvedRelation, context: RelationContext): void {
         const path = [...context.path, relation.name];
         const componentPath = path.join('.');
-        const ownerPath = context.path.length > 0 ? context.path.join('.') : undefined;
+        const ownerPath = context.ownerComponentPath;
         // A reference joins from wherever its select field is read: the component of a relationship the owner reads it through.
         const selectField = relation.kind === 'reference' ? context.ownerFields.find((field) => field.name === relation.selectFieldProperty) : undefined;
         const parentPath = (selectField && relationshipComponentPathOf(selectField, ownerPath)) ?? ownerPath;
         context.rootComponents.push(componentPath);
         const load: RelationshipLoad = context.path.length === 0 ? relation.load : context.root.load;
+        // Items past further joins: one component per hop, each hanging off the one before, and the items' fields read
+        // on the last. The hop components carry no fields of their own, so the items keep their paths.
+        const hops = relation.through ?? [];
+        const hopPaths = hops.reduce<string[]>((paths, hop) => [...paths, `${paths[paths.length - 1] ?? componentPath}.${hop.join.fieldId}`], []);
+        const itemsComponentPath = hopPaths[hopPaths.length - 1] ?? componentPath;
         registerComponent({
             path: componentPath,
             parent: parentPath,
@@ -123,29 +130,43 @@ export function compileModel(model: ResolvedClass): QueryConfig<unknown> {
             conditions: relation.filter,
             separate: relation.separate,
             lineOrderFieldId: relation.lineOrderFieldId,
+            lineOrderComponent: hops.length > 0 ? itemsComponentPath : undefined,
+        });
+        hops.forEach((hop, index) => {
+            context.rootComponents.push(hopPaths[index]);
+            registerComponent({
+                path: hopPaths[index],
+                parent: index === 0 ? componentPath : hopPaths[index - 1],
+                relationship: context.root.name,
+                load,
+                join: hop.join,
+                conditions: hop.filter,
+            });
         });
 
         const insideSublist = context.insideSublist || relation.kind === 'sublist';
         const isDirect = context.path.length === 0;
         const rootKind = context.root.kind;
+        // Items reached through further joins are other records, not lines of the owner: nothing writes through them.
+        const readOnlyItems = hops.length > 0;
 
         for (const field of relation.fields) {
             const key = `${path.join('_')}_${field.name}`;
             const nestedPath = `${path.slice(1).join('.')}${path.length > 1 ? '.' : ''}${field.name}`;
             context.rootFields[nestedPath] = key;
-            const relationshipComponentPath = registerRelationshipComponent(field, componentPath, context.root.name, load);
+            const relationshipComponentPath = registerRelationshipComponent(field, itemsComponentPath, context.root.name, load);
             if (relationshipComponentPath !== undefined && !context.rootComponents.includes(relationshipComponentPath)) {
                 context.rootComponents.push(relationshipComponentPath);
             }
             const common: QueryField = {
                 queryFieldId: field.queryFieldId,
-                component: relationshipComponentPath ?? componentPath,
+                component: relationshipComponentPath ?? itemsComponentPath,
                 ...commonFieldShape(field),
                 nestPath: `${componentPath}.${field.name}`,
                 cardinality: insideSublist ? 'many' : undefined,
             };
 
-            if (!isDirect || rootKind === 'reference') {
+            if (!isDirect || rootKind === 'reference' || readOnlyItems) {
                 registerField(key, { ...common, readonly: true });
                 continue;
             }
@@ -178,7 +199,7 @@ export function compileModel(model: ResolvedClass): QueryConfig<unknown> {
         }
 
         for (const nested of relation.relations) {
-            compileRelation(nested, { ...context, path, insideSublist, ownerFields: relation.fields });
+            compileRelation(nested, { ...context, path, insideSublist, ownerFields: relation.fields, ownerComponentPath: itemsComponentPath });
         }
     }
 

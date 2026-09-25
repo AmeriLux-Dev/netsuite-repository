@@ -124,6 +124,7 @@ The class decorator is only ever `@RecordType`. A sublist line class is a record
 | Loading | `join`: read in the parent's query; NetSuite decides inner or outer | `load: 'separate'` on `@Sublist`, `@Subrecord`, `@Reference` |
 | Root of the line query | the owner's query type | `@Sublist('item', { queryType: 'transaction', relationship: 'transactionlines' })` when the lines hang off another record than the owner (a `salesorder` root has no join to its lines; `transaction` has); the lines then run as their own query, matched to the owner by internal id |
 | Has-many keyed by a field on the child | | `@Sublist({ load: 'separate' })` on the owner with `@ParentId()` on the child's field that points back at it (a fulfillment's SPS contents, keyed by their fulfillment field): the children run as their own query on the child's record type, batched on that field with ANY_OF; nothing is joined to reach them |
+| Items more than one join away | | `@Sublist({ relationship: 'nexttransactionlink', through: [{ fieldId: 'nextdoc', target: 'transaction' }] })`: each hop is a relationship field (`autoJoin`) or a select field with the query type it points at (`joinTo`); the items' fields are read on the last hop, and nothing on the way needs a class |
 | Record set name | pluralized camel-case class name | `@RecordType('x', { setName })` |
 
 Nothing in the build step knows a NetSuite table, relationship, sublist, or field. What the table does not list is either derived from the class or resolved by N/query when the query runs. A missing declaration the build step needs is a diagnostic naming the decorator that supplies it.
@@ -171,6 +172,25 @@ export class ItemFulfillment {
 
 A separate relation inside a separately loaded relation is not planned: compose it in the repository, as the order-processing test project does when it reads the fulfillments of a set of orders and stitches them onto the orders itself.
 
+### Items more than one join away
+
+A has-many whose items sit past further joins from the relationship field declares those joins on the property. Nothing on the way needs a class: only the items do, and a projection of a base class serves. A transaction's related records hang off the link `nexttransactionlink`, and the transaction each link points at off the link's `nextdoc`:
+
+```ts
+@RecordType('salesorder')
+export class SalesOrder extends Transaction {
+    /** The transactions this order led to: the link off `transaction`, then the transaction it points at. */
+    @Sublist({ queryType: 'transaction', relationship: 'nexttransactionlink', through: [{ fieldId: 'nextdoc', target: 'transaction' }] })
+    relatedTransactions!: Pick<Transaction, 'id' | 'tranId' | 'statusText'>[];
+}
+```
+
+- `relationship` is the first join, `autoJoin` on a relationship field. Each entry of `through` is one more: a string is a relationship field (`autoJoin`), an object a select field with the query type it points at (`joinTo`). A hop may carry its own `filter`; the sublist's `filter` applies to the relationship's component (`linktype ANY_OF [...]` on the link).
+- The build step emits one component per hop, parent to child, and reads the items' fields on the last. Result paths do not spell the hops: `order.relatedTransactions[0].tranId`, and `where('relatedTransactions.tranId', ...)` and `orderBy()` address the items the same way.
+- Loaded separately (`queryType`, or `load: 'separate'`), the second query joins the whole chain from its root and matches the owners by internal id; a `where` on the items narrows the items. Joined (`load: 'join'`, on an owner whose own query type carries the relationship field), the chain joins into the owner's query and a `where` on the items narrows the owners.
+- The items are other records, not lines of the owner, so their fields are read-only.
+- The relationship and hop field ids are what the Records Catalog lists under the record's joins; N/query resolves the predicates.
+
 ### Fields the root does not expose
 
 N/query inside SuiteScript rejects some body fields on the root that the record itself has: a transaction's `subsidiary` fails with `NOT_EXPOSED - Field is marked as internal for channel SEARCH`, even though SuiteQL through the REST service reads it. Its main line carries the same value, so the field is read there:
@@ -206,7 +226,7 @@ A base class without `@RecordType` is a mapping base whose members are inherited
 | `@ReadOnly()` | property | Excludes the property from writes. |
 | `@Reference(selectFieldProperty?, { targetKey?, load?, join? })` | property | A reference: the select field behind it, and the referenced property to match on when it is not the internal id. |
 | `@Subrecord(fieldId?, { clearListField?, load? })` | property | A subrecord: its field id and the list field cleared before an edit. |
-| `@Sublist(sublistId?, { filter?, relationship?, queryType?, load? })` | property | A sublist, or any has-many: its id, the conditions that pick its lines, and how the lines are reached (a relationship field, another root, or the line class's `@ParentId()` field). |
+| `@Sublist(sublistId?, { filter?, relationship?, through?, queryType?, load? })` | property | A sublist, or any has-many: its id, the conditions that pick its lines, and how the lines are reached (a relationship field, further joins past it, another root, or the line class's `@ParentId()` field). |
 | `@SetFirst()`, `@ExcludeFromDefaultSelect()`, `@Transform(fn)`, `@NotMapped()` | property | Flags. Transforms must be exported functions so the build step can import them by name. |
 
 ## Build step and generated files

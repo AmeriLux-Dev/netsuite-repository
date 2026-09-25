@@ -7,6 +7,19 @@ export type RelationKind = 'reference' | 'subrecord' | 'sublist';
 export type ReferenceJoinKind = 'auto' | 'to';
 
 /**
+ * One join on the way from a sublist's relationship field to its items: a relationship field (autoJoin), or a select
+ * field and the query type it points at (joinTo). A transaction's related transactions hang off `nexttransactionlink`,
+ * and the transaction itself off that link's `nextdoc`.
+ */
+export interface RelationHop {
+    fieldId: string;
+    /** joinTo: the query type the field points at. Absent, the hop is autoJoin on a relationship field. */
+    target?: string;
+    /** Conditions on the hop's component; always applied. */
+    filter?: ComponentCondition[];
+}
+
+/**
  * Everything the decorators can say about one property. Every member is an override; what is not declared is
  * derived from the model itself (property names and types) or resolved by N/query at run time. Nothing here is
  * ever filled from a table of NetSuite facts.
@@ -50,6 +63,8 @@ export interface PropertyOverrides {
     filter?: ComponentCondition[];
     /** Sublist loaded separately: root type of the line query when it is not the owner's query type. */
     separateQueryType?: string;
+    /** Sublist: the joins after the relationship field that lead to the items, when they are not on its component. */
+    through?: RelationHop[];
 }
 
 /** Everything the class decorators say about one class, merged along the prototype chain by getClassOverrides(). */

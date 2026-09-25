@@ -54,4 +54,9 @@ export class SalesOrder extends Transaction {
      * `transactionlines`, so the lines run as their own query on that root, matched to the order by id.
      */
     @Sublist('item', { queryType: 'transaction', relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }) lines!: TransactionLine[];
+    /**
+     * The transactions this order led to (fulfillments, invoices): the link off `transaction`, then the transaction each
+     * link points at. Nothing between them needs a class, and the items are read-only.
+     */
+    @Sublist({ queryType: 'transaction', relationship: 'nexttransactionlink', through: [{ fieldId: 'nextdoc', target: 'transaction' }] }) relatedTransactions!: Pick<Transaction, 'id' | 'tranId' | 'statusText'>[];
 }

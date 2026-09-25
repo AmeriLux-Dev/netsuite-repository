@@ -202,6 +202,13 @@ describe('planGeneration() – model fixtures', () => {
         expect(invoiceNoteConfig).toContain(`        'invoice.transactionlines': {\n            path: 'invoice.transactionlines',\n            parent: 'invoice',\n            relationship: 'invoice',\n            load: 'join',\n            join: {\n                kind: 'auto',\n                fieldId: 'transactionlines',\n            },\n${mainLineConditions}        },`);
         expect(invoiceNoteConfig).toMatch(/invoice_subsidiaryId: \{\n\s+queryFieldId: 'subsidiary',\n\s+component: 'invoice\.transactionlines',[^}]*nestPath: 'invoice\.subsidiaryId',\n\s+readonly: true,/);
         expect(invoiceNoteConfig).toContain("            components: [\n                'invoice',\n                'invoice.transactionlines',\n            ],");
+        // Items past further joins: one component per hop, the items' fields on the last one, read-only, ordered there by default.
+        expect(invoiceConfig).toContain("        relatedTransactions: {\n            path: 'relatedTransactions',\n            relationship: 'relatedTransactions',\n            load: 'separate',\n            join: {\n                kind: 'auto',\n                fieldId: 'nexttransactionlink',\n            },\n            conditions: [\n                {\n                    fieldId: 'linktype',\n                    operator: 'ANY_OF',\n                    values: [\n                        'OrdBill',\n                    ],\n                },\n            ],\n            separate: {\n                queryType: 'transaction',\n                parentKeyField: 'id',\n                targetKeyFieldId: 'id',\n                targetKeyFieldType: 'key',\n            },\n            lineOrderFieldId: 'id',\n            lineOrderComponent: 'relatedTransactions.nextdoc',\n        },");
+        expect(invoiceConfig).toContain("        'relatedTransactions.nextdoc': {\n            path: 'relatedTransactions.nextdoc',\n            parent: 'relatedTransactions',\n            relationship: 'relatedTransactions',\n            load: 'separate',\n            join: {\n                kind: 'to',\n                fieldId: 'nextdoc',\n                target: 'transaction',\n            },\n        },");
+        expect(invoiceConfig).toMatch(/relatedTransactions_tranId: \{\n\s+queryFieldId: 'tranid',\n\s+component: 'relatedTransactions\.nextdoc',\n\s+type: 'string',\n\s+nestPath: 'relatedTransactions\.tranId',\n\s+cardinality: 'many',\n\s+readonly: true,\n\s+\},/);
+        expect(invoiceConfig).toContain("            components: [\n                'relatedTransactions',\n                'relatedTransactions.nextdoc',\n            ],");
+        // A projection that keeps every field of the target is the target itself.
+        expect(joins.files.find((file) => file.path.endsWith('types.gen.ts'))?.content).toContain('    relatedTransactions: TransactionBase[];');
     });
 
     it('emits the config of a record type importing its interface from the types file, and re-exporting the types', () => {
@@ -396,6 +403,8 @@ describe('planGeneration() – diagnostics', () => {
             "Reference 'BadRelations.detail' targets 'Note', which has no @RecordType; a reference needs a query type.",
             "Property 'BadRelations.line' is marked @Sublist() but is not an array.",
             "Property 'BadRelations.tags' is an array; use @Sublist() on it, @Subrecord() and @Reference() apply to object properties.",
+            "Sublist 'BadRelations.hopsFromLines' ('hopsfromlines') hops through further joins but names no relationship field to start from; declare it with @Sublist('hopsfromlines', { relationship, through }).",
+            "Sublist 'BadRelations.blankHop' ('blankhop') has a hop in 'through' with no field id; each hop is a relationship field id or { fieldId, target }.",
             "Sublist 'BadRelationsOwner.parents' ('parents') has no way back to its parent: mark the property of 'BadRelations' holding the parent's internal id with @ParentId(), or name the relationship with @Sublist('parents', { relationship }).",
             "Reference 'BadRelationsOwner.parent' needs a select field: declare 'parentId', name one with @Reference('<property>'), or mark the property @Subrecord() if it is one.",
             "Sublist 'BadRelationsOwner.joinedElsewhere' ('lines') names a query type ('transaction') for its own query, which cannot be joined into the owner's. Remove load: 'join'.",

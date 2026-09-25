@@ -34,6 +34,13 @@ export class Subsidiary {
     name!: string;
 }
 
+/** Common transaction fields with no record type of their own: a mapping base, and the shape of a transaction reached through a link. */
+export abstract class TransactionBase {
+    id!: number;
+    @Field('tranid') tranId!: string;
+    type!: string;
+}
+
 @RecordType('invoice')
 export class Invoice {
     id!: number;
@@ -57,6 +64,9 @@ export class Invoice {
     @Subrecord('billingaddress', { load: 'separate' }) billingAddress?: Address;
     /** A has-many loaded separately runs on the child's record type, batched on the field that points back at the invoice. */
     @Sublist({ load: 'separate' }) shipments!: Shipment[];
+    /** Transactions two joins away: the link off `transaction`, then the transaction it points at. The link needs no class. */
+    @Sublist({ queryType: 'transaction', relationship: 'nexttransactionlink', filter: [{ fieldId: 'linktype', operator: 'ANY_OF', values: ['OrdBill'] }], through: [{ fieldId: 'nextdoc', target: 'transaction' }] })
+    relatedTransactions!: Pick<TransactionBase, 'id' | 'tranId' | 'type'>[];
 }
 
 /** A field read off the main line keeps its own join when another record reaches it through a reference. */

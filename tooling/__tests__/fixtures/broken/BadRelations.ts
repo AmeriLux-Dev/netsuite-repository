@@ -10,6 +10,13 @@ export class ChildLine {
     id!: number;
 }
 
+/** A child that points back at its parent, for a sublist that hops further with no relationship field to start from. */
+@RecordType('customrecord_linked_child')
+export class LinkedChild {
+    id!: number;
+    @ParentId() @Field('custrecord_linked_parent') parentId!: number;
+}
+
 @RecordType('customrecord_parent')
 export class BadRelations {
     id!: number;
@@ -26,6 +33,10 @@ export class BadRelations {
     @Subrecord() tags!: Note[];
     /** @ParentId() on a property that does not map to a field, so the class has no way back to a parent either. */
     @ParentId() ghostParent!: Map<string, string>;
+    /** Hops need a relationship field to start from; a line class's parent field is not one. */
+    @Sublist({ through: [{ fieldId: 'nextdoc', target: 'transaction' }] }) hopsFromLines!: LinkedChild[];
+    /** A hop with no field id. */
+    @Sublist({ relationship: 'nexttransactionlink', through: [' '] }) blankHop!: Note[];
 }
 
 @RecordType('employee')

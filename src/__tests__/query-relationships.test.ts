@@ -2,7 +2,7 @@ import { query } from '../query';
 import type { QueryBuilder } from '../query';
 import type { QueryConfig } from '../types';
 import { fakeNQuery } from '../testing';
-import { childRootedPackagesOrderConfig, ownRootLinesOrderConfig, separateOrderConfig, shipmentConfig } from './fixtures';
+import { childRootedPackagesOrderConfig, joinedRelatedTransactionsOrderConfig, ownRootLinesOrderConfig, relatedTransactionsOrderConfig, separateOrderConfig, shipmentConfig } from './fixtures';
 import { salesOrderModelConfig, separateLinesSalesOrderModelConfig } from './model-fixtures';
 import type { SalesOrderModel } from './model-fixtures';
 
@@ -321,5 +321,70 @@ describe('QueryBuilder – fields read through a relationship', () => {
 
         expect(description.components.map((component) => [component.path, component.parent])).toEqual([['transactionlines', undefined], ['subsidiary', 'transactionlines']]);
         expect(description.condition).toEqual({ kind: 'field', component: 'transactionlines', fieldId: 'subsidiary', operator: 'ANY_OF', values: [3] });
+    });
+});
+
+describe('QueryBuilder – items more than one join away', () => {
+    it('joins the hops in order in the separate query, reads the items on the last, and puts conditions and sorts on them there', () => {
+        const description = query(relatedTransactionsOrderConfig).where('entityId', '=', 7).where('relatedTransactions.type', '=', 'ItemShip').orderByDesc('relatedTransactions.tranId').describe();
+        expect(description.columns.map((column) => column.alias)).toEqual(['id', 'entityId']);
+        expect(description.components).toEqual([]);
+        expect(description.condition).toEqual({ kind: 'field', fieldId: 'entity', operator: 'ANY_OF', values: [7] });
+        expect(description.separateLoads).toEqual([{
+            relationship: 'relatedTransactions',
+            kind: 'sublist',
+            parentKeyPath: 'id',
+            batchFieldId: 'id',
+            batchFieldType: 'key',
+            parentKeyAlias: '__parentKey',
+            description: {
+                queryType: 'transaction',
+                components: [
+                    { path: 'relatedTransactions', join: { kind: 'auto', fieldId: 'nexttransactionlink' }, conditions: [{ fieldId: 'linktype', operator: 'ANY_OF', values: ['OrdShip', 'OrdBill'] }] },
+                    { path: 'relatedTransactions.nextdoc', parent: 'relatedTransactions', join: { kind: 'to', fieldId: 'nextdoc', target: 'transaction' }, conditions: [] },
+                ],
+                columns: [
+                    { alias: 'relatedTransactions_id', component: 'relatedTransactions.nextdoc', fieldId: 'id' },
+                    { alias: 'relatedTransactions_tranId', component: 'relatedTransactions.nextdoc', fieldId: 'tranid' },
+                    { alias: 'relatedTransactions_type', component: 'relatedTransactions.nextdoc', fieldId: 'type' },
+                    { alias: '__parentKey', fieldId: 'id' },
+                ],
+                condition: expect.objectContaining({ kind: 'field', component: 'relatedTransactions.nextdoc', fieldId: 'type', values: ['ItemShip'] }),
+                sort: [{ component: 'relatedTransactions.nextdoc', fieldId: 'tranid', ascending: false }],
+            },
+        }]);
+    });
+
+    it('stitches the items onto their owners, ordered on the last hop by default, with an empty array where there are none', () => {
+        expect(query(relatedTransactionsOrderConfig).describe().separateLoads?.[0].description.sort).toEqual([{ component: 'relatedTransactions.nextdoc', fieldId: 'id', ascending: true }]);
+
+        fakeNQuery.queueRows('salesorder', [{ id: 1, entityid: 7 }, { id: 2, entityid: 7 }]);
+        fakeNQuery.queueRows('transaction', [
+            { __parentkey: 1, relatedtransactions_id: 10, relatedtransactions_tranid: 'IF10', relatedtransactions_type: 'ItemShip' },
+            { __parentkey: 1, relatedtransactions_id: 11, relatedtransactions_tranid: 'INV11', relatedtransactions_type: 'CustInvc' },
+        ]);
+        expect(query(relatedTransactionsOrderConfig).executeTyped()).toEqual([
+            { id: 1, entityId: 7, relatedTransactions: [{ id: 10, tranId: 'IF10', type: 'ItemShip' }, { id: 11, tranId: 'INV11', type: 'CustInvc' }] },
+            { id: 2, entityId: 7, relatedTransactions: [] },
+        ]);
+        expect(fakeNQuery.calls[1].text).toBe([
+            'FROM transaction',
+            'JOIN auto nexttransactionlink AS nexttransactionlink',
+            'JOIN to transaction ON nextdoc AS nexttransactionlink.nextdoc',
+            'SELECT nexttransactionlink.nextdoc.id AS relatedTransactions_id, nexttransactionlink.nextdoc.tranid AS relatedTransactions_tranId, nexttransactionlink.nextdoc.type AS relatedTransactions_type, id AS __parentKey',
+            "WHERE nexttransactionlink.linktype ANY_OF ['OrdShip', 'OrdBill'] AND id ANY_OF [1, 2]",
+            'ORDER BY nexttransactionlink.nextdoc.id ASC',
+        ].join('\n'));
+    });
+
+    it('joins the hops into the owner query when the relation loads with it, so a condition on the items narrows the owners', () => {
+        const description = query(joinedRelatedTransactionsOrderConfig).where('relatedTransactions.type', '=', 'ItemShip').describe();
+        expect(description.components.map((component) => [component.path, component.parent])).toEqual([['relatedTransactions', undefined], ['relatedTransactions.nextdoc', 'relatedTransactions']]);
+        expect(description.columns.map((column) => column.alias)).toEqual(['id', 'entityId', 'relatedTransactions_id', 'relatedTransactions_tranId', 'relatedTransactions_type']);
+        expect(description.condition).toEqual({ kind: 'and', nodes: [
+            { kind: 'field', fieldId: 'type', operator: 'ANY_OF', values: ['SalesOrd'] },
+            expect.objectContaining({ kind: 'field', component: 'relatedTransactions.nextdoc', fieldId: 'type', values: ['ItemShip'] }),
+        ] });
+        expect(description.separateLoads).toEqual([]);
     });
 });
