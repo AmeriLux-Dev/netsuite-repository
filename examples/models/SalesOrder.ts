@@ -1,4 +1,4 @@
-import { Field, InternalId, ParentId, ReadOnly, RecordType, SetFirst, Sublist, Subrecord, Transform } from '@amerilux/netsuite-repository';
+import { Field, InternalId, ParentId, RecordType, Sublist, Subrecord } from '@amerilux/netsuite-repository';
 import type { Customer } from './Customer';
 
 /** linesequencenumber is one-based in SuiteQL; sublist line indexes are zero-based. */
@@ -9,7 +9,7 @@ export class TransactionAddress {
     addr1!: string | null;
     addr2!: string | null;
     city!: string | null;
-    @SetFirst() state!: string | null;
+    @Field({ setFirst: true }) state!: string | null;
     zip!: string | null;
 }
 
@@ -20,12 +20,12 @@ export class TransactionAddress {
 @RecordType('transactionline')
 export class TransactionLine {
     @InternalId() @Field('line', { queryFieldId: 'id' }) id!: number;
-    @ParentId() @Field('transaction') @ReadOnly() transactionId!: number;
-    @Field('linesequencenumber') @Transform(toZeroBasedLine) @ReadOnly() line!: number;
+    @ParentId() @Field('transaction', { readOnly: true }) transactionId!: number;
+    @Field('linesequencenumber', { readOnly: true, transform: toZeroBasedLine }) line!: number;
     @Field('item') itemId!: number;
     quantity!: number;
     rate!: number;
-    @ReadOnly() amount!: number;
+    @Field({ readOnly: true }) amount!: number;
 }
 
 /** Common transaction fields. No @RecordType, so it has no record set of its own; sales orders inherit it. */
@@ -38,7 +38,7 @@ export abstract class Transaction {
     /** The status code, queried as `status` and written through the record field `orderstatus`. */
     @Field('orderstatus', { queryFieldId: 'status' }) status!: string;
     memo?: string | null;
-    @Field('entity') @SetFirst() customerId!: number;
+    @Field('entity', { setFirst: true }) customerId!: number;
     customer?: Pick<Customer, 'id' | 'companyName' | 'email'>;
     /** The subrecord 'shippingaddress': N/query resolves the join; the list field must be cleared before an edit. */
     @Subrecord({ clearListField: 'shipaddresslist' }) shippingAddress!: TransactionAddress;
@@ -46,7 +46,7 @@ export abstract class Transaction {
 
 @RecordType('salesorder')
 export class SalesOrder extends Transaction {
-    @Field('foreigntotal') @ReadOnly() total!: number;
+    @Field('foreigntotal', { readOnly: true }) total!: number;
     @Field('custbody_auto_approved') autoApproved!: boolean;
     @Field('shipmethod') shipMethodId!: number | null;
     /**

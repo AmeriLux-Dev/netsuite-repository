@@ -40,7 +40,7 @@ The build step needs Node 18 or newer and the `typescript` package of your proje
 
 ```ts
 // src/models/SalesOrder.ts
-import { Field, InternalId, ParentId, ReadOnly, RecordType, SetFirst, Sublist, Subrecord } from '@amerilux/netsuite-repository';
+import { Field, InternalId, ParentId, RecordType, Sublist, Subrecord } from '@amerilux/netsuite-repository';
 import type { Customer } from './Customer';
 import type { InventoryItem } from './InventoryItem';
 
@@ -48,7 +48,7 @@ import type { InventoryItem } from './InventoryItem';
 export class TransactionAddress {
     addr1!: string | null;
     city!: string | null;
-    @SetFirst() state!: string | null;
+    @Field({ setFirst: true }) state!: string | null;   // written before zip so address validation accepts it
     zip!: string | null;
 }
 
@@ -56,12 +56,12 @@ export class TransactionAddress {
 @RecordType('transactionline')
 export class TransactionLine {
     @InternalId() @Field('line', { queryFieldId: 'id' }) id!: number;   // queried as id, written through the sublist field line
-    @ParentId() @Field('transaction') @ReadOnly() transactionId!: number;
+    @ParentId() @Field('transaction', { readOnly: true }) transactionId!: number;
     @Field('item') itemId!: number;
     item?: Pick<InventoryItem, 'itemId' | 'displayName'>;    // reference inside the line
     quantity!: number;
     rate!: number | null;
-    @ReadOnly() amount!: number;
+    @Field({ readOnly: true }) amount!: number;
 }
 
 /** Common transaction fields. No @RecordType, so no record set of its own; every transaction type inherits it. */
@@ -82,7 +82,7 @@ export abstract class Transaction {
 export class SalesOrder extends Transaction {
     @Field('otherrefnum') poNumber!: string | null;
     @Field('shipmethod') shipMethodId!: number | null;
-    @Field('foreigntotal') @ReadOnly() total!: number;
+    @Field('foreigntotal', { readOnly: true }) total!: number;
     /** The item lines: queried from the `transaction` root through `transactionlines` (a `salesorder` root has no join to its lines), without the header line. */
     @Sublist('item', { queryType: 'transaction', relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }] }) lines!: TransactionLine[];
 }
@@ -91,7 +91,7 @@ export class SalesOrder extends Transaction {
 Three rules cover most of what you see above:
 
 1. **Every declared property is a mapped field.** `@NotMapped()` opts out; the property stays on the generated type for values you fill in after the query.
-2. **Every body field is writable.** `@ReadOnly()` opts out. The field id is the lowercased property name and doubles as the N/query field id; `@Field(id)` renames it, `@Field(id, { queryFieldId })` splits the two when NetSuite queries a field under one name and writes it under another.
+2. **Every body field is writable.** `@Field({ readOnly: true })` opts out. The field id is the lowercased property name and doubles as the N/query field id; `@Field(id)` renames it, `@Field(id, { queryFieldId })` splits the two when NetSuite queries a field under one name and writes it under another.
 3. **A property typed as another model class is a reference, subrecord, or sublist.** The join comes from the declared type and N/query: a subrecord is `autoJoin` on its field, a sublist is `joinFrom` through the line class's `@ParentId()` field, a reference is `joinTo` through its select field and the target's record type. No predicate is ever written by hand.
 
 The class decorator is only ever `@RecordType`. A sublist line class is a record type like any other; the sublist it belongs to is declared on the property of the parent.
@@ -106,7 +106,8 @@ The class decorator is only ever `@RecordType`. A sublist line class is a record
 | N/query field id | the field id | `@Field('x', { queryFieldId: 'y' })` |
 | Field type | `string`, `number` (float), `boolean`, `Date`, `string[]` / `number[]` (multiselect); the internal id is a `key`, the select field behind a reference and a `@ParentId()` field a `select` | `@Field({ type })` |
 | Select field with no reference | a number or string like any other | `@Field('location', { type: 'select' })`: N/query compares select and key fields through `ANY_OF`, not `EQUAL` |
-| Read-only | the internal id, `text: true` fields, fields of a referenced record | `@ReadOnly()` |
+| Read-only | the internal id, `text: true` fields, fields of a referenced record | `@Field({ readOnly: true })` |
+| Default select | every mapped field and relation | `@Field({ selectByDefault: false })`, or `{ selectByDefault: false }` on `@Reference`, `@Subrecord`, `@Sublist`; `include()` brings it back per query |
 | Text of a select field | | `@Field({ queryFieldId: 'status', text: true })`, read in DISPLAY context |
 | Field the root does not expose | read on the root | `@Field('subsidiary', { relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [true] }] })`: read off the joined component, still written through the record's own field |
 | Query type | the record type | `@RecordType('x', { queryType })` |
@@ -209,7 +210,7 @@ export class Invoice {
 - The filter must pick one row per record. `mainline IS true` does, so rows never fan out and `page()` stays a row window.
 - Fields read through one relationship share its join, so they must declare the same filter; the build step reports two that differ, and a filter with no relationship.
 - A reference whose select field is read this way joins from that component. Loaded separately, it matches the collected values as any reference does.
-- Writes are unchanged: the field writes through the record's own field id. Mark it `@ReadOnly()` when the record has no such field.
+- Writes are unchanged: the field writes through the record's own field id. Declare it `readOnly: true` when the record has no such field.
 
 ### Inheritance
 
@@ -222,12 +223,13 @@ A base class without `@RecordType` is a mapping base whose members are inherited
 | `@RecordType(id, { queryType?, filter?, setName?, coerce?, updater? })` | class | A queryable record type with a record set on the context. `id` is a native type from `NetsuiteRecordType` (`NetsuiteRecordType.SALES_ORDER`, a runtime copy of N/record's `Type` so the model needs no N/* import) or a custom record id (`'customrecord_x'`). `updater` sets the default `RecordUpdaterOptions` for every write. |
 | `@InternalId()` | property | The internal id when it is not `id`. |
 | `@ParentId()` | property | On a line class: the property holding the parent record's internal id. |
-| `@Field(id?, { queryFieldId?, type?, text?, coerce?, relationship?, filter? })` | property | Renames the field, separates the query field id from the record field id, overrides the inferred type, or reads the field through a relationship when the root does not expose it. |
-| `@ReadOnly()` | property | Excludes the property from writes. |
-| `@Reference(selectFieldProperty?, { targetKey?, load?, join? })` | property | A reference: the select field behind it, and the referenced property to match on when it is not the internal id. |
-| `@Subrecord(fieldId?, { clearListField?, load? })` | property | A subrecord: its field id and the list field cleared before an edit. |
-| `@Sublist(sublistId?, { filter?, relationship?, through?, queryType?, load? })` | property | A sublist, or any has-many: its id, the conditions that pick its lines, and how the lines are reached (a relationship field, further joins past it, another root, or the line class's `@ParentId()` field). |
-| `@SetFirst()`, `@ExcludeFromDefaultSelect()`, `@Transform(fn)`, `@NotMapped()` | property | Flags. Transforms must be exported functions so the build step can import them by name. |
+| `@Field(id?, { queryFieldId?, type?, text?, coerce?, relationship?, filter?, readOnly?, setFirst?, selectByDefault?, transform? })` | property | Renames the field, separates the query field id from the record field id, overrides the inferred type, or reads the field through a relationship when the root does not expose it. The flags: `readOnly` excludes it from writes, `setFirst` writes it before the others, `selectByDefault: false` leaves it out of the default select, and `transform` maps the value read; a transform must be an exported function so the build step can import it by name. |
+| `@Reference(selectFieldProperty?, { targetKey?, load?, join?, selectByDefault? })` | property | A reference: the select field behind it, and the referenced property to match on when it is not the internal id. |
+| `@Subrecord(fieldId?, { clearListField?, load?, selectByDefault? })` | property | A subrecord: its field id and the list field cleared before an edit. |
+| `@Sublist(sublistId?, { filter?, relationship?, through?, queryType?, load?, selectByDefault? })` | property | A sublist, or any has-many: its id, the conditions that pick its lines, and how the lines are reached (a relationship field, further joins past it, another root, or the line class's `@ParentId()` field). |
+| `@NotMapped()` | property | Leaves the property out of the model; it stays on the generated type for values filled in after the query. |
+
+`@ReadOnly()`, `@SetFirst()`, `@ExcludeFromDefaultSelect()`, and `@Transform(fn)` still work but are deprecated: they are the `readOnly`, `setFirst`, `selectByDefault: false`, and `transform` options above.
 
 ## Build step and generated files
 
@@ -399,7 +401,7 @@ A repository test mocks the generated `dbContext` with a fake carrying the sets 
 ```ts
 db.salesOrders.query()
     .exclude('lines')                                   // leave a relation and its joins out
-    .include('customer')                                // bring one in that is @ExcludeFromDefaultSelect
+    .include('customer')                                // bring one in declared selectByDefault: false
     .selectFormula('{quantity} * {rate}', 'lineTotal', { type: 'FLOAT', fieldType: 'currency' })
     .whereGroup((group) => group.where('memo', 'IS NULL').orWhere('memo', '=', ''))
     .whereFormula('{trandate} > SYSDATE - 30')
@@ -408,7 +410,7 @@ db.salesOrders.query()
     .executeTyped();
 ```
 
-- A query only joins the components its selected fields, conditions, and sorts touch; `exclude()` drops a relation's fields, and a relation marked `@ExcludeFromDefaultSelect()` waits for `include()`.
+- A query only joins the components its selected fields, conditions, and sorts touch; `exclude()` drops a relation's fields, and a relation declared `selectByDefault: false` waits for `include()`.
 - N/query sorts only on the query's own columns. `orderBy()` on a selected field sorts on that column; on a field that is not selected it adds a hidden column (`__sort0`, …) that the mapped result never shows.
 - `where()`, `orderBy()`, and `select()` are typed against the model: properties and dotted paths into relations (`customer.companyName`, `lines.item.type`) are checked, so a misspelled path is a compile error, inside specifications too. The generated `<Model>Fields` constant spells them for you (`so.lines.item.type`), with completion on every level. An alias declared on the same query by `selectFormula()` is accepted as well.
 - The operators and the value follow the property's declared type, and are translated to N/query's operators. Text takes `=`, `!=`, `LIKE`, `NOT LIKE`, `IN`, and `NOT IN`; a number adds `<`, `<=`, `>`, `>=`, and `BETWEEN`; a `Date` takes the comparisons and `BETWEEN` with `Date` values; a checkbox takes `=` and `!=` with a boolean or NetSuite's `'T'`/`'F'`. Every field takes `IS NULL` and `IS NOT NULL`; `null` is not a comparison value. The N/query operator names follow N/search's: `=` becomes `IS` on text and on a checkbox, `EQUAL` on a number, `ON` on a date, and `ANY_OF` on a select, multiselect, or key field (the internal id, a reference's select field, anything declared `type: 'select'`); `>=` on a date becomes `ON_OR_AFTER`; `LIKE 'Acme%'` becomes `START_WITH`, `'%Acme'` `ENDWITH`, `'%Acme%'` `CONTAIN`, and `'Acme'` `IS`; `IS NULL` becomes `EMPTY`. `IN` becomes `ANY_OF` on a select or key field; on text, numbers, dates, and checkboxes, which have no list operator in N/query, it becomes one equality per value joined with `OR` (`NOT IN`: one negated equality per value joined with `AND`). A select field the model does not mark as one fails at run time with "Operator EQUAL is not valid"; declare it with `@Field({ type: 'select' })`. Any N/query operator name is accepted directly on any field (`where(so.tranDate, 'WITHIN', [from, to])`). A `LIKE` pattern with `_` or a `%` in the middle has no N/query operator and is rejected; write it as a formula.
