@@ -97,3 +97,29 @@ describe('coerceQueryResultValueByFieldType() – date types', () => {
         expect(mockParse).not.toHaveBeenCalled();
     });
 });
+
+describe('coerceQueryResultValueByFieldType() – dates shared across one read', () => {
+    it('parses each text once per format type and hands every value its own Date', () => {
+        mockParse.mockImplementation(({ value }: { value: string }) => new Date(`${value}T00:00:00Z`));
+        const parsedDates = new Map<string, number | null>();
+
+        const first = coerceQueryResultValueByFieldType('2024-01-15', 'date', parsedDates);
+        const second = coerceQueryResultValueByFieldType('2024-01-15', 'date', parsedDates);
+        coerceQueryResultValueByFieldType('2024-01-15', 'datetime', parsedDates);
+
+        expect(mockParse).toHaveBeenCalledTimes(2);
+        expect(second).toEqual(first);
+        expect(second).not.toBe(first);
+    });
+
+    it('remembers a text N/format could not parse and keeps the raw string', () => {
+        mockParse.mockImplementation(() => {
+            throw new Error('unsupported');
+        });
+        const parsedDates = new Map<string, number | null>();
+
+        expect(coerceQueryResultValueByFieldType('garbage', 'date', parsedDates)).toBe('garbage');
+        expect(coerceQueryResultValueByFieldType('garbage', 'date', parsedDates)).toBe('garbage');
+        expect(mockParse).toHaveBeenCalledTimes(1);
+    });
+});

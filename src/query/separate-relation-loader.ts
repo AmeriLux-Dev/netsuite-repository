@@ -1,3 +1,4 @@
+import type { ParsedDateCache } from '../coercion';
 import type { ConditionNode, ConditionParamValue, QueryDescription, QueryResultValue, SeparateLoadDescription } from '../types';
 import { conditionNodeForTranslation } from './condition-nodes';
 import { translateConditionOperator } from './operator-translation';
@@ -99,12 +100,15 @@ export function loadSeparateRelationsIntoResults(parents: object[], loads: Separ
     for (const load of loads) {
         const itemsByParentKey = new Map<string, unknown[]>();
         const mapping = runtime.mappingOptionsFor(load);
+        // Every batch of one relation reads the same kind of rows, so they share their date parses.
+        const parsedDates: ParsedDateCache = new Map();
         for (const batch of batchValues(collectDistinctParentKeys(parents, load.parentKeyPath), runtime.batchSize)) {
             const rows = readBatchRows(load, batch, runtime);
             for (const [parentKey, group] of groupRowsByParentKey(rows, load.parentKeyAlias)) {
-                const items = load.kind === 'sublist'
-                    ? group.flatMap((row) => mapRowsToResults<unknown>([row], mapping))
-                    : mapRowsToResults<unknown>(group, mapping);
+                // Each row of a sublist is one item: one call maps them all, unless the mapping would group the rows.
+                const items = load.kind === 'sublist' && mapping.arrayPaths.length > 0
+                    ? group.flatMap((row) => mapRowsToResults<unknown>([row], mapping, parsedDates))
+                    : mapRowsToResults<unknown>(group, mapping, parsedDates);
                 itemsByParentKey.set(parentKey, [...(itemsByParentKey.get(parentKey) ?? []), ...items]);
             }
         }

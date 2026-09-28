@@ -142,6 +142,31 @@ function omitUndefined<T extends object>(value: T): T {
     return result as T;
 }
 
+/**
+ * The most records a condition can match because it pins the root's internal id: the distinct ids of an `ANY_OF` (or
+ * a one-value `EQUAL`) on it, the smallest such count ANDed in, the sum over OR branches that all pin it. Undefined
+ * when the condition does not pin the id.
+ */
+function countRecordsPinnedByCondition(node: ConditionNode, primaryFieldId: string): number | undefined {
+    switch (node.kind) {
+        case 'field': {
+            const pinsId = node.component === undefined && node.fieldId === primaryFieldId && node.values !== undefined
+                && (node.operator === 'ANY_OF' || (node.operator === 'EQUAL' && node.values.length === 1));
+            return pinsId ? new Set((node.values as ConditionParamValue[]).map(String)).size : undefined;
+        }
+        case 'and': {
+            const counts = node.nodes.map((child) => countRecordsPinnedByCondition(child, primaryFieldId)).filter((count): count is number => count !== undefined);
+            return counts.length === 0 ? undefined : Math.min(...counts);
+        }
+        case 'or': {
+            const counts = node.nodes.map((child) => countRecordsPinnedByCondition(child, primaryFieldId));
+            return counts.every((count) => count !== undefined) ? (counts as number[]).reduce((total, count) => total + count, 0) : undefined;
+        }
+        default:
+            return undefined;
+    }
+}
+
 export class QueryBuilder<TResult, TDeclared extends string = never> {
     private readonly config: QueryConfig<TResult>;
     private readonly options: QueryBuilderOptions<TResult>;
@@ -741,7 +766,30 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
 
     /** The plan's rows: its page window when it has one, otherwise every row, past N/query's 5,000-row answer. */
     private readRows(plan: QueryPlan): ResultRow[] {
-        return plan.description.page ? this.executeDescription(plan.description) : this.readEveryRow(plan);
+        const { page, ...unpaged } = plan.description;
+        if (!page) {
+            return this.readEveryRow(plan);
+        }
+        if (this.readsPageWindowInOneRun(plan)) {
+            return this.executeDescription(unpaged).slice(page.offset, page.limit === undefined ? undefined : page.offset + page.limit);
+        }
+        return this.executeDescription(plan.description);
+    }
+
+    /**
+     * Whether a row window is cut from one run() instead of read through runPaged. When the condition pins the internal
+     * id to at most a page's worth of records (find(), getById(), first() on an id), run() answers every row the window
+     * can hold for 10 units in one call, where runPaged sizes the result and then fetches it, 20 units in two (probe k1).
+     * Only where rows are records: a joined sublist answers a row per line, which the ids do not bound.
+     */
+    private readsPageWindowInOneRun(plan: QueryPlan): boolean {
+        const primary = this.primaryField();
+        const { condition } = plan.description;
+        if (!primary || primary.field.component !== undefined || condition === undefined || plan.mapping.arrayPaths.length > 0) {
+            return false;
+        }
+        const pinnedRecordCount = countRecordsPinnedByCondition(condition, primary.field.queryFieldId);
+        return pinnedRecordCount !== undefined && pinnedRecordCount <= maximumPageSize;
     }
 
     /**

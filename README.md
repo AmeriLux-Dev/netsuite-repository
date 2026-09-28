@@ -436,9 +436,10 @@ db.salesOrders.query()
 - With `useText`, and for a `text: true` field, the comparison is against the display text through a `{field#DISPLAY}` formula, so the text operators and string values apply whatever the field.
 - `selectFormula()` and `whereFormula()` are the escape hatch for anything the model does not declare. Formulas use N/query's `{fieldid}` and `{relation.fieldid}` syntax and are sent as written; values in them are part of the text, so never build a formula from untrusted input.
 - `limit()`, `offset()`, and `page()` read a row window through `runPaged`; N/query pages are five to a thousand rows, so a window smaller than five still fetches five and slices. Every query's sort ends with the internal id, so rows that tie on the other sorts never change places between pages. With a joined sublist the rows fan out, so the window applies to mapped records and the query reads every row.
+- A window over a query whose condition pins the internal id to a thousand ids or fewer is cut from one `run()` instead: `find()`, `getById()`, the read inside `update()`, and `first()` or `exists()` on an id. That is 10 units in one call, where `runPaged` spends 10 sizing the result and 10 fetching it.
 - `count()` counts records, distinct by primary key when a component is joined; `exists()` asks for one row.
 - `describe()` returns what the query will ask N/query for as plain data, `describeText()` renders it one clause per line, and `toSQL()` shows the SuiteQL NetSuite would run. None of them executes anything.
-- Read-side coercion turns numeric strings into numbers, `T`/`F` into booleans, and date strings into `Date` through `N/format`. Generated configs enable it; hand-written configs do not. Override per query with `coerce(false)`, per config with `coerce`, or per field.
+- Read-side coercion turns numeric strings into numbers, `T`/`F` into booleans, and date strings into `Date` through `N/format`, which parses each distinct date text once per read. Generated configs enable it; hand-written configs do not. Override per query with `coerce(false)`, per config with `coerce`, or per field.
 
 ### Past N/query's 5,000 rows
 
