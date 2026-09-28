@@ -160,10 +160,53 @@ describe('QueryBuilder.count()', () => {
 describe('QueryBuilder.exists()', () => {
     it('asks for one row and reports whether it came back', () => {
         fakeNQuery.queueRows('customer', [{ id: 1 }]);
-        expect(QueryBuilder.from(customerConfig).where('id', '=', 99).exists()).toBe(true);
+        expect(QueryBuilder.from(customerConfig).where('name', '=', 'Acme').exists()).toBe(true);
         expect(fakeNQuery.calls[0]).toEqual(expect.objectContaining({ execution: 'runPaged', pageSize: 5 }));
-        expect(fakeNQuery.calls[0].text).toContain('WHERE id ANY_OF [99]');
         expect(QueryBuilder.from(customerConfig).exists()).toBe(false);
+    });
+
+    it('asks with one run() when the condition pins the id', () => {
+        fakeNQuery.queueRows('customer', [{ id: 99 }]);
+        expect(QueryBuilder.from(customerConfig).where('id', '=', 99).exists()).toBe(true);
+        expect(fakeNQuery.calls[0].execution).toBe('run');
+        expect(fakeNQuery.calls[0].text).toContain('WHERE id ANY_OF [99]');
+    });
+});
+
+describe('QueryBuilder – a row window over pinned ids', () => {
+    it('reads with one run() and cuts the window, where runPaged would size and fetch', () => {
+        fakeNQuery.queueRows('customer', customers.slice(0, 3));
+        const rows = QueryBuilder.from(customerConfig).whereIn('id', [1, 2, 3]).offset(1).limit(1).executeRaw();
+        expect(rows.map((row) => row.id)).toEqual([2]);
+        expect(fakeNQuery.calls[0].execution).toBe('run');
+    });
+
+    it('reads a pinned id with run() for firstTyped(), and keeps the window in the description', () => {
+        fakeNQuery.queueRows('customer', [{ id: 4, name: 'D', email: '', isactive: false, score: 0 }]);
+        const builder = QueryBuilder.from(customerConfig).where('id', '=', 4);
+        expect(builder.firstTyped()?.name).toBe('D');
+        expect(fakeNQuery.calls[0].execution).toBe('run');
+        expect(builder.limit(1).describe().page).toEqual({ offset: 0, limit: 1 });
+    });
+
+    it('counts ids ANDed in, and every branch of an OR that pins them', () => {
+        fakeNQuery.queueRows('customer', customers.slice(0, 2), { repeat: true });
+        QueryBuilder.from(customerConfig).whereIn('id', [1, 2]).where('name', 'LIKE', 'C%').first();
+        QueryBuilder.from(customerConfig).where('id', '=', 1).orWhere('id', '=', 2).first();
+        expect(fakeNQuery.calls.map((call) => call.execution)).toEqual(['run', 'run']);
+    });
+
+    it('pages through runPaged when an OR branch does not pin the id, or more ids than a page holds', () => {
+        fakeNQuery.queueRows('customer', customers.slice(0, 2), { repeat: true });
+        QueryBuilder.from(customerConfig).where('id', '=', 1).orWhere('name', '=', 'C2').first();
+        QueryBuilder.from(customerConfig).whereIn('id', Array.from({ length: 1001 }, (_, index) => index + 1)).first();
+        expect(fakeNQuery.calls.map((call) => call.execution)).toEqual(['runPaged', 'runPaged']);
+    });
+
+    it('pages through runPaged when a joined sublist fans the rows out', () => {
+        fakeNQuery.queueRows('salesorder', [{ id: 1, entityid: 5, lines_itemid: 10, lines_qty: 1, lines_amount: 5 }]);
+        QueryBuilder.from(orderConfig).where('id', '=', 1).limit(1).executeRaw();
+        expect(fakeNQuery.calls[0].execution).toBe('runPaged');
     });
 });
 

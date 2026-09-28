@@ -46,8 +46,8 @@ export class Invoice {
     id!: number;
     /** Read off the main line: N/query inside SuiteScript does not expose a transaction's own subsidiary on its root. */
     @Field('subsidiary', { type: 'select', relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [true] }] }) subsidiaryId!: number;
-    /** A reference through a field read off the main line joins from that line, not from the root. */
-    subsidiary?: Pick<Subsidiary, 'id' | 'name'>;
+    /** A reference through a field read off the main line loads separately: N/query has no join from the line to it. */
+    @Reference('subsidiaryId') subsidiary?: Pick<Subsidiary, 'id' | 'name'>;
     /** A second field off the same line shares its join. */
     @Field('department', { type: 'select', relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [true] }] }) departmentId!: number | null;
     @Field('location') locationId!: number | null;
@@ -67,6 +67,18 @@ export class Invoice {
     /** Transactions two joins away: the link off `transaction`, then the transaction it points at. The link needs no class. */
     @Sublist({ queryType: 'transaction', relationship: 'nexttransactionlink', filter: [{ fieldId: 'linktype', operator: 'ANY_OF', values: ['OrdBill'] }], through: [{ fieldId: 'nextdoc', target: 'transaction' }] })
     relatedTransactions!: Pick<TransactionBase, 'id' | 'tranId' | 'type'>[];
+}
+
+/** References with no id property: the build step adds each one's select field (`subsidiaryId`, `locationId`) as a shadow. */
+@RecordType('creditmemo')
+export class CreditMemo {
+    id!: number;
+    /** @Field options on a reference configure its shadow select field, here read off the main line. */
+    @Field({ relationship: 'transactionlines', filter: [{ fieldId: 'mainline', operator: 'IS', values: [true] }] })
+    subsidiary?: Pick<Subsidiary, 'id' | 'name'>;
+    /** Loaded by a second query batched on the shadow's values. */
+    @Reference({ load: 'separate' })
+    location?: Pick<Warehouse, 'id' | 'name'>;
 }
 
 /** A field read off the main line keeps its own join when another record reaches it through a reference. */

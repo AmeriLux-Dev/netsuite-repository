@@ -24,7 +24,7 @@ const upper = (value: unknown) => String(value).toUpperCase();
 /** A subrecord shape: a plain class; N/query resolves its table and key from the field it hangs off. */
 class Address {
     addr1!: string | null;
-    @SetFirst() state!: string | null;
+    @Field({ setFirst: true }) state!: string | null;
 }
 
 /** A sublist line: a record type of its own, naming the field that points at its parent. */
@@ -37,7 +37,7 @@ class Line {
 
 abstract class Transaction {
     @InternalId() internalId!: number;
-    @Field('tranid') @Transform(upper) tranId!: string;
+    @Field('tranid', { transform: upper }) tranId!: string;
     @Field('orderstatus', { queryFieldId: 'status' }) status!: string;
     @Field({ queryFieldId: 'status', text: true }) statusText!: string;
     @NotMapped() cachedLabel?: string;
@@ -54,17 +54,30 @@ abstract class Transaction {
 })
 class SalesOrder extends Transaction {
     @Field('shipmethod', { type: 'integer', coerce: false }) shipMethodId!: number | null;
-    @ReadOnly() @ExcludeFromDefaultSelect() total!: number;
+    @Field({ readOnly: true, selectByDefault: false }) total!: number;
     @Reference('entityId', { join: 'to', targetKey: 'externalId' }) customer?: object;
     @Reference({ load: 'separate' }) vendor?: object;
     @Sublist('item', { filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }], load: 'join' }) lines!: Line[];
-    @Sublist({ relationship: 'transactionlines' }) extras!: Line[];
+    @Sublist({ relationship: 'transactionlines', selectByDefault: false }) extras!: Line[];
     @Sublist({ queryType: 'transaction', relationship: 'nexttransactionlink', through: [{ fieldId: 'nextdoc', target: 'transaction', filter: [{ fieldId: 'type', operator: 'ANY_OF', values: ['ItemShip'] }] }, 'transactionlines'] }) fulfilledLines!: Line[];
     @Field('tranid') tranId!: string;
 }
 
 class Plain {
     value!: string;
+}
+
+/** The deprecated flag decorators, kept so models written before the field options still build. */
+class DeprecatedFlags {
+    @ReadOnly() @ExcludeFromDefaultSelect() total!: number;
+    @SetFirst() state!: string | null;
+    @Transform(upper) tranId!: string;
+}
+
+class FlagOptions {
+    @Field({ readOnly: true, selectByDefault: false }) total!: number;
+    @Field({ setFirst: true }) state!: string | null;
+    @Field({ transform: upper }) tranId!: string;
 }
 
 describe('decorator registry', () => {
@@ -100,7 +113,7 @@ describe('decorator registry', () => {
         expect(properties.get('customer')).toEqual({ name: 'customer', relationKind: 'reference', selectFieldProperty: 'entityId', joinKind: 'to', targetKeyProperty: 'externalId' });
         expect(properties.get('vendor')).toEqual({ name: 'vendor', relationKind: 'reference', load: 'separate' });
         expect(properties.get('lines')).toEqual({ name: 'lines', relationKind: 'sublist', sublistId: 'item', filter: [{ fieldId: 'mainline', operator: 'IS', values: [false] }], load: 'join' });
-        expect(properties.get('extras')).toEqual({ name: 'extras', relationKind: 'sublist', relationshipFieldId: 'transactionlines' });
+        expect(properties.get('extras')).toEqual({ name: 'extras', relationKind: 'sublist', relationshipFieldId: 'transactionlines', selectByDefault: false });
         // A hop given as a bare field id is autoJoin on it; an object keeps its target and filter.
         expect(properties.get('fulfilledLines')).toEqual({
             name: 'fulfilledLines',
@@ -111,6 +124,14 @@ describe('decorator registry', () => {
         });
         expect(properties.get('shippingAddress')).toEqual({ name: 'shippingAddress', relationKind: 'subrecord', subrecordFieldId: 'shippingaddress', clearListField: 'shipaddresslist', load: 'separate' });
         expect(properties.get('billingAddress')).toEqual({ name: 'billingAddress', relationKind: 'subrecord', clearListField: 'billaddresslist' });
+    });
+
+    it('records the deprecated flag decorators exactly as the matching field options', () => {
+        const deprecated = getClassOverrides(DeprecatedFlags).properties;
+        const options = getClassOverrides(FlagOptions).properties;
+        for (const name of ['total', 'state', 'tranId']) {
+            expect(deprecated.get(name)).toEqual(options.get(name));
+        }
     });
 
     it('merges base-class overrides under the derived class, letting the derived class win per property', () => {

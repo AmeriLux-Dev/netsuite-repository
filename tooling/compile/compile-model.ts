@@ -101,8 +101,6 @@ export function compileModel(model: ResolvedClass): QueryConfig<unknown> {
         rootComponents: string[];
         rootFields: RelationshipFieldMap;
         insideSublist: boolean;
-        /** The fields of the class that declares the relation: where a reference finds its select field. */
-        ownerFields: ResolvedField[];
         /** The component the owner's fields are read on: the root when undefined; past further joins, the last hop. */
         ownerComponentPath?: string;
     }
@@ -111,9 +109,12 @@ export function compileModel(model: ResolvedClass): QueryConfig<unknown> {
         const path = [...context.path, relation.name];
         const componentPath = path.join('.');
         const ownerPath = context.ownerComponentPath;
-        // A reference joins from wherever its select field is read: the component of a relationship the owner reads it through.
-        const selectField = relation.kind === 'reference' ? context.ownerFields.find((field) => field.name === relation.selectFieldProperty) : undefined;
-        const parentPath = (selectField && relationshipComponentPathOf(selectField, ownerPath)) ?? ownerPath;
+        const isDirect = context.path.length === 0;
+        // A reference whose select field is read through a relationship loads separately (N/query has no join from that
+        // component to the target), and a relation inside another follows its root's load, so it cannot.
+        if (relation.selectFieldRelationship !== undefined && !isDirect) {
+            throw new ModelValidationError(model.className, [`reference '${componentPath}' reads its select field through '${relation.selectFieldRelationship}' and must load separately, which it cannot inside '${context.path.join('.')}'; leave it out of that projection.`]);
+        }
         context.rootComponents.push(componentPath);
         const load: RelationshipLoad = context.path.length === 0 ? relation.load : context.root.load;
         // Items past further joins: one component per hop, each hanging off the one before, and the items' fields read
@@ -123,7 +124,7 @@ export function compileModel(model: ResolvedClass): QueryConfig<unknown> {
         const itemsComponentPath = hopPaths[hopPaths.length - 1] ?? componentPath;
         registerComponent({
             path: componentPath,
-            parent: parentPath,
+            parent: ownerPath,
             relationship: context.root.name,
             load,
             join: relation.join,
@@ -145,7 +146,6 @@ export function compileModel(model: ResolvedClass): QueryConfig<unknown> {
         });
 
         const insideSublist = context.insideSublist || relation.kind === 'sublist';
-        const isDirect = context.path.length === 0;
         const rootKind = context.root.kind;
         // Items reached through further joins are other records, not lines of the owner: nothing writes through them.
         const readOnlyItems = hops.length > 0;
@@ -199,14 +199,14 @@ export function compileModel(model: ResolvedClass): QueryConfig<unknown> {
         }
 
         for (const nested of relation.relations) {
-            compileRelation(nested, { ...context, path, insideSublist, ownerFields: relation.fields, ownerComponentPath: itemsComponentPath });
+            compileRelation(nested, { ...context, path, insideSublist, ownerComponentPath: itemsComponentPath });
         }
     }
 
     for (const relation of model.relations) {
         const rootComponents: string[] = [];
         const rootFields: RelationshipFieldMap = {};
-        compileRelation(relation, { path: [], root: relation, rootComponents, rootFields, insideSublist: false, ownerFields: model.fields });
+        compileRelation(relation, { path: [], root: relation, rootComponents, rootFields, insideSublist: false });
         const base = omitUndefined({ fields: rootFields, components: rootComponents, load: relation.load, selectByDefault: relation.selectByDefault === false ? false : undefined });
         if (relation.kind === 'reference') {
             relationships[relation.name] = { kind: 'reference', ...base };

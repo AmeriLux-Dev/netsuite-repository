@@ -1,4 +1,4 @@
-import { Field, ParentId, RecordType, Reference, Sublist, Subrecord } from '@amerilux/netsuite-repository';
+import { Field, NotMapped, ParentId, RecordType, Reference, Sublist, Subrecord } from '@amerilux/netsuite-repository';
 
 export class Note {
     text!: string;
@@ -24,8 +24,12 @@ export class BadRelations {
     notes!: Note[];
     /** The line class has a record type but no @ParentId(). */
     children!: ChildLine[];
-    /** A reference without a select field. */
+    /** A reference whose select field is declared but not mapped: a declared property is never replaced by a shadow. */
+    @NotMapped() ownerId?: number;
     owner?: BadRelationsOwner;
+    /** @Field options on a reference whose select field is declared: they belong on that property. */
+    @Field('custrecord_manager') managerId!: number;
+    @Field('custrecord_manager') manager?: BadRelationsOwner;
     /** A reference to a plain class. */
     @Reference('detailId') detail?: Note;
     @Field('detail') detailId!: number;
@@ -43,7 +47,8 @@ export class BadRelations {
 export class BadRelationsOwner {
     id!: number;
     parents!: BadRelations[];
-    parent?: BadRelations;
+    /** A reference naming a select field the class does not declare: only the conventional `parentId` gets a shadow. */
+    @Reference('parentKey') parent?: BadRelations;
     /** A query type of its own cannot be joined into the owner's query. */
     @Sublist('lines', { load: 'join', queryType: 'transaction', relationship: 'transactionlines' }) joinedElsewhere!: BadRelations[];
 }

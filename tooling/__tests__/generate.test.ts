@@ -2,6 +2,8 @@ import * as nodeFileSystem from 'fs';
 import * as os from 'os';
 import * as nodePath from 'path';
 import * as ts from 'typescript';
+import * as runtime from '../../src';
+import type { QueryConfig } from '../../src/types';
 import { defaultBuildConfig } from '../config';
 import type { BuildConfig } from '../config';
 import { createNodeFileSystemAdapter, toPosixPath } from '../file-system';
@@ -15,6 +17,10 @@ const compilerOptions: ts.CompilerOptions = {
     baseUrl: repositoryRoot,
     paths: { '@amerilux/netsuite-repository': ['src/index.ts'], 'N/*': ['node_modules/@hitc/netsuite-types/N/*'] },
 };
+
+// A reference whose select field is read through a relationship loads separately: N/query inside SuiteScript has no join
+// from that component to the target (transactionLine to subsidiary fails with "Record Join 'subsidiary^subsidiary' ... was not found").
+const separateSubsidiaryComponent = "        subsidiary: {\n            path: 'subsidiary',\n            relationship: 'subsidiary',\n            load: 'separate',\n            join: {\n                kind: 'to',\n                fieldId: 'subsidiary',\n                target: 'subsidiary',\n            },\n            separate: {\n                queryType: 'subsidiary',\n                parentKeyField: 'subsidiaryId',\n                targetKeyFieldId: 'id',\n                targetKeyFieldType: 'key',\n            },\n        },";
 
 function createTemporaryOutDir(): string {
     return nodeFileSystem.mkdtempSync(nodePath.join(os.tmpdir(), 'netsuite-repository-generate-'));
@@ -189,7 +195,7 @@ describe('planGeneration() – model fixtures', () => {
 
     // N/query inside SuiteScript rejects some root fields as NOT_EXPOSED (a transaction's subsidiary) that a joined
     // component carries (its main line): the field is read there, and still written through the record's own field.
-    it('reads a field through a relationship with its filter, sharing the join, and joins a reference through it from there', () => {
+    it('reads a field through a relationship with its filter, sharing the join, and loads a reference through it separately', () => {
         const joins = planGeneration({ config: buildConfig(['tooling/__tests__/fixtures/joins/*.ts'], outDir), cwd: repositoryRoot, fileSystem, compilerOptions, version: '0.0.0-test' });
         expect(joins.diagnostics).toEqual([]);
         const invoiceConfig = joins.files.find((file) => file.path.endsWith('/Invoice.gen.ts') || file.path.endsWith('\\Invoice.gen.ts'))?.content as string;
@@ -198,7 +204,8 @@ describe('planGeneration() – model fixtures', () => {
         expect(invoiceConfig).toContain(`        transactionlines: {\n            path: 'transactionlines',\n            relationship: 'transactionlines',\n            load: 'join',\n            join: {\n                kind: 'auto',\n                fieldId: 'transactionlines',\n            },\n${mainLineConditions}        },`);
         expect(invoiceConfig).toMatch(/subsidiaryId: \{\n\s+queryFieldId: 'subsidiary',\n\s+component: 'transactionlines',\n\s+type: 'select',\n\s+recordFieldId: 'subsidiary',\n\s+\},/);
         expect(invoiceConfig).toMatch(/departmentId: \{\n\s+queryFieldId: 'department',\n\s+component: 'transactionlines',/);
-        expect(invoiceConfig).toContain("        subsidiary: {\n            path: 'subsidiary',\n            parent: 'transactionlines',\n            relationship: 'subsidiary',\n            load: 'join',\n            join: {\n                kind: 'to',\n                fieldId: 'subsidiary',\n                target: 'subsidiary',\n            },\n        },");
+        expect(invoiceConfig).toContain(separateSubsidiaryComponent);
+        expect(invoiceConfig).toContain("        subsidiary: {\n            kind: 'reference',\n            fields: {\n                id: 'subsidiary_id',\n                name: 'subsidiary_name',\n            },\n            components: [\n                'subsidiary',\n            ],\n            load: 'separate',\n        },");
         expect(invoiceNoteConfig).toContain(`        'invoice.transactionlines': {\n            path: 'invoice.transactionlines',\n            parent: 'invoice',\n            relationship: 'invoice',\n            load: 'join',\n            join: {\n                kind: 'auto',\n                fieldId: 'transactionlines',\n            },\n${mainLineConditions}        },`);
         expect(invoiceNoteConfig).toMatch(/invoice_subsidiaryId: \{\n\s+queryFieldId: 'subsidiary',\n\s+component: 'invoice\.transactionlines',[^}]*nestPath: 'invoice\.subsidiaryId',\n\s+readonly: true,/);
         expect(invoiceNoteConfig).toContain("            components: [\n                'invoice',\n                'invoice.transactionlines',\n            ],");
@@ -209,6 +216,40 @@ describe('planGeneration() – model fixtures', () => {
         expect(invoiceConfig).toContain("            components: [\n                'relatedTransactions',\n                'relatedTransactions.nextdoc',\n            ],");
         // A projection that keeps every field of the target is the target itself.
         expect(joins.files.find((file) => file.path.endsWith('types.gen.ts'))?.content).toContain('    relatedTransactions: TransactionBase[];');
+    });
+
+    // End to end, because the fake N/query accepts any join: the generated config itself, not a hand-written copy.
+    it('describes the generated reference through a main-line field as a separate load by id, with no join to the subsidiary', () => {
+        const joins = planGeneration({ config: buildConfig(['tooling/__tests__/fixtures/joins/*.ts'], outDir), cwd: repositoryRoot, fileSystem, compilerOptions, version: '0.0.0-test' });
+        for (const className of ['Invoice', 'CreditMemo']) {
+            const generated = joins.files.find((file) => nodePath.basename(file.path) === `${className}.gen.ts`)?.content as string;
+            const moduleRecord = { exports: {} as Record<string, unknown> };
+            const transpiled = ts.transpileModule(generated, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
+            new Function('exports', 'require', 'module', transpiled)(moduleRecord.exports, () => runtime, moduleRecord);
+            const text = runtime.query(moduleRecord.exports[`${className}Config`] as QueryConfig<unknown>).include('subsidiary' as never).where('subsidiaryId' as never, '=', 3).describeText();
+            expect(text).toContain('SEPARATE subsidiary BY id');
+            expect(text).not.toContain('JOIN to subsidiary');
+            // The condition on the select field still reads it off the main line.
+            expect(text).toContain('WHERE transactionlines.subsidiary ANY_OF [3]');
+        }
+    });
+
+    // Like EF's shadow foreign key: a reference with no id property gets its select field from the build step.
+    it('adds a shadow select field to a reference that declares none, and never replaces a declared one', () => {
+        const joins = planGeneration({ config: buildConfig(['tooling/__tests__/fixtures/joins/*.ts'], outDir), cwd: repositoryRoot, fileSystem, compilerOptions, version: '0.0.0-test' });
+        expect(joins.diagnostics).toEqual([]);
+        const creditMemoConfig = joins.files.find((file) => file.path.endsWith('CreditMemo.gen.ts'))?.content as string;
+        const typesFile = joins.files.find((file) => file.path.endsWith('types.gen.ts'))?.content as string;
+        // The field id comes from the reference, and the @Field options on it read the shadow off the main line.
+        expect(creditMemoConfig).toMatch(/subsidiaryId: \{\n\s+queryFieldId: 'subsidiary',\n\s+component: 'transactionlines',\n\s+type: 'select',\n\s+recordFieldId: 'subsidiary',\n\s+\},/);
+        expect(creditMemoConfig).toContain(separateSubsidiaryComponent);
+        expect(creditMemoConfig).toMatch(/locationId: \{\n\s+queryFieldId: 'location',\n\s+type: 'select',\n\s+recordFieldId: 'location',\n\s+\},/);
+        expect(creditMemoConfig).toContain("            separate: {\n                queryType: 'location',\n                parentKeyField: 'locationId',\n                targetKeyFieldId: 'id',\n                targetKeyFieldType: 'key',\n            },");
+        expect(creditMemoConfig).toContain("    subsidiaryId: 'subsidiaryId',\n    locationId: 'locationId',");
+        // The shadow is typed as the referenced record's internal id, and empty when the select field is.
+        expect(typesFile).toContain("export interface CreditMemo {\n    id: number;\n    subsidiaryId: number | null;\n    locationId: number | null;\n    subsidiary?: Subsidiary;\n    location?: Pick<Warehouse, 'id' | 'name'>;\n}");
+        // A declared select field keeps its own type.
+        expect(typesFile).toContain('export interface Invoice {\n    id: number;\n    subsidiaryId: number;\n');
     });
 
     it('emits the config of a record type importing its interface from the types file, and re-exporting the types', () => {
@@ -399,26 +440,31 @@ describe('planGeneration() – diagnostics', () => {
             "Property 'BadRelations.ghostParent' is marked @ParentId() but is not a mapped field.",
             "Sublist 'BadRelations.notes' ('notes') is typed as 'Note', which has no @RecordType; a line class names its record type, or the property names the relationship with @Sublist('notes', { relationship }).",
             "Sublist 'BadRelations.children' ('children') has no way back to its parent: mark the property of 'ChildLine' holding the parent's internal id with @ParentId(), or name the relationship with @Sublist('children', { relationship }).",
-            "Reference 'BadRelations.owner' needs a select field: declare 'ownerId', name one with @Reference('<property>'), or mark the property @Subrecord() if it is one.",
+            "Reference 'BadRelations.owner' needs a select field, and 'ownerId' is declared but not mapped; map it, since a declared property is never replaced by a shadow select field.",
+            "Reference 'BadRelations.manager' has @Field options, but its select field is the declared property 'managerId'; put them on 'managerId'.",
             "Reference 'BadRelations.detail' targets 'Note', which has no @RecordType; a reference needs a query type.",
             "Property 'BadRelations.line' is marked @Sublist() but is not an array.",
             "Property 'BadRelations.tags' is an array; use @Sublist() on it, @Subrecord() and @Reference() apply to object properties.",
             "Sublist 'BadRelations.hopsFromLines' ('hopsfromlines') hops through further joins but names no relationship field to start from; declare it with @Sublist('hopsfromlines', { relationship, through }).",
             "Sublist 'BadRelations.blankHop' ('blankhop') has a hop in 'through' with no field id; each hop is a relationship field id or { fieldId, target }.",
             "Sublist 'BadRelationsOwner.parents' ('parents') has no way back to its parent: mark the property of 'BadRelations' holding the parent's internal id with @ParentId(), or name the relationship with @Sublist('parents', { relationship }).",
-            "Reference 'BadRelationsOwner.parent' needs a select field: declare 'parentId', name one with @Reference('<property>'), or mark the property @Subrecord() if it is one.",
+            "Reference 'BadRelationsOwner.parent' needs a select field: declare 'parentKey', name one with @Reference('<property>'), or mark the property @Subrecord() if it is one.",
             "Sublist 'BadRelationsOwner.joinedElsewhere' ('lines') names a query type ('transaction') for its own query, which cannot be joined into the owner's. Remove load: 'join'.",
             "Reference 'BadTargetKey.owner' matches on 'BadRelationsOwner.ghost', which is not a mapped field.",
             "Reference 'BadTargetKey.joined' matches on 'BadRelationsOwner.id' and must load separately; N/query joins only through the target's internal id. Remove load: 'join'.",
         ]);
     });
 
-    it('reports a field filter with no relationship, and two filters on one relationship', () => {
+    it('reports a field filter with no relationship, two filters on one relationship, and a join off a relationship to a reference', () => {
         const plan = planFor(['tooling/__tests__/fixtures/broken/BadFieldRelationships.ts']);
         expect(plan.diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
             "Property 'FilterWithoutRelationship.subsidiaryId' declares a filter but no relationship to read it through; name the relationship field with @Field('subsidiary', { relationship, filter }), or remove the filter.",
             "Properties 'ConflictingRelationshipFilters.departmentId' and 'ConflictingRelationshipFilters.locationId' read through 'transactionlines' with different filters; N/query joins a relationship once, so give them the same filter.",
+            "Reference 'JoinedThroughMainLine.subsidiary' reads its select field 'subsidiaryId' through 'transactionlines' and must load separately: N/query has no join from that component to 'subsidiary', and the one case tried (transactionLine to subsidiary) fails with \"Record Join 'subsidiary^subsidiary' for record 'transactionLine' was not found\". Remove load: 'join'.",
+            "Model 'NoteOnMainLineSubsidiaryInvoice' is invalid:\n - reference 'invoice.subsidiary' reads its select field through 'transactionlines' and must load separately, which it cannot inside 'invoice'; leave it out of that projection.",
         ]);
+        // On its own, the same reference compiles to a separate load.
+        expect(plan.files.find((file) => file.path.endsWith('MainLineSubsidiaryInvoice.gen.ts') && !file.path.endsWith('OnMainLineSubsidiaryInvoice.gen.ts'))?.content).toContain(separateSubsidiaryComponent);
     });
 
     it('reports a reference that loads its own class without a projection', () => {

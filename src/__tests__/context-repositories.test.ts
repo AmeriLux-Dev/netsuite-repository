@@ -71,6 +71,15 @@ describe('specifications', () => {
         expect(fakeNQuery.calls[1].execution).toBe('run');
     });
 
+    it('reads find() and getById() with one run() on the id, where a page would cost a sizing call and a fetch', () => {
+        const set = new RecordSet<Customer>(customerConfig);
+        fakeNQuery.queueRows('customer', [{ id: 7, name: 'Acme', email: 'a@x' }]);
+
+        expect(set.getById(7)).toMatchObject({ id: 7, name: 'Acme' });
+        expect(fakeNQuery.calls[0].execution).toBe('run');
+        expect(fakeNQuery.calls[0].text).toContain('WHERE id ANY_OF [7]');
+    });
+
     it('pages over records when the lines load separately', () => {
         const orders = new RecordSet(separateLinesSalesOrderModelConfig);
         fakeNQuery.queueRows({ type: 'salesorder', contains: 'shippingaddress' }, [{ id: 9, tranid: 'SO9', memo: null, customername: 'Acme', shippingaddress_addr1: '1 Main', shippingaddress_city: 'Dallas', customer_companyname: 'Acme' }]);

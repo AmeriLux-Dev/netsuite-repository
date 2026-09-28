@@ -1,4 +1,4 @@
-import { Field, ReadOnly, RecordType } from '@amerilux/netsuite-repository';
+import { Field, RecordType } from '@amerilux/netsuite-repository';
 
 @RecordType('task')
 export class Task {
@@ -8,5 +8,5 @@ export class Task {
     @Field('transaction') transactionId!: number | null;
     @Field('duedate') dueDate!: Date | null;
     /** Read as a checkbox from the completed date field. */
-    @Field({ queryFieldId: 'completeddate', type: 'boolean' }) @ReadOnly() completed!: boolean;
+    @Field({ queryFieldId: 'completeddate', type: 'boolean', readOnly: true }) completed!: boolean;
 }

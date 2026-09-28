@@ -1,5 +1,6 @@
 import { buildFieldMap, getValueAtPath, mapRowsToResults, normalizeMappedResultKey, setValueAtPath, transformResultValue } from '../query';
 import type { FieldMap, QueryField } from '../types';
+import * as NsFormat from 'N/format';
 
 const fields: Array<[string, QueryField]> = [
     ['id', { queryFieldId: 'id', type: 'integer', isPrimary: true }],
@@ -51,6 +52,29 @@ describe('mapRowsToResults', () => {
         ]);
         expect(mapRowsToResults([{ id: '1', score: '2.5', flag: 'T' }], { fieldMap: map, arrayPaths: [], coerceEnabled: true })).toEqual([{ id: 1, score: 'number:2.5', flag: 'T' }]);
         expect(transformResultValue(undefined as never, {}, { queryFieldId: 'x' }, false)).toBeNull();
+    });
+
+    it('parses a date text once across the rows of one read, on the record and in its lines', () => {
+        const mockParse = NsFormat.parse as unknown as jest.Mock;
+        mockParse.mockReset();
+        mockParse.mockImplementation(({ value }: { value: string }) => new Date(`${value}T00:00:00Z`));
+        const map: FieldMap = buildFieldMap([
+            ['id', { queryFieldId: 'id', type: 'integer', isPrimary: true }],
+            ['tranDate', { queryFieldId: 'trandate', type: 'date' }],
+            ['lines_shipDate', { queryFieldId: 'shipdate', component: 'lines', nestPath: 'lines.shipDate', cardinality: 'many', type: 'date' }],
+        ]);
+        const rows = [
+            { id: 1, trandate: '2024-01-15', lines_shipdate: '2024-01-15' },
+            { id: 1, trandate: '2024-01-15', lines_shipdate: '2024-02-01' },
+            { id: 2, trandate: '2024-01-15', lines_shipdate: '2024-02-01' },
+        ];
+
+        const [first, second] = mapRowsToResults<{ tranDate: Date; lines: Array<{ shipDate: Date }> }>(rows, { fieldMap: map, arrayPaths: ['lines'], primaryAlias: 'id', coerceEnabled: true });
+
+        expect(mockParse).toHaveBeenCalledTimes(2);
+        expect(first.lines.map((line) => line.shipDate.toISOString().slice(0, 10))).toEqual(['2024-01-15', '2024-02-01']);
+        expect(second.tranDate).toEqual(first.tranDate);
+        expect(second.tranDate).not.toBe(first.tranDate);
     });
 });
 

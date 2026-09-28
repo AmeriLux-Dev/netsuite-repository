@@ -1,4 +1,5 @@
 import { coerceQueryResultValueByFieldType } from '../coercion';
+import type { ParsedDateCache } from '../coercion';
 import type { FieldMap, QueryField, QueryResultValue } from '../types';
 
 export type ResultRow = Record<string, QueryResultValue>;
@@ -10,6 +11,24 @@ export interface ResultMappingOptions {
     /** Alias of the primary key column; rows are grouped by it when array paths exist. */
     primaryAlias?: string;
     coerceEnabled: boolean;
+}
+
+/** One mapped field, resolved once per read: the alias its value comes back under and the path it lands at. */
+interface ResolvedFieldMapping {
+    alias: string;
+    pathSegments: string[];
+    field: QueryField;
+}
+
+/**
+ * A mapping resolved once per read instead of once per row: the fields of the record itself, and the fields of each
+ * array path's items with their paths relative to the item.
+ */
+interface ResolvedResultMapping {
+    recordFields: ResolvedFieldMapping[];
+    arrayItems: Array<{ arrayPath: string; fields: ResolvedFieldMapping[] }>;
+    coerceEnabled: boolean;
+    parsedDates: ParsedDateCache;
 }
 
 /** N/query keys mapped results by alias; the mapper compares aliases case-insensitively so casing differences never matter. */
@@ -34,19 +53,52 @@ export function buildFieldMap(fields: Array<[string, QueryField]>): FieldMap {
     return map;
 }
 
-/** Maps result rows into typed objects, grouping fanned-out sublist rows under their parent when array paths exist. */
-export function mapRowsToResults<TResult>(rows: ResultRow[], options: ResultMappingOptions): TResult[] {
+function splitPath(path: string): string[] {
+    return path.split('.').filter(Boolean);
+}
+
+function isUnderArrayPath(outputPath: string, arrayPath: string): boolean {
+    return outputPath === arrayPath || outputPath.startsWith(`${arrayPath}.`);
+}
+
+function resolveResultMapping(options: ResultMappingOptions, parsedDates: ParsedDateCache): ResolvedResultMapping {
+    const entries = Object.entries(options.fieldMap);
+    return {
+        recordFields: entries
+            .filter(([, mapping]) => !options.arrayPaths.some((arrayPath) => isUnderArrayPath(mapping.outputPath, arrayPath)))
+            .map(([alias, mapping]) => ({ alias, pathSegments: splitPath(mapping.outputPath), field: mapping.field })),
+        arrayItems: options.arrayPaths.map((arrayPath) => ({
+            arrayPath,
+            fields: entries
+                .filter(([, mapping]) => isUnderArrayPath(mapping.outputPath, arrayPath))
+                .map(([alias, mapping]) => ({
+                    alias,
+                    pathSegments: splitPath(mapping.outputPath === arrayPath ? mapping.key : mapping.outputPath.slice(arrayPath.length + 1)),
+                    field: mapping.field,
+                })),
+        })),
+        coerceEnabled: options.coerceEnabled,
+        parsedDates,
+    };
+}
+
+/**
+ * Maps result rows into typed objects, grouping fanned-out sublist rows under their parent when array paths exist.
+ * The rows share `parsedDates`, so each date text is parsed once; pass one cache to several calls over the same read.
+ */
+export function mapRowsToResults<TResult>(rows: ResultRow[], options: ResultMappingOptions, parsedDates: ParsedDateCache = new Map()): TResult[] {
     if (rows.length === 0) {
         return [];
     }
+    const mapping = resolveResultMapping(options, parsedDates);
     const normalizedRows = rows.map(normalizeRowKeys);
     if (options.arrayPaths.length > 0 && options.primaryAlias !== undefined) {
-        return mapGroupedRows(normalizedRows, options, normalizeMappedResultKey(options.primaryAlias));
+        return mapGroupedRows(normalizedRows, mapping, normalizeMappedResultKey(options.primaryAlias));
     }
-    return normalizedRows.map((row) => mapSingleRow<TResult>(row, options));
+    return normalizedRows.map((row) => mapRecordRow<TResult>(row, mapping));
 }
 
-function mapGroupedRows<TResult>(rows: ResultRow[], options: ResultMappingOptions, primaryAlias: string): TResult[] {
+function mapGroupedRows<TResult>(rows: ResultRow[], mapping: ResolvedResultMapping, primaryAlias: string): TResult[] {
     const groups = new Map<QueryResultValue, ResultRow[]>();
     for (const row of rows) {
         const id = row[primaryAlias];
@@ -57,18 +109,18 @@ function mapGroupedRows<TResult>(rows: ResultRow[], options: ResultMappingOption
         group.push(row);
         groups.set(id, group);
     }
-    return Array.from(groups.values()).map((groupRows) => mapRowGroup<TResult>(groupRows, options));
+    return Array.from(groups.values()).map((groupRows) => mapRowGroup<TResult>(groupRows, mapping));
 }
 
-function mapRowGroup<TResult>(rows: ResultRow[], options: ResultMappingOptions): TResult {
-    const base = mapSingleRow<Record<string, unknown>>(rows[0], options);
-    for (const arrayPath of options.arrayPaths) {
+function mapRowGroup<TResult>(rows: ResultRow[], mapping: ResolvedResultMapping): TResult {
+    const base = mapRecordRow<Record<string, unknown>>(rows[0], mapping);
+    for (const { arrayPath } of mapping.arrayItems) {
         base[arrayPath] = [];
     }
     const seen = new Set<string>();
     for (const row of rows) {
-        for (const arrayPath of options.arrayPaths) {
-            const item = buildArrayItem(row, options, arrayPath);
+        for (const { arrayPath, fields } of mapping.arrayItems) {
+            const item = buildArrayItem(row, fields, mapping);
             if (!item) {
                 continue;
             }
@@ -83,46 +135,40 @@ function mapRowGroup<TResult>(rows: ResultRow[], options: ResultMappingOptions):
     return base as TResult;
 }
 
-function mapSingleRow<TResult>(row: ResultRow, options: ResultMappingOptions): TResult {
+function mapRecordRow<TResult>(row: ResultRow, mapping: ResolvedResultMapping): TResult {
     const output: Record<string, unknown> = {};
-    for (const [alias, mapping] of Object.entries(options.fieldMap)) {
-        const path = mapping.outputPath;
-        if (options.arrayPaths.some((arrayPath) => path === arrayPath || path.startsWith(`${arrayPath}.`))) {
-            continue;
-        }
-        setValueAtPath(output, path, transformResultValue(row[alias], row, mapping.field, options.coerceEnabled));
+    for (const { alias, pathSegments, field } of mapping.recordFields) {
+        setValueAtPathSegments(output, pathSegments, transformResultValue(row[alias], row, field, mapping.coerceEnabled, mapping.parsedDates));
     }
     return output as TResult;
 }
 
-function buildArrayItem(row: ResultRow, options: ResultMappingOptions, arrayPath: string): Record<string, unknown> | null {
+function buildArrayItem(row: ResultRow, fields: ResolvedFieldMapping[], mapping: ResolvedResultMapping): Record<string, unknown> | null {
     const item: Record<string, unknown> = {};
     let hasValue = false;
-    for (const [alias, mapping] of Object.entries(options.fieldMap)) {
-        const path = mapping.outputPath;
-        if (path !== arrayPath && !path.startsWith(`${arrayPath}.`)) {
-            continue;
-        }
-        const itemPath = path === arrayPath ? mapping.key : path.slice(arrayPath.length + 1);
-        const value = transformResultValue(row[alias], row, mapping.field, options.coerceEnabled);
+    for (const { alias, pathSegments, field } of fields) {
+        const value = transformResultValue(row[alias], row, field, mapping.coerceEnabled, mapping.parsedDates);
         if (value !== null && value !== undefined && value !== '') {
             hasValue = true;
         }
-        setValueAtPath(item, itemPath, value);
+        setValueAtPathSegments(item, pathSegments, value);
     }
     return hasValue ? item : null;
 }
 
 /** Coerces a raw value to the field's declared type when coercion is on for it, then applies the field's transform. */
-export function transformResultValue(value: QueryResultValue, row: ResultRow, field: QueryField, coerceEnabled: boolean): unknown {
+export function transformResultValue(value: QueryResultValue, row: ResultRow, field: QueryField, coerceEnabled: boolean, parsedDates?: ParsedDateCache): unknown {
     const shouldCoerce = field.coerce ?? coerceEnabled;
-    const coerced = shouldCoerce ? coerceQueryResultValueByFieldType(value ?? null, field.type) : value ?? null;
+    const coerced = shouldCoerce ? coerceQueryResultValueByFieldType(value ?? null, field.type, parsedDates) : value ?? null;
     return field.transform ? field.transform(coerced, row) : coerced;
 }
 
 /** Writes a value at a dotted path, creating intermediate objects. */
 export function setValueAtPath(target: Record<string, unknown>, path: string, value: unknown): void {
-    const parts = path.split('.').filter(Boolean);
+    setValueAtPathSegments(target, splitPath(path), value);
+}
+
+function setValueAtPathSegments(target: Record<string, unknown>, parts: string[], value: unknown): void {
     let cursor = target;
     for (let index = 0; index < parts.length - 1; index++) {
         const part = parts[index];

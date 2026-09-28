@@ -35,11 +35,21 @@ export interface FieldOptions {
     relationship?: string;
     /** Conditions on the joined component that pick the one row the value is read from (`mainline IS true`). */
     filter?: ComponentCondition[];
+    /** Excludes the property from writes. */
+    readOnly?: boolean;
+    /** Writes the field before the others (a subrecord's `state` before its `zip`, so address validation accepts it). */
+    setFirst?: boolean;
+    /** `false` leaves the property out of the default select; include() brings it back per query. */
+    selectByDefault?: boolean;
+    /** Maps the value read. Must be an exported function so the build step can import it by name. */
+    transform?: NonNullable<QueryField['transform']>;
 }
 
 export interface RelationOptions {
     /** `join` (default) reads the relation in the parent's query; `separate` runs a second query keyed by the parent ids. */
     load?: RelationshipLoad;
+    /** `false` leaves the whole relation out of the default select; include() brings it back per query. */
+    selectByDefault?: boolean;
 }
 
 export interface ReferenceOptions extends RelationOptions {
@@ -115,6 +125,7 @@ function splitIdAndOptions<TOptions extends object>(first: string | TOptions | u
 
 function applyRelationOptions(property: PropertyOverrides, options: RelationOptions): void {
     if (options.load !== undefined) property.load = options.load;
+    if (options.selectByDefault !== undefined) property.selectByDefault = options.selectByDefault;
 }
 
 // ── class decorator ───────────────────────────────────────────────────────────
@@ -148,7 +159,10 @@ export function ParentId(): PropertyDecoratorFunction {
     });
 }
 
-/** Renames the field or overrides the inferred type. Never required: by convention the field id is the lowercased property name. */
+/**
+ * Renames the field, overrides the inferred type, or flags how it is read and written. Never required: by convention
+ * the field id is the lowercased property name.
+ */
 export function Field(fieldId?: string, options?: FieldOptions): PropertyDecoratorFunction;
 export function Field(options: FieldOptions): PropertyDecoratorFunction;
 export function Field(first?: string | FieldOptions, second?: FieldOptions): PropertyDecoratorFunction {
@@ -161,10 +175,14 @@ export function Field(first?: string | FieldOptions, second?: FieldOptions): Pro
         if (options.coerce !== undefined) property.coerce = options.coerce;
         if (options.relationship !== undefined) property.relationshipFieldId = options.relationship;
         if (options.filter !== undefined) property.filter = options.filter;
+        if (options.readOnly !== undefined) property.readOnly = options.readOnly;
+        if (options.setFirst !== undefined) property.setFirst = options.setFirst;
+        if (options.selectByDefault !== undefined) property.selectByDefault = options.selectByDefault;
+        if (options.transform !== undefined) property.transform = options.transform;
     });
 }
 
-/** Excludes the property from writes. */
+/** @deprecated Use `@Field({ readOnly: true })`. */
 export function ReadOnly(): PropertyDecoratorFunction {
     return propertyDecorator((property) => {
         property.readOnly = true;
@@ -219,19 +237,21 @@ function toRelationHop(hop: string | RelationHop): RelationHop {
     return typeof hop === 'string' ? { fieldId: hop } : { ...hop };
 }
 
+/** @deprecated Use `@Field({ setFirst: true })`. */
 export function SetFirst(): PropertyDecoratorFunction {
     return propertyDecorator((property) => {
         property.setFirst = true;
     });
 }
 
-/** Leaves the property (or the whole reference, subrecord, or sublist) out of the default select; include() brings it back per query. */
+/** @deprecated Use `@Field({ selectByDefault: false })`, or `{ selectByDefault: false }` on `@Reference`, `@Subrecord`, or `@Sublist`. */
 export function ExcludeFromDefaultSelect(): PropertyDecoratorFunction {
     return propertyDecorator((property) => {
         property.selectByDefault = false;
     });
 }
 
+/** @deprecated Use `@Field({ transform })`. */
 export function Transform(transform: NonNullable<QueryField['transform']>): PropertyDecoratorFunction {
     return propertyDecorator((property) => {
         property.transform = transform;
