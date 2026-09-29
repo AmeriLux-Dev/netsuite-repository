@@ -313,6 +313,7 @@ function describeColumn(column: FakeColumn): DescribedColumn {
     }
     if (context !== undefined) described.context = context as FieldContext;
     if (column.aggregate !== undefined) described.aggregate = column.aggregate as AggregateName;
+    if (column.options.groupBy) described.groupBy = true;
     return described;
 }
 

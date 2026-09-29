@@ -40,6 +40,22 @@ describe('FakeNQueryModule', () => {
         expect(query.joinFrom({ fieldId: 'transaction', source: 'transactionline' }).path).toBe('transactionline.transaction');
     });
 
+    it('records the columns a query groups by and renders the grouping', () => {
+        const nsQuery = createFakeNQueryModule();
+        const invoices = nsQuery.create({ type: 'transaction' });
+        invoices.columns = [
+            invoices.createColumn({ fieldId: 'entity', groupBy: true, alias: 'customerid' }),
+            invoices.createColumn({ fieldId: 'id', aggregate: nsQuery.Aggregate.COUNT, alias: 'invoicecount' }),
+        ];
+        invoices.run();
+
+        expect(nsQuery.calls[0].description.columns).toEqual([
+            { alias: 'customerid', fieldId: 'entity', groupBy: true },
+            { alias: 'invoicecount', fieldId: 'id', aggregate: 'COUNT' },
+        ]);
+        expect(nsQuery.calls[0].text).toBe(['FROM transaction', 'SELECT entity AS customerid, COUNT(id) AS invoicecount', 'GROUP BY entity'].join('\n'));
+    });
+
     it('pages queued rows through runPaged', () => {
         const nsQuery = createFakeNQueryModule();
         nsQuery.queueRows('customer', [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }, { id: 5 }, { id: 6 }, { id: 7 }]);

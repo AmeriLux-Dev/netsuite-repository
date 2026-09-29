@@ -423,7 +423,7 @@ db.salesOrders.query()
     .include('customer')                                // bring one in declared selectByDefault: false
     .selectFormula('{quantity} * {rate}', 'lineTotal', { type: 'FLOAT', fieldType: 'currency' })
     .whereGroup((group) => group.where('memo', 'IS NULL').orWhere('memo', '=', ''))
-    .whereFormula('{trandate} > SYSDATE - 30')
+    .whereFormula('{trandate} + 30 > TRUNC(CURRENT_DATE)')
     .orderByAsc('lineTotal')
     .page(2, 25)
     .executeTyped();
@@ -433,8 +433,10 @@ db.salesOrders.query()
 - N/query sorts only on the query's own columns. `orderBy()` on a selected field sorts on that column; on a field that is not selected it adds a hidden column (`__sort0`, …) that the mapped result never shows.
 - `where()`, `orderBy()`, and `select()` are typed against the model: properties and dotted paths into relations (`customer.companyName`, `lines.item.type`) are checked, so a misspelled path is a compile error, inside specifications too. The generated `<Model>Fields` constant spells them for you (`so.lines.item.type`), with completion on every level. An alias declared on the same query by `selectFormula()` is accepted as well.
 - The operators and the value follow the property's declared type, and are translated to N/query's operators. Text takes `=`, `!=`, `LIKE`, `NOT LIKE`, `IN`, and `NOT IN`; a number adds `<`, `<=`, `>`, `>=`, and `BETWEEN`; a `Date` takes the comparisons and `BETWEEN` with `Date` values; a checkbox takes `=` and `!=` with a boolean or NetSuite's `'T'`/`'F'`. Every field takes `IS NULL` and `IS NOT NULL`; `null` is not a comparison value. The N/query operator names follow N/search's: `=` becomes `IS` on text and on a checkbox, `EQUAL` on a number, `ON` on a date, and `ANY_OF` on a select, multiselect, or key field (the internal id, a reference's select field, anything declared `type: 'select'`); `>=` on a date becomes `ON_OR_AFTER`; `LIKE 'Acme%'` becomes `START_WITH`, `'%Acme'` `ENDWITH`, `'%Acme%'` `CONTAIN`, and `'Acme'` `IS`; `IS NULL` becomes `EMPTY`. `IN` becomes `ANY_OF` on a select or key field; on text, numbers, dates, and checkboxes, which have no list operator in N/query, it becomes one equality per value joined with `OR` (`NOT IN`: one negated equality per value joined with `AND`). A select field the model does not mark as one fails at run time with "Operator EQUAL is not valid"; declare it with `@Field({ type: 'select' })`. Any N/query operator name is accepted directly on any field (`where(so.tranDate, 'WITHIN', [from, to])`). A `LIKE` pattern with `_` or a `%` in the middle has no N/query operator and is rejected; write it as a formula.
-- With `useText`, and for a `text: true` field, the comparison is against the display text through a `{field#DISPLAY}` formula, so the text operators and string values apply whatever the field.
-- `selectFormula()` and `whereFormula()` are the escape hatch for anything the model does not declare. Formulas use N/query's `{fieldid}` and `{relation.fieldid}` syntax and are sent as written; values in them are part of the text, so never build a formula from untrusted input.
+- With `useText`, and for a `text: true` field, the comparison is against the display text through a `{field#DISPLAY}` formula, so the text operators and string values apply whatever the field. On a joined record the formula names the select field that joins it (`{terms.duerule#DISPLAY}`), never the model's relation name; a joined text field is compared as itself, since it is its own display text and a formula cannot reach every joined record (`{entity.companyname}` is "not found": a select field that points at several record types has no formula path).
+- `selectFormula()` and `whereFormula()` are the escape hatch for anything the model does not declare. Formulas use N/query's `{fieldid}` syntax, and `{selectfield.fieldid}` through a select field that points at one record type (`{terms.daysuntilnetdue}`, joined outer); they are sent as written, and values in them are part of the text, so never build a formula from untrusted input.
+- `whereFormula()` with no operator takes a condition (`{trandate} + 30 > TRUNC(CURRENT_DATE)`) and sends it as `CASE WHEN … THEN 1 ELSE 0 END` compared `EQUAL 1`: N/query requires an operator, and fails to render a comparison typed `BOOLEAN`. With an operator, the formula is a value of the given type compared to the value passed (`whereFormula('{custentity_score} * 2', 'FLOAT', 'GREATER', 10)`).
+- N/query's formulas have no `SYSDATE`, and `{today}` is not a field: write `TRUNC(CURRENT_DATE)`. A date plus days (`{trandate} + 30`) works; `ADD_MONTHS(…)` and `TRUNC(CURRENT_DATE) - {trandate}` failed to render in a sandbox (2026-09-28), so pass a date as a condition value instead (`where(so.tranDate, '>=', since)`).
 - `limit()`, `offset()`, and `page()` read a row window through `runPaged`; N/query pages are five to a thousand rows, so a window smaller than five still fetches five and slices. Every query's sort ends with the internal id, so rows that tie on the other sorts never change places between pages. With a joined sublist the rows fan out, so the window applies to mapped records and the query reads every row.
 - A window over a query whose condition pins the internal id to a thousand ids or fewer is cut from one `run()` instead: `find()`, `getById()`, the read inside `update()`, and `first()` or `exists()` on an id. That is 10 units in one call, where `runPaged` spends 10 sizing the result and 10 fetching it.
 - `count()` counts records, distinct by primary key when a component is joined; `exists()` asks for one row.
@@ -447,16 +449,16 @@ N/query's `run()` answers at most 5,000 rows and says nothing when it stops ther
 
 - Every query's sort ends with the internal id (`ORDER BY …, id ASC`), so its order is complete. When an answer comes back 5,000 rows long, the next `run()` asks for the rows after its last one, by the value of each sort and then the id, until an answer comes back shorter. A query under 5,000 rows is still one `run()`.
 - The comparison follows the sort's type. The id, numbers, and dates use their own operators (`GREATER`, `AFTER`, `EQUAL`, `ON`). Text is compared upper-cased in a formula (`UPPER({companyname}) > UPPER('Acme')`): N/query refuses `GREATER` on text, and NetSuite orders text by `UPPER()`. Blanks go where NetSuite sorts them, last ascending and first descending.
-- A query no read can pick up after is read again through `runPaged`, a thousand rows a fetch: one sorted by a select field, a checkbox, a datetime, display text, or a formula; one with a joined sublist, whose rows are lines; one whose config has no internal id.
+- A query no read can pick up after is read again through `runPaged`, a thousand rows a fetch: one sorted by a select field, a checkbox, a datetime, display text, or a formula; one sorted by text on a record joined through a reference, which reading on compares in a formula that may not reach it (`{entity.companyname}` is "not found"); one with a joined sublist, whose rows are lines; one whose config has no internal id. `listPage()` must read on, so it keeps that formula, naming the joined record by the select field that joins it (`{terms.name}`).
 - A separately loaded relation whose batch comes back 5,000 rows long splits the batch in two and reads each half again. One parent with 5,000 related rows fails rather than come back short.
 - One 5,000-row `run()` costs 10 governance units; one `runPaged` read of a thousand costs 20. Before every read past the first, the query checks `N/runtime`'s remaining usage, which costs nothing. When another read like the last would leave less than the reserve (`governanceReserve` on the query options, 100 units by default), `list()` throws a `GovernanceLimitError` carrying `rowsRead`, `remainingUsage`, `readCost`, and `reserve`, instead of NetSuite ending the script halfway through a read.
 
 To read a list across requests, a page at a time, use `listPage()`:
 
 ```ts
-const first = db.invoices.listPage({ limit: 5000 }, forCustomer(2431), open());
+const first = db.invoices.listPage({ limit: 5000 }, forCustomer(12), open());
 // first.items; first.next is null when nothing follows
-const second = db.invoices.listPage({ after: first.next, limit: 5000 }, forCustomer(2431), open());
+const second = db.invoices.listPage({ after: first.next, limit: 5000 }, forCustomer(12), open());
 ```
 
 - Each page picks up after the previous page's last record by its sort values, so a record changed or deleted between two pages cannot shift the rest, and nothing is counted: `next` is null once the records run out.
@@ -465,6 +467,41 @@ const second = db.invoices.listPage({ after: first.next, limit: 5000 }, forCusto
 - Every sort must be one a read can compare (the id, numbers, dates, text), and the model must not join a sublist; load it separately (`load: 'separate'`) to page it.
 
 Each comparison, cost, and blank position above was checked against 17,369 records in a sandbox account on 2026-09-24; the sorts listed as read through `runPaged` were not, which is why they are.
+
+### Grouped reads
+
+A grouped read is SQL's `GROUP BY` over a model: the query's conditions, grouped by one or more keys, with aggregate columns under aliases. The sums run in the database, where they belong: in a sandbox, summing 31,734 open invoices into 577 customer and subsidiary groups took 6.7 to 6.9 seconds through N/query and 5.5 to 5.7 as raw SuiteQL, 10 units each, where reading the rows and summing them in script took 16.5 to 18 seconds and 80 units.
+
+```ts
+// repositories/invoices.ts
+import { dbContext } from './generated/context.gen';
+import { InvoiceFields as inv } from './generated/Invoice.gen';
+import { forCustomer, open } from '../specifications/invoices';
+
+const dueDate = '{trandate} + NVL(NULLIF({terms.daysuntilnetdue}, 0), 30)';
+
+export function listOpenInvoiceTotals(customerId?: number) {
+    return dbContext.invoices
+        .groupBy(inv.customerId, inv.subsidiaryId)
+        .aggregateFormula('SUM', `CASE WHEN ${dueDate} < TRUNC(CURRENT_DATE) THEN {foreignamountunpaid} ELSE 0 END`, 'pastDueAmount', { type: 'FLOAT', fieldType: 'currency' })
+        .aggregate('SUM', inv.amountUnpaid, 'unpaidAmount')
+        .aggregate('COUNT', inv.id, 'invoiceCount')
+        .orderByDesc('pastDueAmount')
+        .list(open(), ...(customerId === undefined ? [] : [forCustomer(customerId)]));
+    // { customerId: number; subsidiaryId: number; pastDueAmount: number | null; unpaidAmount: number | null; invoiceCount: number }[]
+}
+```
+
+- `groupBy()` starts a grouped read on the record set, never tracked, or on a query builder, whose conditions it keeps. A key is a field path that holds one value: a body field, a field read through the main line or a joined reference, display text, a sublist's field (each line is a row), or an alias the query declared with `selectFormula()`. A multi-select and a relation itself are not keys, and neither compiles. Each group's row holds its keys at their model paths (`customer.companyName` lands in `customer: { companyName }`) with their declared types.
+- `aggregate(name, field, alias)` takes N/query's own aggregate names. COUNT and COUNT_DISTINCT take any field and answer a number. SUM, AVERAGE, MEDIAN, and their DISTINCT forms take numbers only (over a date, text, or checkbox N/query fails to render them, so those paths do not compile) and answer a number or null; on an integer field N/query types the average and the median as integers, so they come back whole. MINIMUM, MAXIMUM, and their DISTINCT forms take any field and answer its type or null. Values are coerced like any other read: a date comes back as a `Date`.
+- `aggregateFormula(name, formula, alias, { type, fieldType })` aggregates an N/query formula: `type` is its return type, `fieldType` how its value is coerced and typed. A `CASE` formula typed `CURRENCY` fails to render; type a sum of amounts `FLOAT` with `fieldType: 'currency'`. A formula cannot hold an aggregate of its own, so a ratio of two sums is two aggregates divided after the read. Formulas reach a joined record through its select field (`{terms.daysuntilnetdue}`, joined outer, so an invoice without terms still counts).
+- `list(...specifications)` applies specifications the way `RecordSet.list()` does, to a copy, so the same grouped query can run again with others. The model's own filters apply as always.
+- A grouped read selects only its keys and aggregates: no default columns, nothing loaded separately, nothing tracked. A key, an aggregate, or a condition on a relation declared `load: 'separate'` throws, and names the formula that reaches the field instead.
+- The groups come back sorted by their keys. `orderBy()` on a key sorts in N/query; on an aggregate alias it sorts in script once every group is read, since N/query renders a sort on an aggregate without the aggregate and the query fails. Blanks go where NetSuite puts them, last ascending and first descending, and groups that tie keep the keys' order. A page window set on the query (`limit()`, `page()`) is cut after sorting.
+- Every group comes back. `run()` answers at most 5,000 groups; past that the read picks up after the last group by its keys when each key can be compared (the id, numbers, dates, text), and reads every group through `runPaged` otherwise (a select field, display text, a formula, text on a record joined through a reference), under the same governance guard as `list()`.
+- `describe()` and `describeText()` show the grouping (`GROUP BY …`, and `SORT IN SCRIPT BY …` for a sort on an aggregate); `toSQL()` shows what NetSuite renders. The testing double records each column's `groupBy`.
+
+Each behaviour above was checked in a sandbox account on 2026-09-28.
 
 ## Writes
 

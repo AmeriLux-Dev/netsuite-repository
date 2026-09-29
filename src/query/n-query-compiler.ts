@@ -38,11 +38,12 @@ function joinComponent(parent: NsQuery.Component, join: ComponentJoin): NsQuery.
 function createColumn(component: NsQuery.Component, column: DescribedColumn, nsQuery: NQueryModule): NsQuery.Column {
     const aggregate = column.aggregate === undefined ? undefined : resolveNQueryEnumValue(nsQuery.Aggregate, column.aggregate, 'Aggregate');
     const context = column.context === undefined ? undefined : resolveNQueryEnumValue(nsQuery.FieldContext, column.context, 'FieldContext');
+    const groupBy = column.groupBy || undefined;
     if (column.formula !== undefined) {
         const type = column.formulaType === undefined ? undefined : resolveNQueryEnumValue(nsQuery.ReturnType, column.formulaType, 'ReturnType');
-        return component.createColumn(omitUndefined({ formula: column.formula, type, alias: column.alias, aggregate, context }) as ColumnOptions);
+        return component.createColumn(omitUndefined({ formula: column.formula, type, alias: column.alias, aggregate, context, groupBy }) as ColumnOptions);
     }
-    return component.createColumn(omitUndefined({ fieldId: column.fieldId, alias: column.alias, aggregate, context }) as ColumnOptions);
+    return component.createColumn(omitUndefined({ fieldId: column.fieldId, alias: column.alias, aggregate, context, groupBy }) as ColumnOptions);
 }
 
 /**

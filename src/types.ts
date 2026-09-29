@@ -330,6 +330,8 @@ export interface DescribedColumn {
     formulaType?: FormulaReturnType;
     context?: FieldContext;
     aggregate?: AggregateName;
+    /** A key of a grouped read: N/query groups by every column marked so, and by nothing else. */
+    groupBy?: boolean;
 }
 
 export interface FieldConditionNode {
@@ -391,6 +393,13 @@ export interface SeparateLoadDescription {
     parentKeyAlias: string;
 }
 
+/** A sort a grouped read applies in script, after every group is read: N/query cannot sort on an aggregate. */
+export interface DescribedScriptSort {
+    /** Output path of the value sorted on: an aggregate's alias, or a group key's model path. */
+    path: string;
+    ascending: boolean;
+}
+
 export interface QueryDescription {
     queryType: string;
     components: DescribedComponent[];
@@ -399,6 +408,8 @@ export interface QueryDescription {
     sort: DescribedSort[];
     page?: PageWindow;
     separateLoads?: SeparateLoadDescription[];
+    /** A grouped read sorted by an aggregate: its whole order, applied to the groups once all are read. */
+    scriptSort?: DescribedScriptSort[];
 }
 
 export interface FieldMapEntry<TFieldMeta = unknown> {

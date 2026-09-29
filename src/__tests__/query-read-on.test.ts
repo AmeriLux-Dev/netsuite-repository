@@ -1,7 +1,7 @@
 import { GovernanceLimitError, QueryBuilder, runRowLimit } from '../query';
 import { RecordSet } from '../context';
 import type { QueryConfig } from '../types';
-import { customerConfig, orderConfig, separateOrderConfig } from './fixtures';
+import { customerConfig, customerInvoiceConfig, orderConfig, separateOrderConfig } from './fixtures';
 import { fakeNQuery, fakeNRuntime } from '../testing';
 
 // N/query's run() answers at most 5,000 rows and says nothing when it stops there (probe k2, 2026-09-24): a list read
@@ -144,6 +144,19 @@ describe('QueryBuilder.executeTyped() – past the 5,000-row answer', () => {
         expect(fakeNQuery.calls[1].pageSize).toBe(1000);
     });
 
+    // Reading on after text compares it in a formula, and a formula reaches a joined record only through a select field
+    // that points at one record type ({entity.companyname} is "not found", sandbox 2026-09-28).
+    it('reads a text sort on a record joined through a reference through runPaged, past the 5,000-row answer', () => {
+        const invoiceRows = (count: number) => Array.from({ length: count }, (_, index) => ({ id: index + 1, customer_companyName: `C${index}` }));
+        fakeNQuery.queueRows('transaction', invoiceRows(5000));
+        fakeNQuery.queueRows('transaction', invoiceRows(5003));
+
+        const invoices = QueryBuilder.from(customerInvoiceConfig).select('customer.companyName').orderBy('customer.companyName').executeTyped();
+
+        expect(invoices).toHaveLength(5003);
+        expect(fakeNQuery.calls.map((call) => call.execution)).toEqual(['run', 'runPaged']);
+    });
+
     // A joined sublist answers a row per line, so an answer can stop inside an order's lines: those queries are read
     // through runPaged too, and the rows grouped into orders once all are in.
     it('reads a joined sublist through runPaged past the 5,000-row answer, and groups the rows into records', () => {
@@ -231,6 +244,27 @@ describe('QueryBuilder.executeTypedPage()', () => {
     it('rejects a marker that does not belong to the query', () => {
         expect(() => QueryBuilder.from(customerConfig).executeTypedPage({ after: '["Acme",7]', limit: 2 })).toThrow('marker');
         expect(() => QueryBuilder.from(customerConfig).executeTypedPage({ after: 'not json', limit: 2 })).toThrow('marker');
+    });
+
+    // A page must read on, so it keeps the formula, which names the joined record by the select field that joins it: a
+    // relation named apart from its field reaches the record that way, where its model name reaches nothing.
+    it("reads on after a joined record's text by the select field that joins it, not the model's relation name", () => {
+        const paymentTermsConfig: QueryConfig<{ id: number; paymentTerms: { name: string } }> = {
+            recordType: 'invoice',
+            components: { paymentTerms: { path: 'paymentTerms', relationship: 'paymentTerms', load: 'join', join: { kind: 'to', fieldId: 'terms', target: 'term' } } },
+            fields: {
+                id: { queryFieldId: 'id', type: 'key', isPrimary: true },
+                paymentTerms_name: { queryFieldId: 'name', component: 'paymentTerms', type: 'string', nestPath: 'paymentTerms.name' },
+            },
+            relationships: { paymentTerms: { kind: 'reference', components: ['paymentTerms'], fields: { name: 'paymentTerms_name' } } },
+        };
+        fakeNQuery.queueRows('invoice', [{ id: 1, paymentTerms_name: 'Net 30' }, { id: 2, paymentTerms_name: 'Net 60' }, { id: 3, paymentTerms_name: 'Net 90' }]);
+        fakeNQuery.queueRows('invoice', []);
+
+        const first = QueryBuilder.from(paymentTermsConfig).orderBy('paymentTerms.name').executeTypedPage({ limit: 2 });
+        QueryBuilder.from(paymentTermsConfig).orderBy('paymentTerms.name').executeTypedPage({ after: first.next, limit: 2 });
+
+        expect(fakeNQuery.calls[1].text).toContain("formula(CASE WHEN UPPER({terms.name}) > UPPER('Net 60') THEN 1 ELSE 0 END):INTEGER EQUAL [1]");
     });
 
     it('rejects a sort it cannot pick up after, a joined sublist, and a limit that is not a positive whole number', () => {

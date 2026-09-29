@@ -127,8 +127,28 @@ describe('QueryBuilder.describe() – conditions', () => {
         });
     });
 
-    it('adds formula conditions with and without an operator', () => {
-        expect(condition(QueryBuilder.from(customerConfig).whereFormula('{datecreated} > SYSDATE - 30'))).toEqual({ kind: 'formula', formula: '{datecreated} > SYSDATE - 30', type: 'BOOLEAN' });
+    it('sends a formula condition with no operator as a CASE compared EQUAL 1, the form N/query accepts', () => {
+        // createCondition rejects a BOOLEAN formula with no operator, and a bare comparison typed BOOLEAN fails to
+        // render; CASE WHEN ... THEN 1 ELSE 0 END compared EQUAL 1 matched a field condition (sandbox 2026-09-28).
+        expect(condition(QueryBuilder.from(customerConfig).whereFormula('{datecreated} + 30 > TRUNC(CURRENT_DATE)'))).toEqual({
+            kind: 'formula', formula: 'CASE WHEN {datecreated} + 30 > TRUNC(CURRENT_DATE) THEN 1 ELSE 0 END', type: 'INTEGER', operator: 'EQUAL', values: [1],
+        });
+        expect(condition(QueryBuilder.from(customerConfig).where('id', '=', 1).orWhereFormula('{custentity_score} > 5'))).toEqual({
+            kind: 'or',
+            nodes: [
+                { kind: 'field', fieldId: 'id', operator: 'ANY_OF', values: [1] },
+                { kind: 'formula', formula: 'CASE WHEN {custentity_score} > 5 THEN 1 ELSE 0 END', type: 'INTEGER', operator: 'EQUAL', values: [1] },
+            ],
+        });
+    });
+
+    it('sends a BOOLEAN formula with an operator as written', () => {
+        expect(condition(QueryBuilder.from(customerConfig).whereFormula("CASE WHEN {custentity_score} > 5 THEN 'T' ELSE 'F' END", 'BOOLEAN', 'IS', true))).toEqual({
+            kind: 'formula', formula: "CASE WHEN {custentity_score} > 5 THEN 'T' ELSE 'F' END", type: 'BOOLEAN', operator: 'IS', values: [true],
+        });
+    });
+
+    it('adds formula conditions with an operator', () => {
         expect(condition(QueryBuilder.from(customerConfig).where('id', '=', 1).orWhereFormula('{score}', 'FLOAT', 'GREATER', 5))).toEqual({
             kind: 'or',
             nodes: [{ kind: 'field', fieldId: 'id', operator: 'ANY_OF', values: [1] }, { kind: 'formula', formula: '{score}', type: 'FLOAT', operator: 'GREATER', values: [5] }],
@@ -138,7 +158,25 @@ describe('QueryBuilder.describe() – conditions', () => {
 
     it('compares display text through a DISPLAY formula', () => {
         expect(condition(QueryBuilder.from(employeeConfig).where('deptName', '=', 'Sales'))).toEqual({ kind: 'formula', formula: '{department#DISPLAY}', type: 'STRING', operator: 'IS', values: ['Sales'] });
-        expect(condition(QueryBuilder.from(employeeConfig).where('department.name', '=', 'Sales', true))).toEqual({ kind: 'formula', formula: '{department.name#DISPLAY}', type: 'STRING', operator: 'IS', values: ['Sales'] });
+    });
+
+    // A formula reaches a joined record only through the select field's own id, and not at all through one that points
+    // at several record types ({terms.x} works; {entity.x} and {customer.x} are "not found", sandbox 2026-09-28).
+    it("compares a joined text field's display text as the field itself: no formula can reach every joined record", () => {
+        expect(condition(QueryBuilder.from(employeeConfig).where('department.name', '=', 'Sales', true))).toEqual({ kind: 'field', component: 'department', fieldId: 'name', operator: 'IS', values: ['Sales'] });
+    });
+
+    it("reaches a joined select's display text through the join's own field id, not the model's relation name", () => {
+        const paymentTermsConfig: QueryConfig<any> = {
+            recordType: 'invoice',
+            components: { paymentTerms: { path: 'paymentTerms', relationship: 'paymentTerms', load: 'join', join: { kind: 'to', fieldId: 'terms', target: 'term' } } },
+            fields: {
+                id: { queryFieldId: 'id', type: 'key', isPrimary: true },
+                paymentTerms_dueRule: { queryFieldId: 'duerule', component: 'paymentTerms', type: 'select', nestPath: 'paymentTerms.dueRule' },
+            },
+            relationships: { paymentTerms: { kind: 'reference', components: ['paymentTerms'], fields: { dueRule: 'paymentTerms_dueRule' } } },
+        };
+        expect(condition(QueryBuilder.from(paymentTermsConfig).where('paymentTerms.dueRule', '=', 'Net', true))).toEqual({ kind: 'formula', formula: '{terms.duerule#DISPLAY}', type: 'STRING', operator: 'IS', values: ['Net'] });
     });
 
     it('throws when a condition references an unknown field', () => {
