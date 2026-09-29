@@ -281,3 +281,65 @@ export const joinedRelatedTransactionsOrderConfig = defineQueryConfig<OrderWithR
         relatedTransactions: { ...relatedTransactionsOrderConfig.relationships!.relatedTransactions, load: 'join' },
     },
 });
+
+// ── A customer invoice for grouped reads: the subsidiary off the main line, terms loaded separately ─────────────
+
+export interface PaymentTerm { id: number; name: string; daysUntilNetDue: number | null }
+
+export interface CustomerInvoice {
+    id: number;
+    tranDate: Date;
+    customerId: number;
+    /** Read off the main line, the way a transaction's subsidiary must be inside SuiteScript. */
+    subsidiaryId: number;
+    termsId: number | null;
+    status: string;
+    amountUnpaid: number;
+    total: number;
+    daysOpen: number;
+    currencyName: string | null;
+    isVoided: boolean;
+    tagIds: number[];
+    customer?: { id: number; companyName: string; isInactive: boolean };
+    terms?: PaymentTerm;
+}
+
+export const customerInvoiceConfig = defineQueryConfig<CustomerInvoice>({
+    recordType: 'invoice',
+    queryType: 'transaction',
+    rootConditions: [{ fieldId: 'type', operator: 'ANY_OF', values: ['CustInvc'] }],
+    components: {
+        transactionlines: { path: 'transactionlines', relationship: 'transactionlines', load: 'join', join: { kind: 'auto', fieldId: 'transactionlines' }, conditions: [{ fieldId: 'mainline', operator: 'IS', values: [true] }] },
+        customer: { path: 'customer', relationship: 'customer', load: 'join', join: { kind: 'to', fieldId: 'entity', target: 'customer' } },
+        terms: {
+            path: 'terms', relationship: 'terms', load: 'separate',
+            join: { kind: 'to', fieldId: 'terms', target: 'term' },
+            separate: { queryType: 'term', parentKeyField: 'termsId', targetKeyFieldId: 'id', targetKeyFieldType: 'key' },
+        },
+    },
+    fields: {
+        id:                    { queryFieldId: 'id',                  type: 'key',         isPrimary: true, readonly: true },
+        tranDate:              { queryFieldId: 'trandate',            type: 'date' },
+        customerId:            { queryFieldId: 'entity',              type: 'select' },
+        subsidiaryId:          { queryFieldId: 'subsidiary',          type: 'select',      component: 'transactionlines' },
+        termsId:               { queryFieldId: 'terms',               type: 'select' },
+        status:                { queryFieldId: 'status',              type: 'select' },
+        amountUnpaid:          { queryFieldId: 'foreignamountunpaid', type: 'currency' },
+        total:                 { queryFieldId: 'foreigntotal',        type: 'currency' },
+        daysOpen:              { queryFieldId: 'daysopen',            type: 'integer' },
+        currencyName:          { queryFieldId: 'currency',            type: 'string',      fieldContext: 'DISPLAY', readonly: true },
+        isVoided:              { queryFieldId: 'voided',              type: 'checkbox' },
+        tagIds:                { queryFieldId: 'custbody_tags',       type: 'multiselect' },
+        customer_id:           { queryFieldId: 'id',                  type: 'key',     component: 'customer', nestPath: 'customer.id',              readonly: true },
+        customer_companyName:  { queryFieldId: 'companyname',         type: 'string',  component: 'customer', nestPath: 'customer.companyName',     readonly: true },
+        customer_isInactive:   { queryFieldId: 'isinactive',          type: 'boolean', component: 'customer', nestPath: 'customer.isInactive',      readonly: true },
+        terms_id:              { queryFieldId: 'id',                  type: 'key',     component: 'terms',    nestPath: 'terms.id',                 readonly: true },
+        terms_name:            { queryFieldId: 'name',                type: 'string',  component: 'terms',    nestPath: 'terms.name',               readonly: true },
+        terms_daysUntilNetDue: { queryFieldId: 'daysuntilnetdue',     type: 'integer', component: 'terms',    nestPath: 'terms.daysUntilNetDue',    readonly: true },
+    },
+    relationships: {
+        customer: { kind: 'reference', load: 'join', components: ['customer'], fields: { id: 'customer_id', companyName: 'customer_companyName', isInactive: 'customer_isInactive' } },
+        terms: { kind: 'reference', load: 'separate', components: ['terms'], fields: { id: 'terms_id', name: 'terms_name', daysUntilNetDue: 'terms_daysUntilNetDue' } },
+    },
+    coerce: true,
+});

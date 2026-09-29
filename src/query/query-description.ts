@@ -14,8 +14,15 @@ export function renderQueryDescription(description: QueryDescription, indent = '
     if (description.condition) {
         lines.push(`WHERE ${renderConditionNode(description.condition, true)}`);
     }
+    const groupKeys = description.columns.filter((column) => column.groupBy);
+    if (groupKeys.length > 0) {
+        lines.push(`GROUP BY ${groupKeys.map(renderColumnSource).join(', ')}`);
+    }
     if (description.sort.length > 0) {
         lines.push(`ORDER BY ${description.sort.map(renderDescribedSort).join(', ')}`);
+    }
+    if (description.scriptSort && description.scriptSort.length > 0) {
+        lines.push(`SORT IN SCRIPT BY ${description.scriptSort.map((sort) => `${sort.path} ${sort.ascending ? 'ASC' : 'DESC'}`).join(', ')}`);
     }
     if (description.page) {
         lines.push(`PAGE offset ${description.page.offset}${description.page.limit === undefined ? '' : ` limit ${description.page.limit}`}`);
@@ -37,10 +44,14 @@ function renderComponentCondition(path: string, condition: ComponentCondition): 
     return `${path}.${condition.fieldId} ${condition.operator}${renderValues(condition.values)}`;
 }
 
-function renderDescribedColumn(column: DescribedColumn): string {
-    const source = column.formula !== undefined
+function renderColumnSource(column: DescribedColumn): string {
+    return column.formula !== undefined
         ? `formula(${column.formula})${column.formulaType ? `:${column.formulaType}` : ''}`
         : `${column.component ? `${column.component}.` : ''}${column.fieldId}${column.context ? `#${column.context}` : ''}`;
+}
+
+function renderDescribedColumn(column: DescribedColumn): string {
+    const source = renderColumnSource(column);
     const aggregated = column.aggregate ? `${column.aggregate}(${source})` : source;
     return `${aggregated} AS ${column.alias}`;
 }

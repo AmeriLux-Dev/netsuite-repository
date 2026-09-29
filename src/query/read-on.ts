@@ -35,6 +35,17 @@ export interface ReadOnKey {
     fieldType: FieldType;
     /** The internal id: never blank. */
     isPrimary: boolean;
+    /**
+     * A text key on a joined record: how its formula names that record, by the join field ids from the root
+     * (`terms`, `transactionlines`). A formula reaches a joined record through its select field, not the model's name.
+     */
+    formulaPath?: string;
+    /**
+     * A text key on a record joined through a reference's select field, which a formula may not reach at all (a select
+     * field that points at several record types has no formula path: `{entity.companyname}` is "not found", sandbox
+     * 2026-09-28). A whole read goes through runPaged rather than read on after it.
+     */
+    throughReference?: boolean;
 }
 
 /**
@@ -81,8 +92,9 @@ function fieldNode(sort: DescribedSort, operator: 'EMPTY' | 'EMPTY_NOT'): Condit
 }
 
 /** `a > b` on text, the way NetSuite orders it: both sides upper-cased, inside a formula N/query accepts. */
-function buildTextComparisonNode(sort: DescribedSort, operator: '>' | '<' | '=', value: QueryResultValue): ConditionNode {
-    const reference = `{${sort.component === undefined ? '' : `${sort.component}.`}${sort.fieldId}}`;
+function buildTextComparisonNode(key: ReadOnKey, operator: '>' | '<' | '=', value: QueryResultValue): ConditionNode {
+    const path = key.formulaPath ?? key.sort.component;
+    const reference = `{${path === undefined ? '' : `${path}.`}${key.sort.fieldId}}`;
     const literal = `'${String(value).replace(/'/g, "''")}'`;
     return { kind: 'formula', formula: `CASE WHEN UPPER(${reference}) ${operator} UPPER(${literal}) THEN 1 ELSE 0 END`, type: 'INTEGER', operator: 'EQUAL', values: [1] };
 }
@@ -95,7 +107,7 @@ function buildOrderedComparisonNode(key: ReadOnKey, operator: '>' | '<' | '=', v
 }
 
 function buildComparisonNode(key: ReadOnKey, operator: '>' | '<' | '=', value: QueryResultValue): ConditionNode {
-    return key.comparison === 'text' ? buildTextComparisonNode(key.sort, operator, value) : buildOrderedComparisonNode(key, operator, value);
+    return key.comparison === 'text' ? buildTextComparisonNode(key, operator, value) : buildOrderedComparisonNode(key, operator, value);
 }
 
 /** The rows that share this value for the key: the same value, or a blank for a blank. */

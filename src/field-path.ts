@@ -30,6 +30,40 @@ export type FieldPath<T, TDepth extends number = 5> = unknown extends T
                     : K;
         }[keyof T & string];
 
+/**
+ * The field paths of `T` a grouped read can group by or aggregate: every path whose declared type holds one value.
+ * Sublists are walked into, since each line is a row (`'lines.quantity'`); a multi-select (`number[]`) and a relation
+ * itself (a reference, subrecord, or sublist) are left out. `string` when `T` is unknown.
+ */
+export type GroupableFieldPath<T, TDepth extends number = 5> = unknown extends T
+    ? string
+    : TDepth extends 0
+        ? never
+        : {
+            [K in keyof T & string]: NonNullable<T[K]> extends ReadonlyArray<infer TElement>
+                ? NonNullable<TElement> extends Primitive
+                    ? never
+                    : NonNullable<TElement> extends object ? `${K}.${GroupableFieldPath<NonNullable<TElement>, Shorter[TDepth]>}` : never
+                : NonNullable<T[K]> extends Primitive
+                    ? K
+                    : NonNullable<T[K]> extends object ? `${K}.${GroupableFieldPath<NonNullable<T[K]>, Shorter[TDepth]>}` : never;
+        }[keyof T & string];
+
+/** The groupable paths of `T` whose declared type is a number: what SUM, AVERAGE, and MEDIAN take. `string` when `T` is unknown. */
+export type NumericFieldPath<T> = unknown extends T
+    ? string
+    : { [P in GroupableFieldPath<T>]: [NonNullable<FieldValue<T, P>>] extends [number] ? P : never }[GroupableFieldPath<T>];
+
+/** An object holding `TValue` at the dotted path (`'customer.companyName'` → `{ customer: { companyName } }`). */
+type ValueAtPath<TPath extends string, TValue> = TPath extends `${infer THead}.${infer TRest}`
+    ? { [K in THead]: ValueAtPath<TRest, TValue> }
+    : { [K in TPath]: TValue };
+
+type UnionToIntersection<TUnion> = (TUnion extends unknown ? (value: TUnion) => void : never) extends (value: infer TIntersection) => void ? TIntersection : never;
+
+/** The keys of one group: each key's declared value at its model path. */
+export type GroupKeyValues<T, TKey extends string> = UnionToIntersection<TKey extends string ? ValueAtPath<TKey, FieldValue<T, TKey>> : never>;
+
 /** The properties of `T` that are references, subrecords, or sublists. `string` when `T` is unknown. */
 export type RelationName<T> = unknown extends T
     ? string

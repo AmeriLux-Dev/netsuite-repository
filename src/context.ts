@@ -1,6 +1,7 @@
 import type { DeleteResult, EntityCreate, EntityPatch, ListPage, ListPageOptions, QueryConfig, RecordGraphPatch, RecordId, RecordUpdaterOptions, UpdatePlan, UpdateResult } from './types';
 import { QueryBuilder, query } from './query';
-import type { ConditionValue, FieldPath, FieldValue, OperatorFor } from './field-path';
+import type { GroupedQuery } from './query';
+import type { ConditionValue, FieldPath, FieldValue, GroupableFieldPath, GroupKeyValues, OperatorFor } from './field-path';
 import { RecordUpdater, createRecord, deleteRecord, updateRecord } from './record-updater';
 import { resolveQueryConfig } from './model/resolve';
 import type { QueryConfigSource, QueryConfigSourceResult } from './model/resolve';
@@ -257,6 +258,14 @@ export class RecordSet<TResult, TUpdate extends Record<string, unknown> = Partia
 
     exists(...specifications: Specification<TResult>[]): boolean {
         return applySpecifications(this.query(), specifications).exists();
+    }
+
+    /**
+     * Starts a grouped read of the set, never tracked: add aggregates, then `list(...specifications)` returns every group.
+     * See QueryBuilder.groupBy().
+     */
+    groupBy<TKey extends GroupableFieldPath<TResult>>(...keys: [TKey, ...TKey[]]): GroupedQuery<TResult, GroupKeyValues<TResult, TKey>, never, TKey> {
+        return this.asNoTracking().groupBy(...keys);
     }
 
     /** Starts a query with one condition; the operators and the value are typed from the field, as on the query builder. */

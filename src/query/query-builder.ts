@@ -1,8 +1,9 @@
 import type * as NsQuery from 'N/query';
-import type { ConditionValue, FieldReference, FieldReferenceFor, FieldValue, OperatorFor, ParamFor, RelationName, TextOperator } from '../field-path';
+import type { ConditionValue, FieldReference, FieldReferenceFor, FieldValue, GroupableFieldPath, GroupKeyValues, OperatorFor, ParamFor, RelationName, TextOperator } from '../field-path';
 import { resolveQueryConfig } from '../model/resolve';
 import type { QueryConfigSource } from '../model/resolve';
 import type {
+    AggregateName,
     ConditionNode,
     ConditionParamValue,
     DescribedColumn,
@@ -29,6 +30,8 @@ import type {
 } from '../types';
 import { collectConditionComponents, combineConditions, conditionNodeForTranslation, rerootConditionNode } from './condition-nodes';
 import type { LinkedCondition } from './condition-nodes';
+import { GroupedQuery, numericAggregateNames, sortGroups } from './grouped-query';
+import type { GroupAggregate, GroupedQueryReader, Grouping } from './grouped-query';
 import { compileQueryDescriptionToNQuery, sortColumnAliases } from './n-query-compiler';
 import { translateConditionOperator } from './operator-translation';
 import { renderQueryDescription } from './query-description';
@@ -44,8 +47,8 @@ import {
     runRowLimit,
     withAddedCondition,
 } from './read-on';
-import type { ReadOnComparison, ReadOnKey } from './read-on';
-import { buildFieldMap, mapRowsToResults } from './result-mapper';
+import type { ReadOnKey } from './read-on';
+import { buildFieldMap, mapRowsToResults, normalizeMappedResultKey } from './result-mapper';
 import type { ResultMappingOptions, ResultRow } from './result-mapper';
 import { defaultSeparateLoadBatchSize, loadSeparateRelationsIntoResults } from './separate-relation-loader';
 
@@ -97,7 +100,7 @@ interface BuilderSort {
     /** The field key the sort was asked for by, for messages. */
     key: string;
     /** How a read picks up after this sort's value; unset when no probe checked a comparison for its field. */
-    readOn?: { comparison: ReadOnComparison; fieldType: FieldType; isPrimary: boolean };
+    readOn?: Pick<ReadOnKey, 'comparison' | 'fieldType' | 'isPrimary' | 'formulaPath' | 'throughReference'>;
 }
 
 /** What one execution needs: the description to compile and how to map the rows that come back. */
@@ -109,6 +112,53 @@ interface QueryPlan {
     readOnKeys?: ReadOnKey[];
     /** The sorts that cannot be compared, or the missing id, for the message listPage() refuses with. */
     readOnObstacle?: string;
+}
+
+/** A key of a grouped read: the name it was asked by, the field it resolves to, and where its value lands. */
+interface GroupKeyPlan {
+    name: string;
+    key: string;
+    field: QueryField;
+    outputPath: string;
+}
+
+/** An aggregate of a grouped read: its column, how its value is mapped, and the field it reads, if any. */
+interface GroupAggregatePlan {
+    alias: string;
+    column: DescribedColumn;
+    mappingField: QueryField;
+    source?: SelectableField;
+}
+
+/** A requested sort of a grouped read: on a key (sorted in N/query) or on an aggregate (sorted in script only). */
+interface GroupSortPlan {
+    key?: GroupKeyPlan;
+    path: string;
+    ascending: boolean;
+}
+
+interface GroupedReadPlan {
+    description: QueryDescription;
+    mapping: ResultMappingOptions;
+    /** The keys a read picks up after, past 5,000 groups; unset when one of them cannot be compared. */
+    readOnKeys?: ReadOnKey[];
+}
+
+/** What a field that SUM, AVERAGE, and MEDIAN refuse is, for the message: N/query fails to render those over them. */
+const nonNumericFieldTypeNames: Partial<Record<FieldType, string>> = {
+    date: 'a date',
+    datetime: 'a date and time',
+    string: 'text',
+    boolean: 'a checkbox',
+    checkbox: 'a checkbox',
+};
+
+/** The field type an aggregate's value is coerced to: a count is an integer, a sum or average a number. */
+function aggregateValueType(aggregate: AggregateName, declared: FieldType | undefined): FieldType | undefined {
+    if (aggregate === 'COUNT' || aggregate === 'COUNT_DISTINCT') {
+        return 'integer';
+    }
+    return (numericAggregateNames as readonly string[]).includes(aggregate) ? declared ?? 'float' : declared;
 }
 
 /**
@@ -277,11 +327,17 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
         return this.addWhere('OR', String(field), operator, value, useText);
     }
 
-    /** Adds an AND condition written as an N/query formula (`{trandate} > SYSDATE - 30`). Values are part of the formula text. */
+    /**
+     * Adds an AND condition written as an N/query formula. With no operator the formula is a condition in its own right
+     * (`{trandate} + 30 > TRUNC(CURRENT_DATE)`), sent as `CASE WHEN <formula> THEN 1 ELSE 0 END` compared EQUAL 1, the
+     * form N/query accepts; with an operator it is a value of the given type compared to `value`. Values written in the
+     * formula are part of its text. N/query's formulas have no SYSDATE: write TRUNC(CURRENT_DATE).
+     */
     whereFormula(formula: string, type: FormulaReturnType = 'BOOLEAN', operator?: NQueryOperatorName, value?: ConditionParamValue | ConditionParamValue[]): this {
         return this.addFormulaCondition('AND', formula, type, operator, value);
     }
 
+    /** Adds an OR condition written as an N/query formula; see whereFormula(). */
     orWhereFormula(formula: string, type: FormulaReturnType = 'BOOLEAN', operator?: NQueryOperatorName, value?: ConditionParamValue | ConditionParamValue[]): this {
         return this.addFormulaCondition('OR', formula, type, operator, value);
     }
@@ -321,11 +377,15 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
 
     orderBy(field: FieldReference<TResult, TDeclared>, direction: SortDirection = 'ASC'): this {
         const { key, field: resolved } = this.resolveField(String(field));
-        const sort: DescribedSort = resolved.formula !== undefined
-            ? omitUndefined({ formula: resolved.formula, formulaType: resolved.formulaType, ascending: direction === 'ASC' })
-            : omitUndefined({ component: resolved.component, fieldId: resolved.queryFieldId, context: resolved.fieldContext, ascending: direction === 'ASC' });
+        const sort = this.describedSortFor(resolved, direction === 'ASC');
         this.sorts.push(omitUndefined({ sort, relationship: this.separateRelationshipOf(key, resolved), key, readOn: this.readOnFor(resolved) }));
         return this;
+    }
+
+    private describedSortFor(field: QueryField, ascending: boolean): DescribedSort {
+        return field.formula !== undefined
+            ? omitUndefined({ formula: field.formula, formulaType: field.formulaType, ascending })
+            : omitUndefined({ component: field.component, fieldId: field.queryFieldId, context: field.fieldContext, ascending });
     }
 
     /** How a read picks up after a sort on this field: formulas and display text have no comparison a probe checked. */
@@ -335,7 +395,26 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
         }
         const fieldType: FieldType | undefined = field.isPrimary ? 'key' : field.type;
         const comparison = readOnComparisonFor(fieldType);
-        return comparison === undefined || fieldType === undefined ? undefined : { comparison, fieldType, isPrimary: Boolean(field.isPrimary) };
+        if (comparison === undefined || fieldType === undefined) {
+            return undefined;
+        }
+        if (comparison !== 'text' || field.component === undefined) {
+            return { comparison, fieldType, isPrimary: Boolean(field.isPrimary) };
+        }
+        // Text reads on through a formula, which names a joined record by the select field that joins it, and cannot
+        // name one joined from its lines at all.
+        const formulaPath = this.formulaPathOf(field.component);
+        return formulaPath === undefined ? undefined : { comparison, fieldType, isPrimary: false, formulaPath, throughReference: this.joinsThroughReference(field.component) };
+    }
+
+    /** Whether a component hangs off a reference's select field (joinTo), anywhere between it and the root. */
+    private joinsThroughReference(componentPath: string): boolean {
+        for (let path: string | undefined = componentPath; path !== undefined; path = this.config.components?.[path]?.parent) {
+            if (this.config.components?.[path]?.join.kind === 'to') {
+                return true;
+            }
+        }
+        return false;
     }
 
     orderByAsc(field: FieldReference<TResult, TDeclared>): this {
@@ -368,6 +447,207 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
     coerce(enabled = true): this {
         this.coerceEnabled = enabled;
         return this;
+    }
+
+    // ── grouping ──────────────────────────────────────────────────────────────
+
+    /**
+     * Starts a grouped read (SQL GROUP BY) of this query's conditions: `aggregate()` and `aggregateFormula()` add the
+     * aggregate columns, `list()` returns every group. A key is a field path whose declared type holds one value,
+     * sublist fields included (each line is a row), or an alias this query declared with selectFormula(). The grouped
+     * read works on a copy, so this query is left as it was.
+     */
+    groupBy<TKey extends GroupableFieldPath<TResult> | TDeclared>(...keys: [TKey, ...TKey[]]): GroupedQuery<TResult, GroupKeyValues<TResult, TKey>, TDeclared, TKey> {
+        if (keys.length === 0) {
+            throw new Error(`A grouped read of '${this.config.recordType}' needs at least one key to group by.`);
+        }
+        return new GroupedQuery<TResult, GroupKeyValues<TResult, TKey>, TDeclared, TKey>(this.copy().groupedQueryReader(), keys.map(String));
+    }
+
+    /** How a grouped query plans and reads through this query; specifications are applied to a copy of it per read. */
+    private groupedQueryReader(): GroupedQueryReader<TResult> {
+        return {
+            describe: (grouping) => this.planGroupedRead(grouping).description,
+            toSQL: (grouping) => {
+                const { description } = this.planGroupedRead(grouping);
+                return withQueryInError(description, () => compileQueryDescriptionToNQuery(description, getNsQuery()).toSuiteQL().query);
+            },
+            list: (grouping, specifications) => {
+                const source = specifications.reduce((current, specification) => specification(current), this.copy() as unknown as QueryBuilder<TResult>);
+                return source.readGroups(grouping);
+            },
+        };
+    }
+
+    /** An independent copy of this query: its selection, conditions, sorts, relations, page window, and options. */
+    private copy(): QueryBuilder<TResult, TDeclared> {
+        const copy = new QueryBuilder<TResult, TDeclared>(this.config, this.options);
+        copy.trackingDisabled = this.trackingDisabled;
+        copy.selectedKeys = this.selectedKeys ? new Set(this.selectedKeys) : null;
+        this.formulaSelections.forEach((field, alias) => copy.formulaSelections.set(alias, field));
+        copy.conditions.push(...this.conditions);
+        copy.sorts.push(...this.sorts);
+        this.includedRelationships.forEach((name) => copy.includedRelationships.add(name));
+        this.excludedRelationships.forEach((name) => copy.excludedRelationships.add(name));
+        copy.limitValue = this.limitValue;
+        copy.offsetValue = this.offsetValue;
+        copy.coerceEnabled = this.coerceEnabled;
+        return copy;
+    }
+
+    /**
+     * The plan of a grouped read: the keys as columns marked groupBy, the aggregates, this query's conditions and the
+     * model's, and the keys as the query's order: those a sort names first, the rest ascending after them, which is
+     * complete since each group has its own keys. N/query sorts on keys only (a sort on an aggregate renders without
+     * the aggregate and fails, sandbox 2026-09-28), so a sort that names an aggregate orders the groups in script.
+     */
+    private planGroupedRead(grouping: Grouping): GroupedReadPlan {
+        const keys = Array.from(new Set(grouping.keys)).map((name) => this.resolveGroupKey(name));
+        const aggregates = grouping.aggregates.map((aggregate) => this.resolveGroupAggregate(aggregate));
+        this.assertGroupAliasesUnique(keys, aggregates);
+        for (const condition of this.conditions) {
+            if (condition.relationship !== undefined) {
+                throw new Error(this.describeSeparateRelationInGroupedRead(condition.relationship, 'apply a condition on it'));
+            }
+        }
+
+        const requestedSorts: GroupSortPlan[] = [
+            ...this.sorts.map((sort) => this.groupSortFor(sort.key, sort.sort.ascending, keys, [])),
+            ...grouping.sorts.map((sort) => this.groupSortFor(sort.name, sort.ascending, keys, aggregates)),
+        ];
+        const keyDirections = new Map<GroupKeyPlan, boolean>();
+        for (const sort of requestedSorts) {
+            if (sort.key && !keyDirections.has(sort.key)) {
+                keyDirections.set(sort.key, sort.ascending);
+            }
+        }
+        for (const key of keys) {
+            if (!keyDirections.has(key)) {
+                keyDirections.set(key, true);
+            }
+        }
+        const keySorts = Array.from(keyDirections, ([key, ascending]) => ({ key, sort: this.describedSortFor(key.field, ascending) }));
+
+        const keyFields = keys.map((key): SelectableField => [key.key, key.field]);
+        const description: QueryDescription = omitUndefined({
+            queryType: this.config.queryType ?? this.config.recordType,
+            components: this.collectComponents(
+                [...keyFields, ...aggregates.flatMap((aggregate) => (aggregate.source ? [aggregate.source] : []))],
+                this.conditions.map((condition) => condition.node),
+                keySorts.map((entry) => entry.sort),
+            ),
+            columns: [...keys.map((key) => ({ ...this.toColumn(key.key, key.field), groupBy: true })), ...aggregates.map((aggregate) => aggregate.column)],
+            condition: this.combineWithRootConditions(combineConditions(this.conditions)),
+            sort: keySorts.map((entry) => entry.sort),
+            scriptSort: requestedSorts.some((sort) => sort.key === undefined) ? requestedSorts.map((sort) => ({ path: sort.path, ascending: sort.ascending })) : undefined,
+        });
+
+        const readOns = keySorts.map((entry) => this.readOnFor(entry.key.field));
+        const aliases = sortColumnAliases(description);
+        return {
+            description,
+            mapping: {
+                fieldMap: buildFieldMap([...keyFields, ...aggregates.map((aggregate): SelectableField => [aggregate.alias, aggregate.mappingField])]),
+                arrayPaths: [],
+                coerceEnabled: this.coerceEnabled,
+            },
+            readOnKeys: readOns.every((readOn) => readOn !== undefined)
+                ? keySorts.map((entry, index) => ({ sort: entry.sort, alias: aliases[index], ...(readOns[index] as NonNullable<BuilderSort['readOn']>) }))
+                : undefined,
+        };
+    }
+
+    private resolveGroupKey(name: string): GroupKeyPlan {
+        const { key, field } = this.resolveField(name);
+        this.assertReadableInGroupedRead(key, field, `group by '${name}'`);
+        return { name, key, field, outputPath: field.nestPath ?? key };
+    }
+
+    private resolveGroupAggregate(aggregate: GroupAggregate): GroupAggregatePlan {
+        const { alias } = aggregate;
+        if (aggregate.field === undefined) {
+            return {
+                alias,
+                column: omitUndefined({ alias, formula: aggregate.formula, formulaType: aggregate.formulaType, aggregate: aggregate.aggregate }),
+                mappingField: omitUndefined({ queryFieldId: alias, alias, type: aggregateValueType(aggregate.aggregate, aggregate.fieldType), coerce: aggregate.coerce, transform: aggregate.transform }),
+            };
+        }
+        const { key, field } = this.resolveField(aggregate.field);
+        this.assertReadableInGroupedRead(key, field, `aggregate '${aggregate.field}'`);
+        // Display text is text, whatever the field's own type.
+        const declaredType = field.fieldContext === 'DISPLAY' ? 'string' : field.type;
+        const nonNumeric = declaredType === undefined ? undefined : nonNumericFieldTypeNames[declaredType];
+        if (nonNumeric !== undefined && (numericAggregateNames as readonly string[]).includes(aggregate.aggregate)) {
+            throw new Error(`${aggregate.aggregate} takes a number, and '${aggregate.field}' of '${this.config.recordType}' is ${nonNumeric}: N/query fails to render it. COUNT, MINIMUM and MAXIMUM take any field.`);
+        }
+        const column: DescribedColumn = field.formula !== undefined
+            ? omitUndefined({ alias, formula: field.formula, formulaType: field.formulaType, aggregate: aggregate.aggregate })
+            : omitUndefined({ alias, component: field.component, fieldId: field.queryFieldId, context: field.fieldContext, aggregate: aggregate.aggregate });
+        return {
+            alias,
+            column,
+            mappingField: omitUndefined({ queryFieldId: alias, alias, type: aggregateValueType(aggregate.aggregate, declaredType), coerce: field.coerce }),
+            source: [key, field],
+        };
+    }
+
+    /** A field a grouped read can read: one value per row, on a relation its own query joins. */
+    private assertReadableInGroupedRead(key: string, field: QueryField, purpose: string): void {
+        if (field.type === 'multiselect') {
+            throw new Error(`'${key}' of '${this.config.recordType}' is a multi-select, which holds several values: a grouped read cannot group by it or aggregate it.`);
+        }
+        const relationship = this.separateRelationshipOf(key, field);
+        if (relationship !== undefined) {
+            throw new Error(this.describeSeparateRelationInGroupedRead(relationship, purpose, field));
+        }
+    }
+
+    private describeSeparateRelationInGroupedRead(relationship: string, purpose: string, field?: QueryField): string {
+        const path = field?.component === undefined ? undefined : this.formulaPathOf(field.component);
+        const formula = field === undefined || path === undefined ? '' : ` A formula reaches the field: {${path}.${field.queryFieldId}}.`;
+        return `'${relationship}' of '${this.config.recordType}' is loaded separately (load: 'separate'), and a grouped read reads nothing separately, so it cannot ${purpose}.${formula}`;
+    }
+
+    /** Each group's row holds its keys at their paths and its aggregates at their aliases: no alias may take another's place. */
+    private assertGroupAliasesUnique(keys: GroupKeyPlan[], aggregates: GroupAggregatePlan[]): void {
+        const taken = new Set<string>();
+        for (const key of keys) {
+            taken.add(normalizeMappedResultKey(key.field.alias ?? key.key));
+            taken.add(normalizeMappedResultKey(key.outputPath.split('.')[0]));
+        }
+        for (const aggregate of aggregates) {
+            const alias = normalizeMappedResultKey(aggregate.alias);
+            if (taken.has(alias)) {
+                throw new Error(`Alias '${aggregate.alias}' is already used by a group key or an aggregate of '${this.config.recordType}'.`);
+            }
+            taken.add(alias);
+        }
+    }
+
+    /** A sort by name: an aggregate's alias, or a key by the name it was grouped by or its field key. */
+    private groupSortFor(name: string, ascending: boolean, keys: GroupKeyPlan[], aggregates: GroupAggregatePlan[]): GroupSortPlan {
+        const aggregate = aggregates.find((candidate) => candidate.alias === name);
+        if (aggregate) {
+            return { path: aggregate.alias, ascending };
+        }
+        const fieldKey = this.normalizeFieldKey(name);
+        const key = keys.find((candidate) => candidate.name === name || candidate.key === fieldKey);
+        if (!key) {
+            throw new Error(`A grouped read of '${this.config.recordType}' sorts by its group keys and aggregates, and '${name}' is neither.`);
+        }
+        return { key, path: key.outputPath, ascending };
+    }
+
+    /** Every group of a grouped read: mapped, sorted in script when a sort names an aggregate, and cut to the page window. */
+    private readGroups(grouping: Grouping): Array<Record<string, unknown>> {
+        const plan = this.planGroupedRead(grouping);
+        const groups = mapRowsToResults<Record<string, unknown>>(this.readEveryRowOf(plan.description, plan.readOnKeys), plan.mapping);
+        const sorted = plan.description.scriptSort ? sortGroups(groups, plan.description.scriptSort) : groups;
+        if (!this.hasPageWindow()) {
+            return sorted;
+        }
+        const offset = this.offsetValue ?? 0;
+        return sorted.slice(offset, this.limitValue === undefined ? undefined : offset + this.limitValue);
     }
 
     // ── execution ─────────────────────────────────────────────────────────────
@@ -799,13 +1079,22 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
      * runPaged instead, a thousand rows a fetch.
      */
     private readEveryRow(plan: QueryPlan): ResultRow[] {
+        return this.readEveryRowOf(plan.description, plan.mapping.arrayPaths.length > 0 ? undefined : plan.readOnKeys);
+    }
+
+    /**
+     * Every row of a description: one run() when it answers under 5,000, then read on after `keys`, or through runPaged
+     * when there are none or one is text on a record joined through a reference, which a formula may not reach.
+     */
+    private readEveryRowOf(description: QueryDescription, keys: ReadOnKey[] | undefined): ResultRow[] {
         const governance = new ReadGovernance(this.governanceReserve());
-        const firstAnswer = governance.measure(() => this.executeDescription(plan.description));
+        const firstAnswer = governance.measure(() => this.executeDescription(description));
         if (firstAnswer.length < runRowLimit) {
             return firstAnswer;
         }
-        const keys = plan.mapping.arrayPaths.length > 0 ? undefined : plan.readOnKeys;
-        return keys ? this.readOnAfterLastRow(plan.description, keys, firstAnswer, governance) : this.readEveryPage(plan.description, governance);
+        return keys !== undefined && !keys.some((key) => key.throughReference)
+            ? this.readOnAfterLastRow(description, keys, firstAnswer, governance)
+            : this.readEveryPage(description, governance);
     }
 
     private readOnAfterLastRow(description: QueryDescription, keys: ReadOnKey[], firstAnswer: ResultRow[], governance: ReadGovernance): ResultRow[] {
@@ -900,10 +1189,12 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
         const { key, field } = this.resolveField(rawField);
         // The internal id is a key whatever the model types it as; display text compares as a string.
         const fieldType = useText || field.fieldContext === 'DISPLAY' ? 'string' : field.isPrimary ? 'key' : field.type;
+        // A joined text field is its own display text, and a formula cannot reach every joined record (sandbox 2026-09-28).
+        const comparesDisplayText = field.fieldContext === 'DISPLAY' || (useText && !(field.component !== undefined && field.type === 'string'));
         const translated = translateConditionOperator(operator, fieldType, value);
         const node = conditionNodeForTranslation(translated, (translatedOperator, values) => (field.formula !== undefined
             ? omitUndefined({ kind: 'formula' as const, formula: field.formula, type: field.formulaType, operator: translatedOperator, values })
-            : useText || field.fieldContext === 'DISPLAY'
+            : comparesDisplayText
                 ? this.createDisplayTextConditionNode(field, translatedOperator, values)
                 : omitUndefined({ kind: 'field' as const, component: field.component, fieldId: field.queryFieldId, operator: translatedOperator, values })));
         this.conditions.push(omitUndefined({ node, link, relationship: this.separateRelationshipOf(key, field) }));
@@ -912,11 +1203,38 @@ export class QueryBuilder<TResult, TDeclared extends string = never> {
 
     /** A condition on the display text of a select field: a formula over the field in DISPLAY context. */
     private createDisplayTextConditionNode(field: QueryField, operator: NQueryOperatorName, values: ConditionParamValue[] | undefined): ConditionNode {
-        const reference = `{${field.component ? `${field.component}.` : ''}${field.queryFieldId}#DISPLAY}`;
+        const path = field.component === undefined ? undefined : this.formulaPathOf(field.component);
+        if (field.component !== undefined && path === undefined) {
+            throw new Error(`The display text of '${field.nestPath ?? field.queryFieldId}' is compared in a formula, and no formula reaches '${field.component}' of '${this.config.recordType}', which is joined from its lines.`);
+        }
+        const reference = `{${path === undefined ? '' : `${path}.`}${field.queryFieldId}#DISPLAY}`;
         return omitUndefined({ kind: 'formula' as const, formula: reference, type: 'STRING' as const, operator, values });
     }
 
+    /**
+     * How a formula names a joined component: the join field ids from the root (`terms`, `transactionlines.item`), not
+     * the model's relation names; a formula reaches a joined record through the select field that joins it
+     * (sandbox 2026-09-28). Undefined for a component joined from its lines, which no formula names.
+     */
+    private formulaPathOf(componentPath: string): string | undefined {
+        const segments: string[] = [];
+        for (let path: string | undefined = componentPath; path !== undefined; path = this.config.components?.[path]?.parent) {
+            const component: QueryComponent | undefined = this.config.components?.[path];
+            if (!component || component.join.kind === 'from') {
+                return undefined;
+            }
+            segments.unshift(component.join.fieldId);
+        }
+        return segments.join('.');
+    }
+
     private addFormulaCondition(link: 'AND' | 'OR', formula: string, type: FormulaReturnType, operator: NQueryOperatorName | undefined, value: ConditionParamValue | ConditionParamValue[] | undefined): this {
+        // createCondition requires an operator, and a comparison typed BOOLEAN fails to render ("Your formula contains
+        // a syntax error"); a CASE over it compared EQUAL 1 runs (sandbox 2026-09-28).
+        if (type === 'BOOLEAN' && operator === undefined) {
+            this.conditions.push({ node: { kind: 'formula', formula: `CASE WHEN ${formula} THEN 1 ELSE 0 END`, type: 'INTEGER', operator: 'EQUAL', values: [1] }, link });
+            return this;
+        }
         const values = value === undefined ? undefined : Array.isArray(value) ? value : [value];
         this.conditions.push({ node: omitUndefined({ kind: 'formula' as const, formula, type, operator, values }), link });
         return this;
