@@ -185,6 +185,28 @@ describe('RecordUpdater.submit() – loadSave path', () => {
         );
     });
 
+    it('matches a line whose record value is the text of the match value, as N/record answers a line id', () => {
+        const mockRecord = createMockRecord({
+            id: 1,
+            save: jest.fn().mockReturnValue(1),
+            getLineCount: jest.fn().mockReturnValue(3),
+            getSublistValue: jest.fn()
+                .mockReturnValueOnce('1')
+                .mockReturnValueOnce('5')   // match on line 1
+                .mockReturnValueOnce('15'),
+        });
+        mockLoad.mockReturnValue(mockRecord);
+
+        const result = updateRecord(salesOrderConfig).id(1)
+            .updateLineByField('item', 'lines_itemId', 5, { lines_qty: 10 })
+            .submit();
+
+        expect(result.error).toBeUndefined();
+        expect(mockRecord.setSublistValue).toHaveBeenCalledWith(
+            expect.objectContaining({ sublistId: 'item', line: 1, fieldId: 'quantity', value: 10 })
+        );
+    });
+
     it('throws when line match not found', () => {
         const mockRecord = createMockRecord({
             id: 1,
