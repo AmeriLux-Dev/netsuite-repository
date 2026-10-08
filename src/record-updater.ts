@@ -730,10 +730,19 @@ export class RecordUpdater<TResult, TUpdate extends Record<string, unknown> = Pa
         return currentRecord;
     }
 
+    /**
+     * The first line whose value identifies it as the match value does. N/record answers a sublist value in a type of
+     * its own (a transaction's `line` and a select's id come back as text), while the match value arrives typed by the
+     * model, so two present values are the same line when their text is the same, as the tracked entity's lines are matched.
+     */
     private findLine(recordInstance: EditableRecord, sublistId: string, fieldId: string, value: NsRecord.FieldValue): number {
         const lineCount = recordInstance.getLineCount({ sublistId });
         for (let line = 0; line < lineCount; line++) {
-            if (recordInstance.getSublistValue({ sublistId, fieldId, line }) === value) {
+            const lineValue = recordInstance.getSublistValue({ sublistId, fieldId, line });
+            if (lineValue === value) {
+                return line;
+            }
+            if (lineValue !== null && lineValue !== undefined && value !== null && value !== undefined && String(lineValue) === String(value)) {
                 return line;
             }
         }
